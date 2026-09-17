@@ -71,7 +71,7 @@ class TestStatus:
         out = capsys.readouterr().out
         assert "one@example.com" in out
         assert "not managed" in out
-        assert "cswap codex add" in out
+        assert "codex add" in out
 
     def test_managed_login_shows_its_slot(self, env, capsys):
         env.login_as()

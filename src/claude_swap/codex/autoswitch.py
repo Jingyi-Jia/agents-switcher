@@ -34,6 +34,7 @@ from enum import Enum
 from claude_swap.codex.processes import CodexProcess, running_codex_processes
 from claude_swap.codex.store import CodexAccount
 from claude_swap.codex.usage import CodexUsage
+from claude_swap.settings import load_settings
 
 _logger = logging.getLogger("claude-swap")
 
@@ -100,6 +101,28 @@ class AutoSettings:
     hysteresis_pct: float = DEFAULT_HYSTERESIS_PCT
     cooldown_seconds: float = DEFAULT_COOLDOWN_S
     interval_seconds: float = DEFAULT_INTERVAL_S
+
+    @classmethod
+    def from_shared(cls, backup_root) -> "AutoSettings":
+        """Read the SAME ``autoswitch`` settings the Claude side uses.
+
+        One section, both providers: a user who sets a threshold means it for
+        their accounts, not for one tool's half of them, and a separate
+        ``codex`` section would silently leave the Codex loop on defaults after
+        they configured the thing they could see. ``agent-switch config set
+        autoswitch.threshold 85`` now moves both.
+
+        The knobs that have no Codex meaning (strategy, model, API-key
+        inclusion) are simply not read -- the Codex target rule is fixed:
+        most included headroom, never a credits account.
+        """
+        shared = load_settings(backup_root)
+        return cls(
+            threshold=shared.threshold,
+            hysteresis_pct=shared.hysteresis_pct,
+            cooldown_seconds=shared.cooldown_seconds,
+            interval_seconds=shared.interval_seconds,
+        )
 
 
 @dataclass(frozen=True)

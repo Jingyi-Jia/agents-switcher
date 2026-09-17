@@ -1,4 +1,4 @@
-"""The ``cswap codex`` command surface.
+"""The ``agent-switch codex`` command surface.
 
 Kept in its own module rather than added to ``cli.py`` so the upstream file
 takes a three-line dispatch hook and nothing else -- this fork tracks a
@@ -24,6 +24,13 @@ from claude_swap.codex.switcher import CodexSwitcher
 from claude_swap.codex.usage import CodexUsage
 from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.printer import accent, bolded, dimmed, error, muted, yellowed
+
+
+def _cmd() -> str:
+    """The command name the user invoked, for hints that tell them what to run."""
+    from claude_swap.cli import _prog_name
+
+    return _prog_name()
 
 
 def _account_json(account) -> dict:
@@ -58,7 +65,7 @@ def _print_status(switcher: CodexSwitcher, as_json: bool) -> None:
         print(f"{accent('Codex')}: {label} {muted(f'(slot {status.account.number})')}")
     else:
         print(f"{accent('Codex')}: {label} {yellowed('(not managed)')}")
-        print(dimmed("  Run 'cswap codex add' to manage this account."))
+        print(dimmed(f"  Run '{_cmd()} codex add' to manage this account."))
 
 
 def _print_list(switcher: CodexSwitcher, as_json: bool) -> None:
@@ -73,7 +80,7 @@ def _print_list(switcher: CodexSwitcher, as_json: bool) -> None:
 
     if not accounts:
         print(dimmed("No Codex accounts are managed yet."))
-        print(dimmed("  Log in with 'codex login', then run 'cswap codex add'."))
+        print(dimmed(f"  Log in with 'codex login', then run '{_cmd()} codex add'."))
         return
     print(bolded("Codex accounts:"))
     for account in accounts:
@@ -334,7 +341,7 @@ def _print_stats(switcher: CodexSwitcher, target: str | None, as_json: bool) -> 
 
 
 #: Exit codes for `codex auto --once`, so cron and shell scripts can branch.
-#: Mirrors the Claude-side `cswap auto --once` contract.
+#: Mirrors the Claude-side `auto --once` contract.
 _AUTO_EXIT = {
     Action.SWITCH: 0,
     Action.HOLD: 2,
@@ -374,8 +381,8 @@ def _report_decision(decision, *, dry_run: bool) -> None:
         print(dimmed(f"  {decision.reason}"))
         for process in decision.processes:
             print(dimmed(f"    - {process.describe}"))
-        print(dimmed(f"  Run 'cswap codex switch {decision.target.account.number}' "
-                     "after closing them."))
+        print(dimmed(f"  Run '{_cmd()} codex switch "
+                     f"{decision.target.account.number}' after closing them."))
     elif decision.action is Action.ALL_EXHAUSTED:
         print(yellowed("All Codex accounts are out of included quota."))
         print(dimmed(f"  {decision.reason}"))
@@ -391,11 +398,20 @@ def _report_decision(decision, *, dry_run: bool) -> None:
 
 
 def _auto_command(switcher, args) -> None:
+    # Start from the shared autoswitch settings so this loop honours whatever
+    # the user configured for the Claude side, then let explicit flags win.
+    base = AutoSettings.from_shared(switcher.store.root.parent)
     settings = AutoSettings(
-        threshold=args.threshold,
-        hysteresis_pct=args.hysteresis,
-        cooldown_seconds=args.cooldown,
-        interval_seconds=args.interval,
+        threshold=base.threshold if args.threshold is None else args.threshold,
+        hysteresis_pct=(
+            base.hysteresis_pct if args.hysteresis is None else args.hysteresis
+        ),
+        cooldown_seconds=(
+            base.cooldown_seconds if args.cooldown is None else args.cooldown
+        ),
+        interval_seconds=(
+            base.interval_seconds if args.interval is None else args.interval
+        ),
     )
     if args.once:
         decision = run_once(switcher, settings=settings, dry_run=args.dry_run)
@@ -419,9 +435,15 @@ def _auto_command(switcher, args) -> None:
 
 
 def codex_command(argv: list[str]) -> None:
-    """Handle ``cswap codex <subcommand>``."""
+    """Handle ``<prog> codex <subcommand>``."""
+    # Imported here, not at module level: cli.py pulls this module in inside
+    # main(), so a top-level import back into it would be a cycle waiting for
+    # the first person to import either one the other way round.
+    from claude_swap.cli import _prog_name
+
+    prog = _prog_name()
     parser = argparse.ArgumentParser(
-        prog="cswap codex",
+        prog=f"{prog} codex",
         description="Manage and switch between multiple Codex CLI accounts.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -485,14 +507,14 @@ auth.json once at startup and will not adopt a different account mid-run.
                         help="Check once and exit (for cron); sets the exit code")
     p_auto.add_argument("--dry-run", action="store_true",
                         help="Report what would happen without switching")
-    p_auto.add_argument("--threshold", type=float, default=80.0, metavar="PCT",
-                        help="Switch when the active account passes this (default 80)")
-    p_auto.add_argument("--hysteresis", type=float, default=10.0, metavar="PCT",
-                        help="Headroom a target must beat the active account by")
-    p_auto.add_argument("--cooldown", type=float, default=600.0, metavar="SECONDS",
-                        help="Minimum time between switches")
-    p_auto.add_argument("--interval", type=float, default=300.0, metavar="SECONDS",
-                        help="Seconds between checks in loop mode")
+    p_auto.add_argument("--threshold", type=float, default=None, metavar="PCT",
+                        help="Override autoswitch.threshold for this run")
+    p_auto.add_argument("--hysteresis", type=float, default=None, metavar="PCT",
+                        help="Override autoswitch.hysteresisPct for this run")
+    p_auto.add_argument("--cooldown", type=float, default=None, metavar="SECONDS",
+                        help="Override autoswitch.cooldownSeconds for this run")
+    p_auto.add_argument("--interval", type=float, default=None, metavar="SECONDS",
+                        help="Override autoswitch.intervalSeconds for this run")
 
     p_stats = sub.add_parser("stats", parents=[common],
                              help="Lifetime activity and reset credits")

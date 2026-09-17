@@ -210,7 +210,7 @@ class TestAutoCli:
         assert exc.value.code == 3
         out = capsys.readouterr().out
         assert "Codex is running" in out
-        assert "cswap codex switch 2" in out  # tells the user how to finish it
+        assert "codex switch 2" in out  # tells the user how to finish it
 
     def test_dry_run_is_labelled(self, env, monkeypatch, capsys):
         env.add("acct-1", "one@e.com")

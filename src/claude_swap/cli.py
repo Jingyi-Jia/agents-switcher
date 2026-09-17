@@ -30,7 +30,7 @@ def _prog_name() -> str:
     an installed entry-point shim renders as an ugly absolute path (e.g.
     ``python.exe C:\\Users\\me\\.local\\bin\\cswap``). We strip that down to the
     bare command the user typed (``cswap`` / ``claude-swap``), falling back to
-    ``cswap`` for ``python -m claude_swap`` and odd launchers.
+    ``agent-switch`` for ``python -m claude_swap`` and odd launchers.
     """
     name = os.path.basename(sys.argv[0] or "")
     for ext in (".exe", ".pyw", ".py"):
@@ -38,7 +38,7 @@ def _prog_name() -> str:
             name = name[: -len(ext)]
             break
     if not name or name in {"__main__", "python", "python3", "py"}:
-        return "cswap"
+        return "agent-switch"
     return name
 
 

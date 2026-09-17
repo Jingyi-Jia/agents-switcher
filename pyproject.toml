@@ -1,7 +1,7 @@
 [project]
-name = "claude-swap"
+name = "agents-switcher"
 version = "0.27.0b1"
-description = "Multi-account switcher for Claude Code"
+description = "Multi-account switcher for Claude Code and Codex"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -40,8 +40,10 @@ Repository = "https://github.com/realiti4/claude-swap"
 Issues = "https://github.com/realiti4/claude-swap/issues"
 
 [project.scripts]
-claude-swap = "claude_swap.cli:main"
-cswap = "claude_swap.cli:main"
+# Deliberately NOT `cswap`/`claude-swap`: upstream claude-swap installs those,
+# and a fork that shadows them on PATH makes which tool ran depend on install
+# order. A distinct distribution name keeps `uv tool install` separate too.
+agent-switch = "claude_swap.cli:main"
 
 [build-system]
 requires = ["hatchling"]
