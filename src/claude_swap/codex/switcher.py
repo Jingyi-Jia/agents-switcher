@@ -26,12 +26,15 @@ running ``codex`` keeps the old account until it restarts. The result says so.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 
 from claude_swap.codex.auth_file import has_live_login, read_auth, write_auth
 from claude_swap.codex.identity import CodexIdentity, identity_from_auth
 from claude_swap.codex.processes import CodexProcess, running_codex_processes
 from claude_swap.codex.store import CodexAccount, CodexAccountStore
+from claude_swap.codex.tokens import TokenRefreshError, needs_refresh, refresh_tokens
+from claude_swap.codex.usage import CodexUsage, UsageAuthError, UsageError, fetch_usage
 from claude_swap.exceptions import AccountNotFoundError, SwitchError, ValidationError
 
 _logger = logging.getLogger("claude-swap")
@@ -247,3 +250,106 @@ class CodexSwitcher:
             )
             self.store.update(updated)
             return updated
+
+    # -- quota -----------------------------------------------------------
+
+    def _live_account_id(self) -> str | None:
+        """The account id of the credential Codex is currently holding."""
+        live = read_auth()
+        identity = identity_from_auth(live) if has_live_login(live) else None
+        return identity.account_id if identity else None
+
+    def _refresh_is_safe(self, account: CodexAccount) -> bool:
+        """Whether this slot's token can be refreshed without racing Codex.
+
+        A refresh ROTATES the refresh token, and Codex's own AuthManager
+        refreshes on 401. Two refreshes on one account means one rotates a
+        token the other just invalidated, and there is no lock to coordinate
+        with -- so a slot that a running ``codex`` is currently using is simply
+        never refreshed here. Idle slots are unaffected, which is the case that
+        matters: they are the ones whose tokens go stale.
+        """
+        if not running_codex_processes():
+            return True
+        return self._live_account_id() != account.account_id
+
+    def usage_for(self, identifier: str, *, allow_refresh: bool = True) -> CodexUsage:
+        """Read one managed account's quota.
+
+        Refreshes the stored token only when it is expiring AND no running
+        Codex is using that account. The refreshed tokens are persisted BEFORE
+        the fetch: the old refresh token dies the moment the new one is issued,
+        so a crash between refreshing and saving would strand the slot.
+
+        Raises:
+            AccountNotFoundError: No such managed account.
+            SwitchError: The slot has no saved credential.
+            UsageError: The quota could not be read.
+        """
+        account = self.resolve(identifier)
+        credentials = self.store.read_credentials(account.number)
+        if credentials is None:
+            raise SwitchError(
+                f"Slot {account.number} ({account.display_label}) has no saved "
+                "credential."
+            )
+        tokens = credentials.get("tokens") or {}
+
+        if (
+            allow_refresh
+            and needs_refresh(tokens, now=time.time())
+            and self._refresh_is_safe(account)
+        ):
+            tokens = self._refresh_and_persist(account, credentials, tokens)
+
+        try:
+            return fetch_usage(tokens)
+        except UsageAuthError:
+            # The token was rejected despite looking valid. One refresh and one
+            # retry -- never a loop, because each attempt rotates the token.
+            if not allow_refresh or not self._refresh_is_safe(account):
+                raise
+            tokens = self._refresh_and_persist(account, credentials, tokens)
+            return fetch_usage(tokens)
+
+    def _refresh_and_persist(
+        self, account: CodexAccount, credentials: dict, tokens: dict
+    ) -> dict:
+        """Rotate this slot's tokens and save them before returning.
+
+        Persisting first is the whole point: the previous refresh token is dead
+        as soon as the new one is issued, so anything that happens between the
+        refresh and the write costs the account.
+        """
+        try:
+            rotated = refresh_tokens(tokens)
+        except TokenRefreshError as e:
+            raise UsageError(
+                f"{account.display_label}: {e}"
+            ) from e
+        updated = dict(credentials)
+        updated["tokens"] = rotated
+        with self.store.lock():
+            self.store.write_credentials(account.number, updated)
+            # The live auth.json holds the same credential when this slot is
+            # active, and Codex reads the FILE, not our backup -- leaving it on
+            # the superseded token would make the next Codex request fail.
+            if self._live_account_id() == account.account_id:
+                write_auth(updated)
+        _logger.info("Refreshed Codex tokens for slot %s", account.number)
+        return rotated
+
+    def usage_all(self) -> dict[str, CodexUsage | Exception]:
+        """Quota for every managed account, keyed by slot.
+
+        Failures are RETURNED rather than raised: one dead account must not
+        hide the quota of every healthy one, which is the whole point of
+        looking at them together.
+        """
+        results: dict[str, CodexUsage | Exception] = {}
+        for number in self.store.accounts():
+            try:
+                results[number] = self.usage_for(number)
+            except Exception as e:  # noqa: BLE001 - reported per account
+                results[number] = e
+        return results

@@ -20,6 +20,7 @@ import json
 import sys
 
 from claude_swap.codex.switcher import CodexSwitcher
+from claude_swap.codex.usage import CodexUsage
 from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.printer import accent, bolded, dimmed, error, muted, yellowed
 
@@ -114,6 +115,118 @@ def _report_switch(result, as_json: bool) -> None:
         print(dimmed(f"    - {process.describe}"))
 
 
+
+def _format_reset(usage: CodexUsage) -> str:
+    """How long until the binding window frees up, in human terms."""
+    window = usage.binding_window
+    seconds = window.reset_after_seconds if window else None
+    if not seconds or seconds <= 0:
+        return ""
+    if seconds >= 86400:
+        return f"resets in {seconds // 86400}d {(seconds % 86400) // 3600}h"
+    if seconds >= 3600:
+        return f"resets in {seconds // 3600}h {(seconds % 3600) // 60}m"
+    return f"resets in {max(1, seconds // 60)}m"
+
+
+def _usage_json(usage: CodexUsage) -> dict:
+    return {
+        "plan": usage.plan,
+        "allowed": usage.allowed,
+        "limitReached": usage.limit_reached,
+        "usable": usage.usable,
+        "bindingPercent": usage.binding_percent,
+        "summary": usage.summary,
+        "windows": [
+            {
+                "usedPercent": w.used_percent,
+                "label": w.label,
+                "windowSeconds": w.window_seconds,
+                "resetAt": w.reset_at,
+                "resetAfterSeconds": w.reset_after_seconds,
+            }
+            for w in usage.windows
+        ],
+        "credits": None if usage.credits is None else {
+            "hasCredits": usage.credits.has_credits,
+            "unlimited": usage.credits.unlimited,
+            "balance": usage.credits.balance,
+            "overageLimitReached": usage.credits.overage_limit_reached,
+        },
+        "spendControlReached": usage.spend_control_reached,
+        "reachedType": usage.reached_type,
+        "resetCreditsAvailable": usage.reset_credits_available,
+        "modelAvailability": usage.model_availability,
+        "featureLimits": [
+            {"name": f.name, "limitReached": f.limit_reached,
+             "windows": [{"usedPercent": w.used_percent, "label": w.label}
+                         for w in f.windows]}
+            for f in usage.feature_limits
+        ],
+        "fetchedAt": usage.fetched_at,
+    }
+
+
+def _usage_line(account, usage: CodexUsage) -> str:
+    """One account's quota, coloured by whether it can actually serve requests."""
+    percent = usage.binding_percent
+    body = usage.summary
+    if not usage.usable:
+        body = yellowed(body)
+    elif percent is not None and percent >= 80:
+        body = yellowed(body)
+    else:
+        body = accent(body)
+    reset = _format_reset(usage)
+    extra = []
+    if reset and not usage.usable:
+        extra.append(reset)
+    if usage.reset_credits_available:
+        extra.append(f"{usage.reset_credits_available} reset credit(s)")
+    unavailable = [m for m, ok in usage.model_availability.items() if not ok]
+    if unavailable:
+        extra.append("unavailable: " + ", ".join(sorted(unavailable)))
+    tail = muted("  " + " · ".join(extra)) if extra else ""
+    return f"{body}{tail}"
+
+
+def _print_usage(switcher: CodexSwitcher, target: str | None, as_json: bool) -> None:
+    if target:
+        accounts = [switcher.resolve(target)]
+        results = {accounts[0].number: switcher.usage_for(accounts[0].number)}
+    else:
+        accounts = switcher.list_accounts()
+        results = switcher.usage_all()
+
+    if as_json:
+        print(json.dumps({
+            "accounts": [
+                {
+                    **_account_json(a),
+                    **({"error": str(results[a.number])}
+                       if isinstance(results.get(a.number), Exception)
+                       else {"usage": _usage_json(results[a.number])}),
+                }
+                for a in accounts if a.number in results
+            ],
+        }, indent=2))
+        return
+
+    if not accounts:
+        print(dimmed("No Codex accounts are managed yet."))
+        return
+    active = switcher.store.active_number()
+    print(bolded("Codex usage:"))
+    for account in accounts:
+        result = results.get(account.number)
+        marker = accent(" *") if account.number == active else "  "
+        name = account.email or account.account_id
+        if isinstance(result, Exception):
+            print(f"{marker} {account.number}: {name}  {yellowed(str(result))}")
+        elif result is not None:
+            print(f"{marker} {account.number}: {name}  {_usage_line(account, result)}")
+
+
 def codex_command(argv: list[str]) -> None:
     """Handle ``cswap codex <subcommand>``."""
     parser = argparse.ArgumentParser(
@@ -170,6 +283,11 @@ auth.json once at startup and will not adopt a different account mid-run.
                               help="Stop managing an account")
     p_remove.add_argument("account", metavar="NUM|EMAIL|ALIAS")
 
+    p_usage = sub.add_parser("usage", parents=[common],
+                             help="Show quota for managed accounts")
+    p_usage.add_argument("account", nargs="?", metavar="NUM|EMAIL|ALIAS",
+                         help="One account; omit for all")
+
     p_alias = sub.add_parser("alias", parents=[common],
                              help="Set or clear an account's alias")
     p_alias.add_argument("account", metavar="NUM|EMAIL")
@@ -195,6 +313,8 @@ auth.json once at startup and will not adopt a different account mid-run.
             else:
                 print(f"{accent('Now managing')} {account.display_label} "
                       f"{muted(f'as slot {account.number}')}")
+        elif command == "usage":
+            _print_usage(switcher, args.account, args.json)
         elif command == "switch":
             _report_switch(switcher.switch_to(args.account, force=args.force), args.json)
         elif command in ("remove", "rm"):
