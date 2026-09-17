@@ -34,6 +34,12 @@ from claude_swap.codex.identity import CodexIdentity, identity_from_auth
 from claude_swap.codex.processes import CodexProcess, running_codex_processes
 from claude_swap.codex.store import CodexAccount, CodexAccountStore
 from claude_swap.codex.tokens import TokenRefreshError, needs_refresh, refresh_tokens
+from claude_swap.codex.stats import (
+    CodexProfileStats,
+    CodexResetCredits,
+    fetch_profile_stats,
+    fetch_reset_credits,
+)
 from claude_swap.codex.usage import CodexUsage, UsageAuthError, UsageError, fetch_usage
 from claude_swap.exceptions import AccountNotFoundError, SwitchError, ValidationError
 
@@ -273,20 +279,20 @@ class CodexSwitcher:
             return True
         return self._live_account_id() != account.account_id
 
-    def usage_for(self, identifier: str, *, allow_refresh: bool = True) -> CodexUsage:
-        """Read one managed account's quota.
+    def _call_with_tokens(self, account: CodexAccount, fetcher, *, allow_refresh: bool):
+        """Run ``fetcher(tokens)`` with a valid token for ``account``.
 
-        Refreshes the stored token only when it is expiring AND no running
-        Codex is using that account. The refreshed tokens are persisted BEFORE
-        the fetch: the old refresh token dies the moment the new one is issued,
-        so a crash between refreshing and saving would strand the slot.
+        One place for the refresh protocol, because every reader needs it and
+        three copies would drift: check expiry first so a healthy token is never
+        rotated for nothing, refresh only when no running Codex is using this
+        account, persist before use, and allow EXACTLY one refresh-and-retry on
+        a rejection -- never a loop, because each attempt rotates the token.
 
         Raises:
-            AccountNotFoundError: No such managed account.
             SwitchError: The slot has no saved credential.
-            UsageError: The quota could not be read.
+            UsageError: The call failed, including a refresh that could not be
+                completed.
         """
-        account = self.resolve(identifier)
         credentials = self.store.read_credentials(account.number)
         if credentials is None:
             raise SwitchError(
@@ -303,14 +309,44 @@ class CodexSwitcher:
             tokens = self._refresh_and_persist(account, credentials, tokens)
 
         try:
-            return fetch_usage(tokens)
+            return fetcher(tokens)
         except UsageAuthError:
-            # The token was rejected despite looking valid. One refresh and one
-            # retry -- never a loop, because each attempt rotates the token.
             if not allow_refresh or not self._refresh_is_safe(account):
                 raise
             tokens = self._refresh_and_persist(account, credentials, tokens)
-            return fetch_usage(tokens)
+            return fetcher(tokens)
+
+    def usage_for(self, identifier: str, *, allow_refresh: bool = True) -> CodexUsage:
+        """Read one managed account's quota.
+
+        Raises:
+            AccountNotFoundError: No such managed account.
+            SwitchError: The slot has no saved credential.
+            UsageError: The quota could not be read.
+        """
+        account = self.resolve(identifier)
+        return self._call_with_tokens(account, fetch_usage, allow_refresh=allow_refresh)
+
+    def stats_for(self, identifier: str, *, allow_refresh: bool = True) -> CodexProfileStats:
+        """Read one managed account's lifetime statistics. Display only."""
+        account = self.resolve(identifier)
+        return self._call_with_tokens(
+            account, fetch_profile_stats, allow_refresh=allow_refresh
+        )
+
+    def reset_credits_for(
+        self, identifier: str, *, allow_refresh: bool = True
+    ) -> CodexResetCredits:
+        """Read the credits that can clear an exhausted window early.
+
+        NOT the same as the billing credits in the quota response: those let
+        requests continue past an exhausted window and are charged per request,
+        while these clear the window itself.
+        """
+        account = self.resolve(identifier)
+        return self._call_with_tokens(
+            account, fetch_reset_credits, allow_refresh=allow_refresh
+        )
 
     def _refresh_and_persist(
         self, account: CodexAccount, credentials: dict, tokens: dict
@@ -324,9 +360,7 @@ class CodexSwitcher:
         try:
             rotated = refresh_tokens(tokens)
         except TokenRefreshError as e:
-            raise UsageError(
-                f"{account.display_label}: {e}"
-            ) from e
+            raise UsageError(f"{account.display_label}: {e}") from e
         updated = dict(credentials)
         updated["tokens"] = rotated
         with self.store.lock():

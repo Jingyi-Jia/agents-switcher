@@ -79,12 +79,33 @@ class CodexWindow:
 
 @dataclass(frozen=True)
 class CodexCredits:
-    """Pay-as-you-go balance, which can outlive an exhausted rate limit."""
+    """Pay-as-you-go balance, which can outlive an exhausted rate limit.
+
+    ``balance`` is a count of CREDITS, not a currency amount, and must never be
+    rendered with a currency symbol -- a balance of 844.74 credits sat alongside
+    a roughly $40 purchase on the account this was measured against, so the two
+    numbers are not interchangeable and showing one as the other misleads about
+    real money. The API's own ``approx_*_messages`` pairs are the figure worth
+    showing a human: each is a [low, high] estimate of how many more messages
+    the balance covers.
+    """
 
     has_credits: bool = False
     unlimited: bool = False
     balance: str | None = None
     overage_limit_reached: bool = False
+    approx_local_messages: tuple[int, ...] = ()
+    approx_cloud_messages: tuple[int, ...] = ()
+
+    @property
+    def approx_messages_label(self) -> str:
+        """``~211-1098 messages``, or empty when the API gave no estimate."""
+        estimate = self.approx_local_messages or self.approx_cloud_messages
+        if not estimate:
+            return ""
+        if len(estimate) >= 2 and estimate[0] != estimate[-1]:
+            return f"~{estimate[0]}-{estimate[-1]} messages"
+        return f"~{estimate[0]} messages"
 
     @property
     def can_cover_requests(self) -> bool:
@@ -155,18 +176,51 @@ class CodexUsage:
         return bool(self.credits and self.credits.can_cover_requests)
 
     @property
+    def on_credits(self) -> bool:
+        """Whether this account is past its included quota and billing credits.
+
+        Distinct from ``usable``: such an account WORKS, but every request now
+        costs money rather than drawing on the subscription.
+        """
+        if self.allowed:
+            return False
+        return bool(self.credits and self.credits.can_cover_requests)
+
+    @property
+    def auto_switch_eligible(self) -> bool:
+        """Whether an AUTOMATIC switch may move onto this account.
+
+        Deliberately stricter than :attr:`usable`. Spending money is a decision
+        the user makes, not one a background loop makes for them, so an account
+        running on credits is never auto-selected and never counts as available
+        capacity when choosing a target -- even though switching to it manually
+        works fine. The whole point of auto-switching is to find an account with
+        quota LEFT; one that is paying per request has none.
+        """
+        return self.usable and not self.on_credits
+
+    @property
     def summary(self) -> str:
         """One line for a human: utilisation, window, and why it is blocked."""
         window = self.binding_window
         if window is None:
             return "usage unknown"
         text = f"{window.used_percent}% of {window.label}"
-        if self.usable and not self.allowed:
-            text += " (on credits)"
+        if self.on_credits:
+            estimate = self.credits.approx_messages_label if self.credits else ""
+            detail = f", {estimate}" if estimate else ""
+            text += f" — on paid credits{detail}; manual switch only"
         elif not self.usable:
             reason = "spend limit" if self.spend_control_reached else "limit reached"
             text += f" — {reason}"
         return text
+
+
+def _int_tuple(value) -> tuple[int, ...]:
+    """Coerce an estimate list to ints, dropping anything unusable."""
+    if not isinstance(value, list):
+        return ()
+    return tuple(int(v) for v in value if isinstance(v, (int, float)))
 
 
 def _window_from(payload: dict | None) -> CodexWindow | None:
@@ -249,6 +303,12 @@ def parse_usage(payload: dict, *, fetched_at: float | None = None) -> CodexUsage
             balance=credits_payload.get("balance"),
             overage_limit_reached=bool(
                 credits_payload.get("overage_limit_reached", False)
+            ),
+            approx_local_messages=_int_tuple(
+                credits_payload.get("approx_local_messages")
+            ),
+            approx_cloud_messages=_int_tuple(
+                credits_payload.get("approx_cloud_messages")
             ),
         )
 

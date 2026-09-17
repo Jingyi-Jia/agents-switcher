@@ -135,6 +135,8 @@ def _usage_json(usage: CodexUsage) -> dict:
         "allowed": usage.allowed,
         "limitReached": usage.limit_reached,
         "usable": usage.usable,
+        "onCredits": usage.on_credits,
+        "autoSwitchEligible": usage.auto_switch_eligible,
         "bindingPercent": usage.binding_percent,
         "summary": usage.summary,
         "windows": [
@@ -152,6 +154,8 @@ def _usage_json(usage: CodexUsage) -> dict:
             "unlimited": usage.credits.unlimited,
             "balance": usage.credits.balance,
             "overageLimitReached": usage.credits.overage_limit_reached,
+            "approxLocalMessages": list(usage.credits.approx_local_messages),
+            "approxCloudMessages": list(usage.credits.approx_cloud_messages),
         },
         "spendControlReached": usage.spend_control_reached,
         "reachedType": usage.reached_type,
@@ -171,9 +175,10 @@ def _usage_line(account, usage: CodexUsage) -> str:
     """One account's quota, coloured by whether it can actually serve requests."""
     percent = usage.binding_percent
     body = usage.summary
-    if not usage.usable:
-        body = yellowed(body)
-    elif percent is not None and percent >= 80:
+    # An account on credits still WORKS, so it is not an error; but it is not
+    # spare capacity either, and colouring it like a healthy account would
+    # invite reaching for it.
+    if not usage.auto_switch_eligible or (percent is not None and percent >= 80):
         body = yellowed(body)
     else:
         body = accent(body)
@@ -225,6 +230,105 @@ def _print_usage(switcher: CodexSwitcher, target: str | None, as_json: bool) -> 
             print(f"{marker} {account.number}: {name}  {yellowed(str(result))}")
         elif result is not None:
             print(f"{marker} {account.number}: {name}  {_usage_line(account, result)}")
+
+
+
+def _thousands(value) -> str:
+    return f"{int(value):,}" if isinstance(value, (int, float)) else "-"
+
+
+def _print_stats(switcher: CodexSwitcher, target: str | None, as_json: bool) -> None:
+    account = switcher.resolve(target) if target else None
+    if account is None:
+        accounts = switcher.list_accounts()
+        if not accounts:
+            print(dimmed("No Codex accounts are managed yet."))
+            return
+        account = accounts[0]
+
+    stats = switcher.stats_for(account.number)
+    resets = switcher.reset_credits_for(account.number)
+
+    if as_json:
+        print(json.dumps({
+            "account": _account_json(account),
+            "stats": {
+                "displayName": stats.display_name,
+                "username": stats.username,
+                "lifetimeTokens": stats.lifetime_tokens,
+                "peakDailyTokens": stats.peak_daily_tokens,
+                "longestTurnSeconds": stats.longest_turn_seconds,
+                "currentStreakDays": stats.current_streak_days,
+                "longestStreakDays": stats.longest_streak_days,
+                "fastModePercent": stats.fast_mode_percent,
+                "topReasoningEffort": stats.top_reasoning_effort,
+                "topReasoningEffortPercent": stats.top_reasoning_effort_percent,
+                "totalThreads": stats.total_threads,
+                "totalSkillsUsed": stats.total_skills_used,
+                "uniqueSkillsUsed": stats.unique_skills_used,
+                "topInvocations": [
+                    {"kind": i.kind, "name": i.name, "usageCount": i.usage_count}
+                    for i in stats.top_invocations
+                ],
+                "daily": [{"date": b.start_date, "tokens": b.tokens} for b in stats.daily],
+                "weekly": [{"date": b.start_date, "tokens": b.tokens} for b in stats.weekly],
+                "statsAsOf": stats.stats_as_of,
+            },
+            "resetCredits": {
+                "availableCount": resets.available_count,
+                "totalEarnedCount": resets.total_earned_count,
+                "purchaseEligible": resets.purchase_eligible,
+                "nextExpiry": resets.next_expiry,
+                "credits": [
+                    {"id": c.identifier, "type": c.reset_type, "status": c.status,
+                     "expiresAt": c.expires_at, "title": c.title,
+                     "available": c.is_available}
+                    for c in resets.credits
+                ],
+            },
+        }, indent=2))
+        return
+
+    name = account.email or account.account_id
+    print(bolded(f"Codex stats — {name}") + muted(f"  (slot {account.number})"))
+    if stats.stats_as_of:
+        print(dimmed(f"  as of {stats.stats_as_of}"))
+    print()
+    print(f"  lifetime tokens   {accent(_thousands(stats.lifetime_tokens))}")
+    print(f"  peak day          {_thousands(stats.peak_daily_tokens)}")
+    if stats.longest_turn_seconds:
+        print(f"  longest turn      {stats.longest_turn_seconds // 3600}h "
+              f"{(stats.longest_turn_seconds % 3600) // 60}m")
+    print(f"  streak            {stats.current_streak_days} day(s) "
+          + muted(f"(best {stats.longest_streak_days})"))
+    print(f"  threads           {_thousands(stats.total_threads)}")
+    print(f"  skills            {_thousands(stats.total_skills_used)} uses "
+          + muted(f"({stats.unique_skills_used} unique)"))
+    if stats.fast_mode_percent is not None:
+        print(f"  fast mode         {stats.fast_mode_percent:.0f}%")
+    if stats.top_reasoning_effort:
+        pct = stats.top_reasoning_effort_percent
+        suffix = muted(f" ({pct:.0f}%)") if pct is not None else ""
+        print(f"  reasoning effort  {stats.top_reasoning_effort}{suffix}")
+
+    if stats.top_invocations:
+        print()
+        print(bolded("  Most used:"))
+        for item in stats.top_invocations:
+            print(f"    {item.usage_count:>5}  {item.name} {muted(f'({item.kind})')}")
+
+    print()
+    # Named "credits" like the billing balance, but a different thing entirely:
+    # these clear an exhausted window rather than billing past it.
+    if resets.available_count:
+        line = f"  reset credits     {accent(str(resets.available_count))} available"
+        if resets.next_expiry:
+            line += muted(f" (next expires {resets.next_expiry})")
+        print(line)
+    else:
+        extra = " · purchasable" if resets.purchase_eligible else ""
+        print(dimmed(f"  reset credits     none available"
+                     f" (earned {resets.total_earned_count} all time){extra}"))
 
 
 def codex_command(argv: list[str]) -> None:
@@ -288,6 +392,11 @@ auth.json once at startup and will not adopt a different account mid-run.
     p_usage.add_argument("account", nargs="?", metavar="NUM|EMAIL|ALIAS",
                          help="One account; omit for all")
 
+    p_stats = sub.add_parser("stats", parents=[common],
+                             help="Lifetime activity and reset credits")
+    p_stats.add_argument("account", nargs="?", metavar="NUM|EMAIL|ALIAS",
+                         help="Which account (default: the first)")
+
     p_alias = sub.add_parser("alias", parents=[common],
                              help="Set or clear an account's alias")
     p_alias.add_argument("account", metavar="NUM|EMAIL")
@@ -313,6 +422,8 @@ auth.json once at startup and will not adopt a different account mid-run.
             else:
                 print(f"{accent('Now managing')} {account.display_label} "
                       f"{muted(f'as slot {account.number}')}")
+        elif command == "stats":
+            _print_stats(switcher, args.account, args.json)
         elif command == "usage":
             _print_usage(switcher, args.account, args.json)
         elif command == "switch":

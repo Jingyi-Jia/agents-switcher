@@ -45,6 +45,8 @@ LIVE = {
         "unlimited": False,
         "balance": "844.7392570000",
         "overage_limit_reached": False,
+        "approx_local_messages": [211, 1098],
+        "approx_cloud_messages": [34, 211],
     },
     "spend_control": {"reached": False, "individual_limit": None},
     "rate_limit_reached_type": {"type": "rate_limit_reached", "details": "default"},
@@ -131,7 +133,7 @@ class TestUsable:
         u = parse_usage(LIVE)
         assert u.allowed is False
         assert u.usable is True
-        assert "on credits" in u.summary
+        assert "on paid credits" in u.summary
 
     def test_blocked_without_credits_is_not_usable(self):
         u = CodexUsage(allowed=False, credits=CodexCredits(has_credits=False))
@@ -153,6 +155,70 @@ class TestUsable:
                        windows=(CodexWindow(3, 18000),))
         assert u.usable is False
         assert "spend limit" in u.summary
+
+
+class TestCreditsPolicy:
+    """Spending money is the user's decision, not a background loop's.
+
+    An account past its included quota still WORKS on credits, so a manual
+    switch to it is fine -- but every request then costs money, so the
+    auto-switcher must never select it and must never count it as spare
+    capacity when choosing where to go.
+    """
+
+    def test_the_live_case_is_usable_but_not_auto_switchable(self):
+        u = parse_usage(LIVE)
+        assert u.usable is True          # manual switch: fine
+        assert u.on_credits is True
+        assert u.auto_switch_eligible is False   # automatic switch: never
+
+    def test_a_healthy_account_is_auto_switchable(self):
+        u = CodexUsage(allowed=True, windows=(CodexWindow(12, 18000),))
+        assert u.on_credits is False
+        assert u.auto_switch_eligible is True
+
+    def test_an_account_within_quota_is_not_on_credits_even_holding_some(self):
+        u = CodexUsage(allowed=True, credits=CodexCredits(has_credits=True))
+        assert u.on_credits is False
+        assert u.auto_switch_eligible is True
+
+    def test_an_unusable_account_is_not_auto_switchable_either(self):
+        u = CodexUsage(allowed=False, credits=CodexCredits(has_credits=False))
+        assert u.auto_switch_eligible is False
+
+    def test_a_spend_blocked_account_is_never_auto_switchable(self):
+        u = CodexUsage(allowed=True, spend_control_reached=True)
+        assert u.auto_switch_eligible is False
+
+    def test_the_summary_says_manual_switch_only(self):
+        assert "manual switch only" in parse_usage(LIVE).summary
+
+
+class TestCreditBalanceIsNotCurrency:
+    def test_message_estimates_are_exposed_as_a_range(self):
+        # The balance is a count of CREDITS; 844.74 credits sat alongside a
+        # roughly $40 purchase, so the two are not interchangeable. The message
+        # estimate is the figure that means something to a person.
+        credits = parse_usage(LIVE).credits
+        assert credits.balance == "844.7392570000"
+        assert credits.approx_local_messages == (211, 1098)
+        assert credits.approx_messages_label == "~211-1098 messages"
+
+    def test_summary_quotes_messages_never_a_currency(self):
+        summary = parse_usage(LIVE).summary
+        assert "messages" in summary
+        assert "$" not in summary
+
+    def test_a_single_estimate_is_not_rendered_as_a_range(self):
+        c = CodexCredits(has_credits=True, approx_local_messages=(50,))
+        assert c.approx_messages_label == "~50 messages"
+
+    def test_no_estimate_yields_no_label(self):
+        assert CodexCredits(has_credits=True).approx_messages_label == ""
+
+    def test_falls_back_to_cloud_estimates(self):
+        c = CodexCredits(has_credits=True, approx_cloud_messages=(34, 211))
+        assert c.approx_messages_label == "~34-211 messages"
 
 
 class TestFeatureLimits:
