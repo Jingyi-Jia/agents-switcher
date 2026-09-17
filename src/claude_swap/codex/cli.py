@@ -19,6 +19,7 @@ import argparse
 import json
 import sys
 
+from claude_swap.codex.autoswitch import Action, AutoSettings, run_once
 from claude_swap.codex.switcher import CodexSwitcher
 from claude_swap.codex.usage import CodexUsage
 from claude_swap.exceptions import ClaudeSwitchError
@@ -331,6 +332,92 @@ def _print_stats(switcher: CodexSwitcher, target: str | None, as_json: bool) -> 
                      f" (earned {resets.total_earned_count} all time){extra}"))
 
 
+
+#: Exit codes for `codex auto --once`, so cron and shell scripts can branch.
+#: Mirrors the Claude-side `cswap auto --once` contract.
+_AUTO_EXIT = {
+    Action.SWITCH: 0,
+    Action.HOLD: 2,
+    Action.COOLDOWN: 2,
+    Action.NOTIFY: 3,
+    Action.ALL_EXHAUSTED: 3,
+    Action.NO_TARGET: 3,
+    Action.NO_ACCOUNTS: 3,
+}
+
+
+def _decision_json(decision) -> dict:
+    return {
+        "action": decision.action.value,
+        "reason": decision.reason,
+        "switched": decision.action is Action.SWITCH,
+        "restartRequired": decision.action is Action.NOTIFY,
+        "active": None if decision.active is None
+        else _account_json(decision.active.account),
+        "target": None if decision.target is None
+        else _account_json(decision.target.account),
+        "processes": [{"pid": p.pid, "description": p.describe}
+                      for p in decision.processes],
+        "soonestResetAt": decision.soonest_reset_at,
+    }
+
+
+def _report_decision(decision, *, dry_run: bool) -> None:
+    prefix = dimmed("[dry run] ") if dry_run else ""
+    if decision.action is Action.SWITCH:
+        verb = "Would switch" if dry_run else "Switched"
+        print(f"{prefix}{accent(verb)} to {decision.target.account.display_label}"
+              f"  {muted(decision.reason)}")
+    elif decision.action is Action.NOTIFY:
+        # The one case where the loop deliberately does not act.
+        print(f"{prefix}{yellowed('Switch needed, but Codex is running.')}")
+        print(dimmed(f"  {decision.reason}"))
+        for process in decision.processes:
+            print(dimmed(f"    - {process.describe}"))
+        print(dimmed(f"  Run 'cswap codex switch {decision.target.account.number}' "
+                     "after closing them."))
+    elif decision.action is Action.ALL_EXHAUSTED:
+        print(yellowed("All Codex accounts are out of included quota."))
+        print(dimmed(f"  {decision.reason}"))
+        if decision.soonest_reset_at:
+            import datetime
+
+            when = datetime.datetime.fromtimestamp(decision.soonest_reset_at)
+            print(dimmed(f"  Soonest reset: {when:%Y-%m-%d %H:%M}"))
+    elif decision.action in (Action.NO_TARGET, Action.NO_ACCOUNTS):
+        print(yellowed(decision.reason))
+    else:
+        print(dimmed(f"{prefix}No change — {decision.reason}"))
+
+
+def _auto_command(switcher, args) -> None:
+    settings = AutoSettings(
+        threshold=args.threshold,
+        hysteresis_pct=args.hysteresis,
+        cooldown_seconds=args.cooldown,
+        interval_seconds=args.interval,
+    )
+    if args.once:
+        decision = run_once(switcher, settings=settings, dry_run=args.dry_run)
+        if args.json:
+            print(json.dumps(_decision_json(decision), indent=2))
+        else:
+            _report_decision(decision, dry_run=args.dry_run)
+        sys.exit(_AUTO_EXIT.get(decision.action, 3))
+
+    import time
+
+    print(dimmed(f"Watching Codex accounts (switch at {settings.threshold:.0f}%, "
+                 f"every {settings.interval_seconds:.0f}s). Ctrl-C to stop."))
+    while True:
+        decision = run_once(switcher, settings=settings, dry_run=args.dry_run)
+        if args.json:
+            print(json.dumps(_decision_json(decision)), flush=True)
+        elif decision.action is not Action.HOLD:
+            _report_decision(decision, dry_run=args.dry_run)
+        time.sleep(settings.interval_seconds)
+
+
 def codex_command(argv: list[str]) -> None:
     """Handle ``cswap codex <subcommand>``."""
     parser = argparse.ArgumentParser(
@@ -392,6 +479,21 @@ auth.json once at startup and will not adopt a different account mid-run.
     p_usage.add_argument("account", nargs="?", metavar="NUM|EMAIL|ALIAS",
                          help="One account; omit for all")
 
+    p_auto = sub.add_parser("auto", parents=[common],
+                            help="Switch automatically as accounts run low")
+    p_auto.add_argument("--once", action="store_true",
+                        help="Check once and exit (for cron); sets the exit code")
+    p_auto.add_argument("--dry-run", action="store_true",
+                        help="Report what would happen without switching")
+    p_auto.add_argument("--threshold", type=float, default=80.0, metavar="PCT",
+                        help="Switch when the active account passes this (default 80)")
+    p_auto.add_argument("--hysteresis", type=float, default=10.0, metavar="PCT",
+                        help="Headroom a target must beat the active account by")
+    p_auto.add_argument("--cooldown", type=float, default=600.0, metavar="SECONDS",
+                        help="Minimum time between switches")
+    p_auto.add_argument("--interval", type=float, default=300.0, metavar="SECONDS",
+                        help="Seconds between checks in loop mode")
+
     p_stats = sub.add_parser("stats", parents=[common],
                              help="Lifetime activity and reset credits")
     p_stats.add_argument("account", nargs="?", metavar="NUM|EMAIL|ALIAS",
@@ -422,6 +524,8 @@ auth.json once at startup and will not adopt a different account mid-run.
             else:
                 print(f"{accent('Now managing')} {account.display_label} "
                       f"{muted(f'as slot {account.number}')}")
+        elif command == "auto":
+            _auto_command(switcher, args)
         elif command == "stats":
             _print_stats(switcher, args.account, args.json)
         elif command == "usage":
