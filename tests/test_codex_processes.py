@@ -78,6 +78,36 @@ class TestMatching:
 
 
 @pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX process model")
+class TestNpmInstalledCodex:
+    """The npm package declares bin: {codex: "bin/codex.js"}, so an npm install
+    runs as `node .../codex.js` and argv[0] is the interpreter, not codex.
+    Missing that reports "nothing running" while a live process still serves the
+    old account -- the dangerous direction."""
+
+    def test_matches_a_node_run_codex_script(self, fake_ps):
+        fake_ps([ps_line(300, "node /usr/lib/node_modules/@openai/codex/bin/codex.js exec")])
+        found = running_codex_processes()
+        assert len(found) == 1
+        assert found[0].executable.endswith("codex.js")
+
+    def test_matches_past_interpreter_flags(self, fake_ps):
+        fake_ps([ps_line(301, "/usr/bin/node --enable-source-maps /opt/codex/bin/codex.js")])
+        assert len(running_codex_processes()) == 1
+
+    def test_does_not_match_node_running_anything_else(self, fake_ps):
+        fake_ps([
+            ps_line(302, "node /usr/lib/node_modules/other/bin/thing.js"),
+            ps_line(303, "node /srv/app/server.js --codex-mode"),
+        ])
+        assert running_codex_processes() == []
+
+    def test_other_interpreters_are_not_trusted(self, fake_ps):
+        # Codex is not a Python tool; widening this invites false positives.
+        fake_ps([ps_line(304, "python /opt/codex")])
+        assert running_codex_processes() == []
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX process model")
 class TestOwnership:
     def test_other_users_processes_are_ignored(self, fake_ps):
         """A cluster head node showed 799 processes, 8 of them the caller's.

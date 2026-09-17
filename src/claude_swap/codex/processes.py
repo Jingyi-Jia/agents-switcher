@@ -42,6 +42,18 @@ from dataclasses import dataclass
 #: Bounded so a wedged `ps` cannot hang a switch.
 _PS_TIMEOUT_S = 5
 
+#: Interpreters that can be running Codex without appearing as ``codex``.
+#: The npm package (@openai/codex) declares ``bin: {codex: "bin/codex.js"}``, so
+#: an npm install runs as ``node .../bin/codex.js`` and argv[0] is the
+#: interpreter. A native install (Homebrew cask, the standalone wrapper's
+#: ``exec "$real_codex"``) does put ``codex`` in argv[0]; both shapes are real
+#: and a miss here is the DANGEROUS direction -- it reports "nothing running"
+#: and lets a switch look complete while a live process still serves the old
+#: account.
+_INTERPRETERS = frozenset({"node", "node.exe"})
+#: Script names that identify Codex when run under one of those interpreters.
+_CODEX_SCRIPT_NAMES = frozenset({"codex", "codex.js"})
+
 
 @dataclass(frozen=True)
 class CodexProcess:
@@ -82,18 +94,33 @@ class CodexProcess:
         return f"pid {self.pid} — {kind}"
 
 
-def _executable_of(command: str) -> str:
-    """The executable path from a ``ps`` command line.
+def _codex_executable(command: str) -> str | None:
+    """The path identifying ``command`` as Codex, or ``None`` if it is not.
 
     Splits on whitespace, which mis-parses an executable path CONTAINING a
-    space. That is acceptable here and fails in the safe direction: the
-    Electron helpers are the paths with spaces, and mis-parsing them only makes
-    them fail to match a bare ``codex``, which is what we want anyway. A user
-    whose own codex binary lives under a path with a space is not detected and
-    gets the no-processes-running message -- they are told to restart Codex
-    regardless, so the outcome is a weaker warning, never a wrong swap.
+    space. That fails in the safe direction for the case that actually occurs:
+    the ChatGPT app's Electron helpers are the paths with spaces, and
+    mis-parsing them only stops them matching a bare ``codex``, which is the
+    desired outcome anyway.
     """
-    return command.split()[0] if command.strip() else ""
+    tokens = command.split()
+    if not tokens:
+        return None
+
+    executable = tokens[0]
+    if os.path.basename(executable) == "codex":
+        return executable
+
+    if os.path.basename(executable) in _INTERPRETERS:
+        for token in tokens[1:]:
+            if token.startswith("-"):
+                continue  # interpreter flags precede the script
+            # The first non-flag argument IS the script; if that is not Codex,
+            # this interpreter is running something else entirely.
+            if os.path.basename(token) in _CODEX_SCRIPT_NAMES:
+                return token
+            return None
+    return None
 
 
 def running_codex_processes() -> list[CodexProcess]:
@@ -133,8 +160,8 @@ def running_codex_processes() -> list[CodexProcess]:
         pid = int(pid_text)
         if pid == self_pid:
             continue
-        executable = _executable_of(command)
-        if os.path.basename(executable) != "codex":
+        executable = _codex_executable(command)
+        if executable is None:
             continue
         found.append(
             CodexProcess(
