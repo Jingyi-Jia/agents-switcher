@@ -999,6 +999,11 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "config":
         _config_command(sys.argv[2:])
         return
+    if argv and argv[0] == "web":
+        from claude_swap.web.cli import web_command
+
+        web_command(argv[1:])
+        return
     if argv and argv[0] == "codex":
         from claude_swap.codex.cli import codex_command
 
