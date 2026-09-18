@@ -43,6 +43,45 @@ DEFAULT_PORT = 8765
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
+def _claude_windows(last_good: dict | None) -> list[dict]:
+    """Claude's windows in the same shape the Codex ones use.
+
+    One shape for both providers so the page has a single way to draw a limit;
+    the alternative is two renderers that drift. Claude names its windows in the
+    payload (``five_hour``/``seven_day``) while Codex only gives a duration, so
+    the label is normalised here rather than in the page.
+    """
+    from datetime import datetime
+
+    from claude_swap.tui.data import window_pct
+
+    if not isinstance(last_good, dict):
+        return []
+    now = time.time()
+    windows = []
+    for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
+        percent = window_pct(last_good, key)
+        if percent is None:
+            continue
+        remaining = None
+        block = last_good.get(key)
+        resets_at = block.get("resets_at") if isinstance(block, dict) else None
+        if resets_at:
+            try:
+                stamp = datetime.fromisoformat(
+                    str(resets_at).replace("Z", "+00:00")
+                ).timestamp()
+                remaining = max(0, int(stamp - now))
+            except ValueError:
+                remaining = None
+        windows.append({
+            "label": label,
+            "usedPercent": round(percent),
+            "resetAfterSeconds": remaining,
+        })
+    return windows
+
+
 class DashboardState:
     """Collects both providers' accounts, with a short cache.
 
@@ -88,6 +127,7 @@ class DashboardState:
             return {"available": False, "error": "not configured", "accounts": []}
         try:
             from claude_swap.poll_policy import binding_pct
+            from claude_swap.tui.data import window_pct
 
             snapshot = self._claude.accounts_snapshot()
             accounts = []
@@ -95,6 +135,7 @@ class DashboardState:
                 usage = account.usage
                 percent = binding_pct(usage.last_good) if usage else None
                 accounts.append({
+                    "windows": _claude_windows(usage.last_good if usage else None),
                     "number": account.number,
                     "email": account.email,
                     "alias": account.alias,
@@ -110,10 +151,27 @@ class DashboardState:
                 "available": True,
                 "activeNumber": snapshot.active_number,
                 "accounts": accounts,
+                # The machine can be LOGGED IN to an account this tool does not
+                # manage. Reporting only managed accounts made a machine with a
+                # live login read as "no accounts", which is true and useless --
+                # the answer the user wants is "yes, as whom, and shall I manage
+                # it?"
+                "liveLogin": self._claude_live_login(),
             }
         except Exception as e:  # noqa: BLE001 - reported, never fatal
             _logger.warning("Dashboard could not read Claude accounts: %s", e)
             return {"available": False, "error": str(e), "accounts": []}
+
+    def _claude_live_login(self) -> dict | None:
+        """Who Claude Code is currently signed in as, managed or not."""
+        try:
+            payload = self._claude.status(json_output=True)
+        except Exception:  # noqa: BLE001 - a label, never fatal
+            return None
+        active = (payload or {}).get("active") if isinstance(payload, dict) else None
+        if not isinstance(active, dict) or not active.get("email"):
+            return None
+        return {"email": active["email"], "managed": bool(active.get("managed"))}
 
     def _collect_codex(self) -> dict:
         if self._codex is None:
@@ -137,6 +195,14 @@ class DashboardState:
                     entry["error"] = str(result)
                 elif result is not None:
                     entry.update({
+                        "windows": [
+                            {
+                                "label": w.label,
+                                "usedPercent": w.used_percent,
+                                "resetAfterSeconds": w.reset_after_seconds,
+                            }
+                            for w in result.windows
+                        ],
                         "percent": result.binding_percent,
                         "window": (
                             result.binding_window.label if result.binding_window else ""
@@ -153,12 +219,46 @@ class DashboardState:
                         ),
                     })
                 accounts.append(entry)
-            return {"available": True, "activeNumber": active, "accounts": accounts}
+            live = None
+            try:
+                status = self._codex.status()
+                if status.logged_in and status.identity:
+                    live = {
+                        "email": status.identity.email,
+                        "plan": status.identity.plan,
+                        "managed": status.is_managed,
+                    }
+            except Exception:  # noqa: BLE001 - a label, never fatal
+                live = None
+            return {"available": True, "activeNumber": active,
+                    "accounts": accounts, "liveLogin": live}
         except Exception as e:  # noqa: BLE001 - reported, never fatal
             _logger.warning("Dashboard could not read Codex accounts: %s", e)
             return {"available": False, "error": str(e), "accounts": []}
 
     # -- actions ---------------------------------------------------------
+
+    def add_current(self, provider: str) -> dict:
+        """Manage whichever account the machine is currently signed in as.
+
+        ``assume_yes`` on the Claude side, and an auto-assigned slot on both:
+        an HTTP request must never block on a terminal prompt nobody can see.
+        """
+        if provider == "codex":
+            if self._codex is None:
+                raise ValueError("Codex is not configured")
+            account = self._codex.add_current()
+            self.invalidate()
+            return {"ok": True,
+                    "message": f"Now managing {account.display_label} "
+                               f"as slot {account.number}."}
+        if provider == "claude":
+            if self._claude is None:
+                raise ValueError("Claude is not configured")
+            self._claude.add_account(assume_yes=True)
+            self.invalidate()
+            return {"ok": True, "message": "Now managing the current Claude account."}
+        raise ValueError(f"unknown provider '{provider}'")
 
     def switch(self, provider: str, number: str) -> dict:
         """Switch one provider, returning what the user still has to do."""
@@ -255,15 +355,17 @@ def _make_handler(state: DashboardState, token: str):
             if not self._authorized(parse_qs(parsed.query)):
                 self._json(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
                 return
-            if parsed.path != "/api/switch":
+            if parsed.path not in ("/api/switch", "/api/add"):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 payload = json.loads(self.rfile.read(length) or b"{}")
-                result = state.switch(
-                    str(payload.get("provider", "")), str(payload.get("number", ""))
-                )
+                provider = str(payload.get("provider", ""))
+                if parsed.path == "/api/add":
+                    result = state.add_current(provider)
+                else:
+                    result = state.switch(provider, str(payload.get("number", "")))
             except Exception as e:  # noqa: BLE001 - surfaced to the page
                 self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(e)})
                 return

@@ -232,6 +232,92 @@ class TestState:
         assert get(base, "/api/nope", token=token)[0] == 404
 
 
+class TestLiveLogin:
+    """A machine can be signed in to an account this tool does not manage.
+    Reporting only managed accounts made that read as 'no accounts', which is
+    true and useless -- the answer wanted is 'yes, as whom, and shall I manage
+    it?'"""
+
+    def test_an_unmanaged_codex_login_is_surfaced(self, dashboard):
+        from claude_swap.codex.identity import CodexIdentity
+        from claude_swap.codex.switcher import CodexStatus
+
+        codex = StubCodex()
+        codex.status = lambda: CodexStatus(
+            logged_in=True,
+            identity=CodexIdentity(email="live@example.com", account_id="a", plan="pro"),
+            account=None, active_number=None,
+        )
+        base, token, _ = dashboard(codex=codex)
+        payload = json.loads(get(base, "/api/state", token=token)[1])
+        live = payload["codex"]["liveLogin"]
+        assert live["email"] == "live@example.com"
+        assert live["managed"] is False
+
+    def test_an_unmanaged_claude_login_is_surfaced(self, dashboard):
+        class Claude:
+            def accounts_snapshot(self, *a, **k):
+                from claude_swap.models import AccountsSnapshot
+
+                return AccountsSnapshot(active_number=None, accounts=(), taken_at=0.0)
+
+            def status(self, json_output=False):
+                return {"active": {"email": "live@corp.com", "managed": False}}
+
+        base, token, _ = dashboard(claude=Claude(), codex=StubCodex())
+        live = json.loads(get(base, "/api/state", token=token)[1])["claude"]["liveLogin"]
+        assert live == {"email": "live@corp.com", "managed": False}
+
+    def test_no_login_reports_none_rather_than_failing(self, dashboard):
+        codex = StubCodex()
+        codex.status = lambda: (_ for _ in ()).throw(RuntimeError("no codex"))
+        base, token, _ = dashboard(codex=codex)
+        payload = json.loads(get(base, "/api/state", token=token)[1])
+        assert payload["codex"]["liveLogin"] is None
+        assert payload["codex"]["available"] is True   # still usable
+
+
+class TestAddCurrent:
+    def test_manages_the_live_codex_account(self, dashboard):
+        codex = StubCodex()
+        added = []
+        codex.add_current = lambda **kw: (added.append(1), account("3"))[1]
+        base, token, _ = dashboard(codex=codex)
+        status, body = post(base, "/api/add", {"provider": "codex"}, token)
+        assert status == 200 and body["ok"] is True
+        assert "slot 3" in body["message"]
+
+    def test_claude_add_never_blocks_on_a_prompt(self, dashboard):
+        """An HTTP request must not wait on a terminal prompt nobody can see."""
+        seen = {}
+
+        class Claude:
+            def accounts_snapshot(self, *a, **k):
+                from claude_swap.models import AccountsSnapshot
+
+                return AccountsSnapshot(active_number=None, accounts=(), taken_at=0.0)
+
+            def status(self, json_output=False):
+                return {"active": {"email": "x@y.com", "managed": False}}
+
+            def add_account(self, **kwargs):
+                seen.update(kwargs)
+
+        base, token, _ = dashboard(claude=Claude(), codex=StubCodex())
+        status, _ = post(base, "/api/add", {"provider": "claude"}, token)
+        assert status == 200
+        assert seen.get("assume_yes") is True
+
+    def test_adding_requires_a_token(self, dashboard):
+        base, _, _ = dashboard(codex=StubCodex())
+        assert post(base, "/api/add", {"provider": "codex"}, "wrong")[0] == 403
+
+    def test_an_unknown_provider_is_rejected(self, dashboard):
+        base, token, _ = dashboard(codex=StubCodex())
+        status, body = post(base, "/api/add", {"provider": "nope"}, token)
+        assert status == 400 and "unknown provider" in body["message"]
+
+
 class TestCaching:
     def test_repeated_reads_do_not_refetch(self, dashboard):
         """Without a cache a polling page drives token refreshes far more often
