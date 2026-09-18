@@ -50,22 +50,26 @@ PAGE_HTML = r"""<!doctype html>
     display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; align-items: center;
   }
   .card.inactive-credits { border-color: var(--warn); }
-  .who { font-weight: 550; display: flex; align-items: center; gap: 8px; }
+  /* Every cell is placed EXPLICITLY. The button carries grid-row, and without
+     a column it auto-placed into column 1 and shoved the name across. */
+  .who { grid-column: 1; grid-row: 1; font-weight: 550; display: flex;
+         align-items: center; gap: 8px; flex-wrap: wrap; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; }
   .dot.on { background: var(--ok); }
   .tag {
     font-size: 11px; color: var(--muted); border: 1px solid var(--line);
     border-radius: 999px; padding: 0 6px;
   }
-  .detail { grid-column: 1; color: var(--muted); font-size: 12.5px; }
+  .detail { grid-column: 1; grid-row: 2; color: var(--muted); font-size: 12.5px; }
   .detail.warn { color: var(--warn); }
   .detail.bad { color: var(--bad); }
-  .bar { grid-column: 1; height: 5px; background: var(--bar); border-radius: 3px; overflow: hidden; }
+  .bar { grid-column: 1; grid-row: 3; height: 5px; background: var(--bar); border-radius: 3px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: var(--ok); }
   .bar > i.warn { background: var(--warn); }
   .bar > i.bad { background: var(--bad); }
   button {
-    grid-row: 1 / span 3; font: inherit; font-size: 13px; padding: 6px 14px;
+    grid-column: 2; grid-row: 1 / span 3; align-self: center;
+    font: inherit; font-size: 13px; padding: 6px 14px; white-space: nowrap;
     border-radius: 7px; border: 1px solid var(--line); background: transparent;
     color: var(--fg); cursor: pointer;
   }
@@ -83,7 +87,8 @@ PAGE_HTML = r"""<!doctype html>
   #status.bad { border-color: var(--bad); color: var(--bad); }
   @media (max-width: 520px) {
     .card { grid-template-columns: 1fr; }
-    button { grid-row: auto; }
+    .who, .detail, .bar, button { grid-column: 1; }
+    button { grid-row: auto; justify-self: start; }
   }
 </style>
 </head>
