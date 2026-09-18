@@ -95,9 +95,16 @@ class TestExecutableResolution:
         assert launcher.executable_path() == str(script)
 
     def test_falls_back_to_path_lookup(self, monkeypatch, tmp_path):
+        # A real path, not a hardcoded POSIX one: executable_path resolves what
+        # `which` returns, and on Windows resolving "/usr/bin/x" correctly
+        # yields "D:\\usr\\bin\\x" -- the code is right, a literal
+        # expectation is what is wrong.
+        found = tmp_path / "elsewhere" / launcher.APP_NAME
+        found.parent.mkdir(parents=True)
+        found.write_text("")
         monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
-        monkeypatch.setattr(launcher.shutil, "which", lambda name: "/usr/bin/agent-switch")
-        assert launcher.executable_path() == "/usr/bin/agent-switch"
+        monkeypatch.setattr(launcher.shutil, "which", lambda name: str(found))
+        assert launcher.executable_path() == str(found.resolve())
 
     def test_last_resort_reenters_through_the_interpreter(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
