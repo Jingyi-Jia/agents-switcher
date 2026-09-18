@@ -394,6 +394,17 @@ class CswapApp(App):
         self.request_refresh(full=True)
         self.notify("Refreshing usage…", timeout=2)
 
+    def action_open_codex(self) -> None:
+        """Open the Codex accounts screen.
+
+        Imported here rather than at module level so a Codex-side import error
+        cannot stop the Claude TUI from starting -- the two providers share this
+        app but not a failure mode.
+        """
+        from claude_swap.tui.codex import CodexScreen
+
+        self.push_screen(CodexScreen())
+
     def action_open_auto(self) -> None:
         if isinstance(self.screen, AutoScreen):
             return

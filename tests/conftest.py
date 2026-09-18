@@ -15,6 +15,7 @@ import pytest
 
 from claude_swap import macos_keychain as _macos_keychain
 from claude_swap import paths as _paths
+from claude_swap.codex import paths as _codex_paths
 
 
 class RealStoreWriteBlocked(Exception):
@@ -144,6 +145,14 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
             # directory exists, so not one mkdir is attempted above them.
             (_paths.get_default_claude_config_home() / "projects", True),
             (_paths.get_claude_config_home() / "projects", True),
+            # CODEX HOME, non-recursive for the same reason ``~/.claude`` is:
+            # the directory is shared with Codex's own machinery (sessions/,
+            # six WAL-mode SQLite DBs, skills/), and only the DIRECT children
+            # are ever ours -- ``auth.json`` and the sibling tempfile an
+            # atomic write lands next to it. A test that reached the real
+            # ``~/.codex/auth.json`` would destroy the developer's live Codex
+            # login, and nothing else in this guard covers it.
+            (_codex_paths.get_codex_home(), False),
         )
 
     ambient_specs = _resolve()
@@ -162,7 +171,8 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
                     os.environ[k] = v
 
     default_specs = _resolve_with_cleared(
-        "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "XDG_DATA_HOME"
+        "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "XDG_DATA_HOME",
+        "CODEX_HOME",
     )
     # C-0: a THIRD snapshot, additive to (not replacing) default_specs above.
     # The mandated review/CI isolation recipe sets HOME/USERPROFILE (and
@@ -182,7 +192,7 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
     # used to protect.
     home_default_specs = _resolve_with_cleared(
         "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "XDG_DATA_HOME",
-        "HOME", "USERPROFILE",
+        "CODEX_HOME", "HOME", "USERPROFILE",
     )
 
     seen: set[Path] = set()
@@ -511,10 +521,17 @@ def _isolate_real_home(request, tmp_path_factory, monkeypatch):
     either exported could otherwise have tests read/write real Claude config or
     backup paths — and on macOS that leads back to the real Keychain. Tests that
     exercise those vars set them explicitly, overriding this.
+
+    ``CODEX_HOME`` is neutralized for exactly the same reason on the Codex side:
+    it bypasses ``$HOME`` in ``codex.paths.get_codex_home``, so a developer with
+    it exported would have tests resolve to their REAL Codex config home. The
+    consequence there is worse than reading stale state — ``auth.json`` is the
+    whole login, and a test that wrote one would end their Codex session.
     """
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
     if "temp_home" in request.fixturenames:
         return  # temp_home provides its own isolated home
     if "tmp_keychain" in request.fixturenames:
