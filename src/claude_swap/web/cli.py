@@ -196,3 +196,88 @@ tunnel exactly as before, and simply never installs one.
             print(f"{accent('Removed')} {path}")
     else:
         print(dimmed("No launcher was installed."))
+
+
+def tray_command(argv: list[str]) -> None:
+    """Handle ``<prog> tray`` — a menu-bar / system-tray readout."""
+    import threading
+
+    from claude_swap.cli import _prog_name
+    from claude_swap.web import tray
+
+    prog = _prog_name()
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} tray",
+        description="Show quota in the menu bar / system tray.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Runs until you quit it from the menu. It also hosts the dashboard, so "Open
+dashboard" is instant. Needs a desktop session -- on a headless machine use
+`{prog} web --no-open` over an SSH tunnel instead.
+        """,
+    )
+    parser.add_argument("--interval", type=float, default=30.0, metavar="SECONDS",
+                        help="How often to refresh quota (default 30)")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT,
+                        help=f"Port for the dashboard it hosts (default {DEFAULT_PORT})")
+    args = parser.parse_args(argv)
+
+    backend = tray.available_backend()
+    if backend is None:
+        error("No tray backend is installed.")
+        print(dimmed(f"  {tray.install_hint()}"))
+        sys.exit(1)
+    if sys.platform == "darwin" and backend != "rumps":
+        # Not fatal, but the number would only appear on hover, which is the
+        # opposite of the point.
+        print(yellowed("  rumps is not installed — the readout will be a tooltip "
+                       "rather than visible menu-bar text."))
+        print(dimmed(f"  {tray.install_hint()}"), flush=True)
+
+    state = _build_state()
+
+    # The tray hosts the dashboard itself rather than shelling out, so opening
+    # it is instant and there is one process to quit rather than two.
+    url_holder: dict[str, str] = {}
+    existing = live_dashboard_url()
+    if existing:
+        url_holder["url"] = existing
+    else:
+        for port in (args.port, 0):
+            # Port 0 as a fallback: reuse depends on the URL record, so a server
+            # whose record was lost (killed with SIGKILL, or the file removed)
+            # holds the port invisibly. Giving up there would cost the dashboard
+            # for no reason when any free port would do.
+            try:
+                server, url = serve(state, host="127.0.0.1", port=port)
+            except OSError as e:
+                if port == 0:
+                    print(yellowed(f"  Dashboard could not start ({e}); the tray "
+                                   "will still show quota."), flush=True)
+                continue
+            publish_url(url)
+            url_holder["url"] = url
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            break
+
+    def refresh():
+        return tray.build_model(state.get())
+
+    def on_select(provider: str, number: str) -> None:
+        try:
+            state.switch(provider, number)
+        except Exception as e:  # noqa: BLE001 - a bad switch must not kill the tray
+            print(yellowed(f"  switch failed: {e}"), flush=True)
+
+    def on_open() -> None:
+        if url_holder.get("url"):
+            _open(url_holder["url"])
+
+    print(f"{accent('Tray running')} ({backend}). Quit from the menu.", flush=True)
+    try:
+        tray.run(refresh, on_select, on_open, interval=args.interval, backend=backend)
+    except RuntimeError as e:
+        error(str(e))
+        sys.exit(1)
+    finally:
+        clear_url()

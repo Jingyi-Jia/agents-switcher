@@ -33,6 +33,12 @@ classifiers = [
 
 [project.optional-dependencies]
 menubar = ["rumps>=0.4.0"]
+# Tray/menu-bar readout. Split by platform because the toolkits are not
+# interchangeable: rumps renders VISIBLE menu-bar text on macOS, while
+# pystray's macOS backend only sets a tooltip -- and an at-a-glance number
+# you have to hover for is not at a glance.
+tray-macos = ["rumps>=0.4.0"]
+tray = ["pystray>=0.19", "pillow>=10"]
 
 [project.urls]
 Homepage = "https://github.com/realiti4/claude-swap"

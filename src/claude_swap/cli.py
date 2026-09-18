@@ -999,6 +999,11 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "config":
         _config_command(sys.argv[2:])
         return
+    if argv and argv[0] == "tray":
+        from claude_swap.web.cli import tray_command
+
+        tray_command(argv[1:])
+        return
     if argv and argv[0] == "app":
         from claude_swap.web.cli import app_command
 
