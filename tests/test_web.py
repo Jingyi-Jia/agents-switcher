@@ -7,6 +7,7 @@ these exercise the actual request handling rather than a mocked handler.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -430,3 +431,63 @@ class TestPage:
         assert "http://" not in text.replace("http://127.0.0.1", "")
         assert "cdn" not in text.lower()
         assert "<script src=" not in text
+
+
+class TestSingleInstance:
+    """A clickable icon gets double-clicked. Joining the dashboard that is
+    already up is the right answer to that; "port in use" is not."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_record(self, tmp_path, monkeypatch):
+        from claude_swap import paths
+
+        monkeypatch.setattr(paths, "get_backup_root", lambda: tmp_path)
+
+    def test_a_running_dashboard_is_found(self, dashboard):
+        from claude_swap.web.server import live_dashboard_url, publish_url
+
+        base, token, _ = dashboard(codex=StubCodex())
+        publish_url(f"{base}/?token={token}")
+        assert live_dashboard_url() == f"{base}/?token={token}"
+
+    def test_a_stale_record_is_not_trusted(self, tmp_path):
+        """A crashed process leaves a record behind, so the URL is only a claim
+        until something answers it."""
+        from claude_swap.web.server import live_dashboard_url, publish_url, url_file
+
+        publish_url("http://127.0.0.1:9/?token=dead")  # nothing listens on 9
+        assert live_dashboard_url(timeout=0.5) is None
+        assert not url_file().exists()   # and it cleans up after itself
+
+    def test_a_record_with_the_wrong_token_is_stale(self, dashboard):
+        # Someone else's dashboard, or a rotated token: not ours to join.
+        from claude_swap.web.server import live_dashboard_url, publish_url
+
+        base, _, _ = dashboard(codex=StubCodex())
+        publish_url(f"{base}/?token=wrong")
+        assert live_dashboard_url(timeout=1.0) is None
+
+    def test_no_record_is_simply_none(self):
+        from claude_swap.web.server import live_dashboard_url
+
+        assert live_dashboard_url() is None
+
+    def test_an_empty_record_is_none(self, tmp_path):
+        from claude_swap.web.server import live_dashboard_url, url_file
+
+        url_file().write_text("   ")
+        assert live_dashboard_url() is None
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission model")
+    def test_the_record_is_owner_only_because_it_carries_the_token(self, tmp_path):
+        import stat
+
+        from claude_swap.web.server import publish_url, url_file
+
+        publish_url("http://127.0.0.1:8765/?token=secret")
+        assert stat.S_IMODE(url_file().stat().st_mode) == 0o600
+
+    def test_clearing_is_safe_when_absent(self):
+        from claude_swap.web.server import clear_url
+
+        clear_url()  # must not raise

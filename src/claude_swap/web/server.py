@@ -40,6 +40,11 @@ _logger = logging.getLogger("claude-swap")
 #: drive token refreshes, short enough that a switch is visible almost at once.
 STATE_TTL_S = 20.0
 DEFAULT_PORT = 8765
+#: Where a running dashboard records its URL so a second launch can join it
+#: rather than fail on a busy port. Carries the token, so it is written 0600 and
+#: removed on exit -- a clickable icon gets double-clicked, and "port in use" is
+#: the wrong answer to that.
+URL_FILENAME = "web-url"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
@@ -392,3 +397,66 @@ def serve(
     shown_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
     url = f"http://{shown_host}:{server.server_port}/?token={token}"
     return server, url
+
+
+def url_file() -> "Path":  # noqa: F821 - Path imported lazily
+    """Path of the running dashboard's URL record."""
+    from pathlib import Path
+
+    from claude_swap import paths
+
+    return Path(paths.get_backup_root()) / URL_FILENAME
+
+
+def publish_url(url: str) -> None:
+    """Record this dashboard's URL for other launches to find."""
+    import os
+    import sys as _sys
+
+    target = url_file()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(url, encoding="utf-8")
+        if _sys.platform != "win32":
+            os.chmod(target, 0o600)  # it carries the token
+    except OSError as e:
+        _logger.debug("Could not record dashboard URL: %s", e)
+
+
+def clear_url() -> None:
+    """Remove the URL record. Best effort; a stale one is detected on read."""
+    try:
+        url_file().unlink()
+    except OSError:
+        pass
+
+
+def live_dashboard_url(*, timeout: float = 2.0) -> str | None:
+    """A URL for an ALREADY-RUNNING dashboard, or None.
+
+    The recorded URL is only a claim -- a crashed process leaves one behind --
+    so it is verified with a real request before being trusted. An unreachable
+    or unauthorized record is treated as stale and cleared.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    try:
+        url = url_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not url:
+        return None
+    parsed = urllib.parse.urlparse(url)
+    token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+    probe = f"{parsed.scheme}://{parsed.netloc}/api/state"
+    request = urllib.request.Request(probe, headers={"X-Auth-Token": token})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            if response.status == 200:
+                return url
+    except Exception:  # noqa: BLE001 - any failure means "not usable"
+        pass
+    clear_url()
+    return None

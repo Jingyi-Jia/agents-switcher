@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 import webbrowser
 
 from claude_swap.printer import accent, dimmed, error, muted, yellowed
-from claude_swap.web.server import DEFAULT_PORT, LOOPBACK_HOSTS, DashboardState, serve
+from claude_swap.web.server import (
+    DEFAULT_PORT,
+    LOOPBACK_HOSTS,
+    DashboardState,
+    clear_url,
+    live_dashboard_url,
+    publish_url,
+    serve,
+)
+
+
+def _open(url: str) -> None:
+    """Open a browser, tolerating machines that have none."""
+    try:
+        if not webbrowser.open(url):
+            raise RuntimeError("no browser")
+    except Exception:  # noqa: BLE001 - headless boxes have no browser
+        print(muted("  (could not open a browser — copy the URL above)"), flush=True)
 
 
 def _build_state() -> DashboardState:
@@ -56,7 +74,18 @@ port rather than widening the bind:
                         help="Interface to bind (default 127.0.0.1 — see below)")
     parser.add_argument("--no-open", action="store_true",
                         help="Print the URL instead of opening a browser")
+    parser.add_argument("--no-reuse", action="store_true",
+                        help="Always start a new server, even if one is running")
     args = parser.parse_args(argv)
+
+    # A clickable icon gets double-clicked. Joining the dashboard that is
+    # already up is the right answer to that; "port in use" is not.
+    existing = live_dashboard_url()
+    if existing and not args.no_reuse:
+        print(f"{accent('Dashboard already running')} {existing}", flush=True)
+        if not args.no_open:
+            _open(existing)
+        return
 
     state = _build_state()
     try:
@@ -65,6 +94,7 @@ port rather than widening the bind:
         error(f"Could not start the dashboard on {args.host}:{args.port} — {e}")
         error("Another instance may already be running; try --port.")
         sys.exit(1)
+    publish_url(url)
 
     if args.host not in LOOPBACK_HOSTS:
         # Worth shouting about: these endpoints switch which account the machine
@@ -86,15 +116,83 @@ port rather than widening the bind:
     print(f"{accent('Dashboard')} {url}", flush=True)
     print(dimmed("  Ctrl-C to stop."), flush=True)
     if not args.no_open:
-        try:
-            webbrowser.open(url)
-        except Exception:  # noqa: BLE001 - headless boxes have no browser
-            print(muted("  (could not open a browser — copy the URL above)"))
+        _open(url)
+
+    # SIGTERM does not run `finally`, so quitting the app from the Dock or a
+    # plain `kill` would leave the URL record behind. A stale record is already
+    # self-healing (the liveness probe clears one that does not answer), but
+    # tidying up on the ordinary path costs four lines.
+    def _stop(signum, frame):  # noqa: ARG001 - signal handler signature
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, _stop)
+    except (ValueError, AttributeError):
+        pass  # not the main thread, or no SIGTERM on this platform
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print(f"\n{dimmed('Dashboard stopped')}")
     finally:
+        clear_url()
         server.shutdown()
         server.server_close()
+
+
+def app_command(argv: list[str]) -> None:
+    """Handle ``<prog> app`` — install or remove the desktop launcher."""
+    from claude_swap.cli import _prog_name
+    from claude_swap.web import launcher
+
+    prog = _prog_name()
+    parser = argparse.ArgumentParser(
+        prog=f"{prog} app",
+        description="Create a clickable launcher for the dashboard.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+The launcher only runs `{prog} web`; it is not a separate application. The
+terminal commands are unaffected, so a machine with no desktop -- a cluster
+login node, a container -- keeps using `{prog} web --no-open` over an SSH
+tunnel exactly as before, and simply never installs one.
+        """,
+    )
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("install", help="Create the launcher (replaces any existing one)")
+    sub.add_parser("uninstall", help="Remove the launcher")
+    sub.add_parser("status", help="Show whether a launcher is installed (the default)")
+    args = parser.parse_args(argv)
+    command = args.command or "status"
+
+    target = launcher.plan()
+    if not target.supported:
+        error(f"Cannot install a launcher: {target.reason}")
+        print(dimmed(f"  Use '{prog} web --no-open' and open the URL yourself."))
+        sys.exit(1)
+
+    location = target.paths[0]
+    if command == "status":
+        if launcher.is_installed():
+            print(f"{accent('Installed')} {location}")
+        else:
+            print(dimmed(f"Not installed. '{prog} app install' creates "
+                         f"{target.description}."))
+        return
+
+    if command == "install":
+        try:
+            launcher.install()
+        except OSError as e:
+            error(f"Could not create the launcher: {e}")
+            sys.exit(1)
+        print(f"{accent('Installed')} {location}")
+        print(dimmed(f"  {target.description[:1].upper()}{target.description[1:]}."))
+        print(dimmed(f"  It runs '{launcher.executable_path()} web'."))
+        return
+
+    removed = launcher.uninstall()
+    if removed:
+        for path in removed:
+            print(f"{accent('Removed')} {path}")
+    else:
+        print(dimmed("No launcher was installed."))
