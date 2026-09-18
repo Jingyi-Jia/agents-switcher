@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Fork-local addition. Upstream's triggers assume work happens on main, which
+  # is never true in a fork, so there is otherwise no way to run CI here on
+  # demand -- and enabling Actions on a fork does not replay events that fired
+  # while they were disabled.
+  workflow_dispatch:
 
 jobs:
   test:
