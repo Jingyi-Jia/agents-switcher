@@ -34,6 +34,9 @@ different credential and is rightly invisible here.
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import os
 import subprocess
 import sys
@@ -51,6 +54,12 @@ _PS_TIMEOUT_S = 5
 #: and lets a switch look complete while a live process still serves the old
 #: account.
 _INTERPRETERS = frozenset({"node", "node.exe"})
+#: Case rules differ by platform and a blanket choice is wrong either way.
+#: Windows spells it ``codex.exe`` on a case-insensitive filesystem, so that
+#: name must match in any casing. But macOS's ChatGPT app ships a helper binary
+#: literally named ``Codex``, so matching the bare name case-insensitively
+#: reports the whole Electron stack -- measured, 14 processes instead of 1.
+#: Hence: exact for the POSIX spelling, case-insensitive only for the .exe one.
 #: Script names that identify Codex when run under one of those interpreters.
 _CODEX_SCRIPT_NAMES = frozenset({"codex", "codex.js"})
 
@@ -94,6 +103,25 @@ class CodexProcess:
         return f"pid {self.pid} — {kind}"
 
 
+def _basename(path: str) -> str:
+    """Last path segment, splitting on BOTH separators regardless of host OS.
+
+    ``os.path.basename`` only treats ``\\`` as a separator when running ON
+    Windows, so a Windows command line parsed anywhere else keeps its whole
+    path as the "basename" and never matches. That made the Windows scan
+    correct only when executed on Windows -- and therefore untestable
+    everywhere else, which is exactly how it went uncovered.
+    """
+    return path.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _is_codex_name(name: str) -> bool:
+    """Whether an executable basename is Codex itself."""
+    if name == "codex":
+        return True
+    return name.lower() == "codex.exe"
+
+
 def _codex_executable(command: str) -> str | None:
     """The path identifying ``command`` as Codex, or ``None`` if it is not.
 
@@ -108,54 +136,32 @@ def _codex_executable(command: str) -> str | None:
         return None
 
     executable = tokens[0]
-    if os.path.basename(executable) == "codex":
+    if _is_codex_name(_basename(executable)):
         return executable
 
-    if os.path.basename(executable) in _INTERPRETERS:
+    if _basename(executable).lower() in _INTERPRETERS:
         for token in tokens[1:]:
             if token.startswith("-"):
                 continue  # interpreter flags precede the script
             # The first non-flag argument IS the script; if that is not Codex,
             # this interpreter is running something else entirely.
-            if os.path.basename(token) in _CODEX_SCRIPT_NAMES:
+            if _basename(token).lower() in _CODEX_SCRIPT_NAMES:
                 return token
             return None
     return None
 
 
-def running_codex_processes() -> list[CodexProcess]:
-    """Every running process whose executable is named exactly ``codex``.
-
-    Returns an empty list when the process table cannot be read, which callers
-    must treat as "unknown", not as "nothing is running": the safe reading of an
-    unavailable ``ps`` is that a switch still needs a restart, and that is what
-    callers report anyway.
-    """
-    if sys.platform == "win32":
-        return _running_codex_processes_windows()
-    try:
-        out = subprocess.run(
-            ["ps", "-eo", "pid=,uid=,tty=,args="],
-            capture_output=True,
-            text=True,
-            timeout=_PS_TIMEOUT_S,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if out.returncode != 0:
-        return []
-
-    me = os.getuid()
-    self_pid = os.getpid()
+def _parse_posix_ps(text: str, *, uid: int, self_pid: int) -> list[CodexProcess]:
+    """Parse ``ps -eo pid=,uid=,tty=,args=``. Pure, so it is testable anywhere."""
     found: list[CodexProcess] = []
-    for line in out.stdout.splitlines():
+    for line in text.splitlines():
         parts = line.strip().split(None, 3)
         if len(parts) < 4:
             continue
         pid_text, uid_text, tty, command = parts
         if not pid_text.isdigit() or not uid_text.isdigit():
             continue
-        if int(uid_text) != me:
+        if int(uid_text) != uid:
             continue  # someone else's Codex is not blocking our switch
         pid = int(pid_text)
         if pid == self_pid:
@@ -163,43 +169,115 @@ def running_codex_processes() -> list[CodexProcess]:
         executable = _codex_executable(command)
         if executable is None:
             continue
-        found.append(
-            CodexProcess(
-                pid=pid,
-                executable=executable,
-                command=command.strip(),
-                tty=tty,
-            )
-        )
+        found.append(CodexProcess(pid=pid, executable=executable,
+                                  command=command.strip(), tty=tty))
     return found
 
 
-def _running_codex_processes_windows() -> list[CodexProcess]:
-    """Windows equivalent via ``tasklist``.
+def _parse_windows_powershell(text: str, *, self_pid: int) -> list[CodexProcess]:
+    """Parse the JSON of ProcessId/CommandLine pairs from Get-CimInstance.
 
-    ``tasklist`` reports the image name but not the full command line, so the
-    app-server/CLI distinction is unavailable here and every match is reported
-    as a plain CLI process.
+    PowerShell emits a bare object rather than a list when exactly one process
+    matches, which is the single most common way a caller gets this wrong.
     """
     try:
-        out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq codex.exe", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            timeout=_PS_TIMEOUT_S,
-        )
-    except (OSError, subprocess.SubprocessError):
+        payload = json.loads(text) if text.strip() else []
+    except ValueError:
         return []
-    if out.returncode != 0:
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
         return []
 
     found: list[CodexProcess] = []
-    for line in out.stdout.splitlines():
-        parts = [p.strip('"') for p in line.strip().split('","')]
-        if len(parts) < 2 or not parts[0]:
+    for entry in payload:
+        if not isinstance(entry, dict):
             continue
-        name, pid_text = parts[0].strip('"'), parts[1].strip('"')
+        pid = entry.get("ProcessId")
+        command = entry.get("CommandLine") or ""
+        if not isinstance(pid, int) or pid == self_pid or not command:
+            continue
+        executable = _codex_executable(command)
+        if executable is None:
+            continue
+        found.append(CodexProcess(pid=pid, executable=executable,
+                                  command=command.strip(), tty=""))
+    return found
+
+
+def _parse_windows_tasklist(text: str, *, self_pid: int) -> list[CodexProcess]:
+    """Parse ``tasklist /FO CSV /NH``.
+
+    The fallback, and a weaker one: tasklist reports the image name but NOT the
+    command line, so an npm-installed Codex (``node ...\\codex.js``) is
+    invisible here. That is why PowerShell is tried first.
+    """
+    found: list[CodexProcess] = []
+    for row in csv.reader(io.StringIO(text)):
+        if len(row) < 2:
+            continue
+        name, pid_text = row[0].strip(), row[1].strip()
         if name.lower() != "codex.exe" or not pid_text.isdigit():
             continue
-        found.append(CodexProcess(pid=int(pid_text), executable=name, command=name))
+        pid = int(pid_text)
+        if pid == self_pid:
+            continue
+        found.append(CodexProcess(pid=pid, executable=name, command=name, tty=""))
     return found
+
+
+def _run(command: list[str]) -> str | None:
+    """Run a command and return stdout, or None if it could not be run."""
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=_PS_TIMEOUT_S
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def running_codex_processes() -> list[CodexProcess]:
+    """Every running process of the current user whose executable is Codex.
+
+    Returns an empty list when the process table cannot be read, which callers
+    must treat as "unknown", not as "nothing is running": the safe reading of an
+    unavailable process list is that a switch still needs a restart, and that is
+    what callers report anyway.
+    """
+    if sys.platform == "win32":
+        return _running_codex_processes_windows()
+    output = _run(["ps", "-eo", "pid=,uid=,tty=,args="])
+    if output is None:
+        return []
+    return _parse_posix_ps(output, uid=os.getuid(), self_pid=os.getpid())
+
+
+def _running_codex_processes_windows() -> list[CodexProcess]:
+    """Windows scan: PowerShell for command lines, tasklist as a fallback.
+
+    PowerShell is preferred because it is the only one of the two that reports
+    a COMMAND LINE, and without that an npm-installed Codex -- which runs as
+    ``node ...\\codex.js`` -- cannot be recognised at all. tasklist is kept
+    for the case where PowerShell is unavailable or locked down by policy; it
+    still catches a native ``codex.exe``, which is the other common install.
+
+    Neither path filters by user. On POSIX that filter matters because a shared
+    login node's process table is mostly other people; a Windows box running
+    Codex is overwhelmingly single-user, and Win32_Process carries no owner
+    without a second per-process call that would cost more than it buys.
+    """
+    self_pid = os.getpid()
+    output = _run([
+        "powershell", "-NoProfile", "-NonInteractive", "-Command",
+        "Get-CimInstance Win32_Process | "
+        "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ])
+    if output is not None:
+        found = _parse_windows_powershell(output, self_pid=self_pid)
+        if found:
+            return found
+    output = _run(["tasklist", "/FI", "IMAGENAME eq codex.exe", "/FO", "CSV", "/NH"])
+    if output is None:
+        return []
+    return _parse_windows_tasklist(output, self_pid=self_pid)

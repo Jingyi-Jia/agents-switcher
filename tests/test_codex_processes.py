@@ -13,7 +13,13 @@ import subprocess
 import pytest
 
 from claude_swap.codex import processes as proc_mod
-from claude_swap.codex.processes import CodexProcess, running_codex_processes
+from claude_swap.codex.processes import (
+    CodexProcess,
+    _parse_windows_powershell,
+    _parse_windows_tasklist,
+    _running_codex_processes_windows,
+    running_codex_processes,
+)
 
 ME = os.getuid() if hasattr(os, "getuid") else 0
 
@@ -169,3 +175,139 @@ class TestDescription:
     def test_app_server_matches_the_real_argument(self):
         p = CodexProcess(1, "/x/codex", "/x/codex -c k=v app-server --flag", tty="??")
         assert p.is_app_server is True
+
+
+# ---------------------------------------------------------------------------
+# Windows. These parsers are pure, so they are exercised on EVERY platform --
+# the previous tasklist-only implementation was skipped off Windows and so had
+# no coverage at all.
+# ---------------------------------------------------------------------------
+
+
+class TestWindowsPowerShellParsing:
+    def test_matches_a_native_codex(self):
+        payload = '[{"ProcessId":100,"CommandLine":"C:\\\\tools\\\\codex.exe --model x"}]'
+        found = _parse_windows_powershell(payload, self_pid=1)
+        assert [p.pid for p in found] == [100]
+
+    def test_matches_an_npm_installed_codex(self):
+        """The reason PowerShell is preferred over tasklist: tasklist reports no
+        command line, so `node ...codex.js` is invisible to it."""
+        payload = (
+            '[{"ProcessId":101,"CommandLine":'
+            '"node C:\\\\Users\\\\me\\\\AppData\\\\npm\\\\codex.js exec"}]'
+        )
+        found = _parse_windows_powershell(payload, self_pid=1)
+        assert len(found) == 1
+        assert found[0].executable.endswith("codex.js")
+
+    def test_a_single_match_arrives_as_an_object_not_a_list(self):
+        # PowerShell's ConvertTo-Json emits a bare object for one result, which
+        # is the single most common way this parsing goes wrong.
+        payload = '{"ProcessId":102,"CommandLine":"C:\\\\bin\\\\codex.exe"}'
+        assert [p.pid for p in _parse_windows_powershell(payload, self_pid=1)] == [102]
+
+    def test_rejects_processes_that_merely_contain_codex(self):
+        payload = (
+            '[{"ProcessId":1,"CommandLine":"C:\\\\x\\\\codex-helper.exe"},'
+            '{"ProcessId":2,"CommandLine":"node C:\\\\app\\\\server.js --codex"}]'
+        )
+        assert _parse_windows_powershell(payload, self_pid=99) == []
+
+    def test_excludes_our_own_process(self):
+        payload = '[{"ProcessId":55,"CommandLine":"C:\\\\bin\\\\codex.exe"}]'
+        assert _parse_windows_powershell(payload, self_pid=55) == []
+
+    def test_tolerates_empty_and_malformed_output(self):
+        for payload in ("", "   ", "not json", "[1,2,3]", '{"ProcessId":null}'):
+            assert _parse_windows_powershell(payload, self_pid=1) == []
+
+    def test_skips_entries_without_a_command_line(self):
+        # Protected processes report ProcessId but no CommandLine.
+        payload = '[{"ProcessId":7,"CommandLine":null}]'
+        assert _parse_windows_powershell(payload, self_pid=1) == []
+
+
+class TestExecutableNameCasing:
+    """Case rules differ by platform and a blanket choice breaks one of them."""
+
+    def test_windows_spelling_matches_in_any_casing(self):
+        payload = '[{"ProcessId":1,"CommandLine":"C:\\\\bin\\\\CODEX.EXE"}]'
+        assert len(_parse_windows_powershell(payload, self_pid=9)) == 1
+
+    @pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX process model")
+    def test_the_macos_electron_helper_named_Codex_is_not_matched(self, fake_ps):
+        """Matching the bare name case-insensitively reported the whole ChatGPT
+        Electron stack -- measured at 14 processes instead of 1."""
+        fake_ps([
+            ps_line(1, "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer)"),
+            ps_line(2, "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/1/Helpers/browser_crashpad_handler"),
+        ])
+        assert running_codex_processes() == []
+
+    @pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX process model")
+    def test_the_posix_spelling_stays_exact(self, fake_ps):
+        fake_ps([ps_line(3, "/usr/bin/Codex")])   # capital C is a different file
+        assert running_codex_processes() == []
+
+
+class TestWindowsTasklistParsing:
+    def test_parses_the_csv_rows(self):
+        text = '"codex.exe","1234","Console","1","12,345 K"\n'
+        found = _parse_windows_tasklist(text, self_pid=1)
+        assert [p.pid for p in found] == [1234]
+
+    def test_a_quoted_comma_does_not_break_the_row(self):
+        # The memory column contains a comma; naive splitting mangles it.
+        text = '"codex.exe","99","Services","0","1,048,576 K"\n'
+        assert [p.pid for p in _parse_windows_tasklist(text, self_pid=1)] == [99]
+
+    def test_rejects_other_images(self):
+        text = '"node.exe","10","Console","1","5 K"\n"codexhelper.exe","11","Console","1","5 K"\n'
+        assert _parse_windows_tasklist(text, self_pid=1) == []
+
+    def test_excludes_our_own_process(self):
+        text = '"codex.exe","42","Console","1","5 K"\n'
+        assert _parse_windows_tasklist(text, self_pid=42) == []
+
+    def test_tolerates_the_no_matching_tasks_message(self):
+        assert _parse_windows_tasklist("INFO: No tasks are running.", self_pid=1) == []
+
+    def test_tolerates_empty_output(self):
+        assert _parse_windows_tasklist("", self_pid=1) == []
+
+
+class TestWindowsScanFallback:
+    def _stub(self, monkeypatch, powershell=None, tasklist=None):
+        def fake_run(command):
+            if command and command[0] == "powershell":
+                return powershell
+            if command and command[0] == "tasklist":
+                return tasklist
+            return None
+
+        monkeypatch.setattr(proc_mod, "_run", fake_run)
+
+    def test_powershell_is_preferred(self, monkeypatch):
+        self._stub(
+            monkeypatch,
+            powershell='[{"ProcessId":5,"CommandLine":"node /x/codex.js"}]',
+            tasklist='"codex.exe","9","Console","1","5 K"\n',
+        )
+        found = _running_codex_processes_windows()
+        assert [p.pid for p in found] == [5]  # not the tasklist row
+
+    def test_falls_back_to_tasklist_when_powershell_is_unavailable(self, monkeypatch):
+        # Locked down by policy, or missing entirely.
+        self._stub(monkeypatch, powershell=None,
+                   tasklist='"codex.exe","9","Console","1","5 K"\n')
+        assert [p.pid for p in _running_codex_processes_windows()] == [9]
+
+    def test_falls_back_when_powershell_finds_nothing(self, monkeypatch):
+        self._stub(monkeypatch, powershell="[]",
+                   tasklist='"codex.exe","9","Console","1","5 K"\n')
+        assert [p.pid for p in _running_codex_processes_windows()] == [9]
+
+    def test_both_unavailable_is_empty_not_an_error(self, monkeypatch):
+        self._stub(monkeypatch, powershell=None, tasklist=None)
+        assert _running_codex_processes_windows() == []
