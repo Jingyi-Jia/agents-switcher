@@ -21,24 +21,41 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
+from rich.text import Text
 from textual.widgets import Footer, ListItem, ListView, Static
 
 from claude_swap.codex.store import CodexAccount
 from claude_swap.codex.switcher import CodexSwitcher
 from claude_swap.codex.usage import CodexUsage
+from claude_swap.tui.theme import Palette
+from claude_swap.tui.widgets import usage_bar
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from claude_swap.tui.app import CswapApp
 
 
-class CodexAccountItem(ListItem):
-    """One Codex account row: identity, then quota once it has loaded."""
+#: Bar width in cells, matching the Claude minis that share this TUI.
+_BAR_WIDTH = 10
 
-    def __init__(self, account: CodexAccount, active: bool) -> None:
+
+class CodexAccountItem(ListItem):
+    """One Codex account row: identity, then a bar per window once loaded.
+
+    The bar is drawn by the Claude card's own ``usage_bar``, not a second
+    renderer: the two lists sit in one app and must read as one object, and
+    the first draft's own glyphs rendered as heavy solid blocks beside the
+    Claude rows' thin lines. Reusing it also means this screen shows
+    UTILISATION like its neighbours rather than the web dashboard's headroom --
+    that framing is a deliberate choice there, but inside one TUI the adjacent
+    rows win. Red still appears only in the CRIT band, via the shared palette.
+    """
+
+    def __init__(self, account: CodexAccount, active: bool, palette: Palette) -> None:
         self._body = Static("", markup=False)
         super().__init__(self._body)
         self.account = account
         self._active = active
+        self._palette = palette
         self._paint(None, None)
 
     def set_usage(self, usage: CodexUsage | None, error: str | None) -> None:
@@ -47,16 +64,44 @@ class CodexAccountItem(ListItem):
     def _paint(self, usage: CodexUsage | None, error: str | None) -> None:
         """Redraw the row. NOT named _render: Textual's Widget owns that name
         and calls it with no arguments, so shadowing it breaks the widget."""
-        marker = "*" if self._active else " "
-        name = self.account.email or self.account.account_id
-        alias = f" ({self.account.alias})" if self.account.alias else ""
-        if error:
-            detail = f"— {error}"
-        elif usage is None:
-            detail = "…"
+        pal = self._palette
+        text = Text(no_wrap=True, overflow="ellipsis")
+        text.append(" ● " if self._active else "   ", style=pal.foreground)
+        text.append(f"{self.account.number:>2}  ", style=f"bold {pal.muted}")
+        if self.account.alias:
+            text.append(self.account.alias, style=f"bold {pal.foreground}")
+            text.append(f" ({self.account.email})", style=pal.muted)
         else:
-            detail = usage.summary
-        self._body.update(f" {marker} {self.account.number}: {name}{alias}  {detail}")
+            text.append(self.account.email or self.account.account_id, style=pal.foreground)
+        if self.account.plan:
+            text.append(f"  [{self.account.plan}]", style=pal.muted)
+        text.append("   ")
+
+        if error:
+            text.append("● ", style=pal.sev_crit)
+            text.append(error, style=pal.sev_crit)
+        elif usage is None:
+            text.append("…", style=pal.muted)
+        elif usage.on_credits:
+            # The solid-pill analogue in a terminal: reverse video. It is not
+            # red, because paying is a warning about money, not an error.
+            text.append(" paid credits ", style=f"bold reverse {pal.foreground}")
+            text.append("  manual switch only", style=pal.muted)
+        elif not usage.windows:
+            text.append("usage unknown", style=pal.muted)
+        else:
+            for i, w in enumerate(usage.windows):
+                if i:
+                    text.append("  ")
+                suffix = None
+                # Countdown only once a window is spent, as the Claude rows do.
+                if w.used_percent >= 100 and w.reset_after_seconds:
+                    d, h = divmod(w.reset_after_seconds // 3600, 24)
+                    suffix = f"resets {d}d {h}h" if d else f"resets {h}h"
+                text.append(usage_bar(
+                    w.label, float(w.used_percent), suffix, _BAR_WIDTH, palette=pal
+                ))
+        self._body.update(text)
 
 
 class CodexScreen(Screen):
@@ -102,9 +147,12 @@ class CodexScreen(Screen):
         listview = self.query_one("#codex-accounts", ListView)
         accounts = self.switcher.list_accounts()
         active = self.switcher.store.active_number()
+        palette = Palette.from_theme(self.app.current_theme)
         listview.clear()
         for account in accounts:
-            listview.append(CodexAccountItem(account, account.number == active))
+            listview.append(
+                CodexAccountItem(account, account.number == active, palette)
+            )
         self._numbers = [a.number for a in accounts]
         listview.index = 0 if accounts else None
         if not accounts:

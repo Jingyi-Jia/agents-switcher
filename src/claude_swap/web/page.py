@@ -2,23 +2,27 @@
 
 One string, no build step, no framework, no CDN: the page has to render on a
 cluster login node reached through an SSH tunnel, where fetching anything from
-the internet is exactly what will not work.
+the internet -- a web font included -- is exactly what will not work. The face
+is ``Geist`` when the machine has it and the platform sans otherwise; the
+identity is carried by geometry, not by a download.
 
-THE FRAMING IS HEADROOM, NOT UTILISATION. Every bar shows what is LEFT and
-drains as it is spent, and every number reads "x% left". The question this page
-answers is "where should I work next", and the answer is the account with the
-most room -- so the quantity on screen should be the one being compared, not its
-complement. A bar that fills up as an account is consumed reads as progress
-toward something good, which is backwards.
+THE SYSTEM IS MONOCHROME, AND THAT IS A DATA DECISION. Quota is a single ratio
+against a limit, so each window is a METER: an ink fill on a hairline track, the
+track a lighter step of the same ramp so the bar reads as one object at any
+level. Severity is not a hue. It is carried by the number's weight and by a
+label -- bold at 20% left, and at zero the word "limit reached" beside a glyph,
+in the one red the system allows. Red means exactly one thing on this page, so
+it is never spent on decoration.
 
-One bar per WINDOW, because an account is limited by its worst one and an
-average would hide that. Both providers are normalised to the same window shape
-by the server so there is a single renderer rather than two that drift.
+THE FRAMING IS HEADROOM. Every figure reads "x% left" and every meter drains.
+The question this page answers is "where should I work next", and the answer is
+the account with the most room, so the quantity on screen is the one being
+compared, not its complement.
 
-The one piece of visual logic that is policy rather than taste: an account
-running on paid credits is never drawn as healthy. It works, so it stays
-switchable, but it is not spare capacity, and colouring it like capacity would
-invite reaching for it.
+The one rule that is policy rather than taste: an account billing paid credits
+gets a solid ink pill and a sentence, never the healthy treatment. It works, so
+it stays switchable by hand -- but it is not spare capacity, and it must not
+look like any.
 """
 
 from __future__ import annotations
@@ -31,97 +35,130 @@ PAGE_HTML = r"""<!doctype html>
 <title>agent-switch</title>
 <style>
   :root {
-    --bg:#f7f7f5; --fg:#17171a; --dim:#71716c; --faint:#9b9b95;
-    --line:#e4e4df; --card:#fff; --raise:0 1px 2px rgba(0,0,0,.04);
-    --ok:#2e7d51; --warn:#b06d10; --bad:#b3261e; --track:#e0e0d9; --accent:#3b5bdb;
+    color-scheme: light;
+    --canvas:#f5f5f5; --panel:#fafafa; --paper:#ffffff;
+    --ink:#0a0a0a; --ink-soft:#171717; --mid:#737373; --hairline:#e5e5e5;
+    --track:#e5e5e5; --ember:#e7000b; --on-ink:#ffffff;
+    --shadow:0 1px 1px rgba(0,0,0,.025), 0 2px 2px rgba(0,0,0,.02);
   }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg:#161619; --fg:#ececE8; --dim:#9a9a94; --faint:#6e6e68;
-      --line:#2b2b30; --card:#1d1d21; --raise:none;
-      --ok:#57b881; --warn:#d99a3f; --bad:#ee7f75; --track:#292930; --accent:#8da2ff;
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --canvas:#0a0a0a; --panel:#111111; --paper:#171717;
+      --ink:#fafafa; --ink-soft:#e5e5e5; --mid:#a3a3a3; --hairline:#262626;
+      --track:#2a2a2a; --ember:#ff6b6b; --on-ink:#0a0a0a;
+      --shadow:none;
     }
   }
-  *{box-sizing:border-box}
-  body{
-    margin:0;background:var(--bg);color:var(--fg);
-    font:14px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased;
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --canvas:#0a0a0a; --panel:#111111; --paper:#171717;
+    --ink:#fafafa; --ink-soft:#e5e5e5; --mid:#a3a3a3; --hairline:#262626;
+    --track:#2a2a2a; --ember:#ff6b6b; --on-ink:#0a0a0a;
+    --shadow:none;
   }
-  .wrap{max-width:720px;margin:0 auto;padding:28px 16px 56px}
-  header{display:flex;align-items:baseline;gap:10px;margin-bottom:22px}
-  h1{font-size:15px;margin:0;font-weight:640;letter-spacing:-.01em}
-  .stamp{color:var(--faint);font-size:11.5px;margin-left:auto;font-variant-numeric:tabular-nums}
-  h2{
-    font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);
-    margin:0 0 8px 2px;font-weight:650;
-  }
-  section{margin-bottom:26px}
 
-  .row{
-    background:var(--card);border:1px solid var(--line);border-left:3px solid var(--line);
-    border-radius:9px;padding:11px 13px;margin-bottom:7px;box-shadow:var(--raise);
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--canvas); color: var(--ink);
+    font: 14px/1.5 "Geist", "Geist Variable", -apple-system, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  .row.active{border-left-color:var(--ok)}
-  .row.credits{border-left-color:var(--warn)}
-  .row.dead{border-left-color:var(--bad)}
+  .wrap { max-width: 760px; margin: 0 auto; padding-block: 32px 64px; padding-inline: 20px; }
 
-  .top{display:flex;align-items:center;gap:8px}
-  .slot{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12.5px}
-  .name{font-weight:560;letter-spacing:-.005em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .chip{
-    font-size:10.5px;color:var(--dim);border:1px solid var(--line);
-    border-radius:999px;padding:1px 7px;flex:none;line-height:1.5;
-  }
-  .spacer{flex:1}
-  button{
-    font:inherit;font-size:12.5px;padding:4px 12px;border-radius:6px;
-    border:1px solid var(--line);background:transparent;color:var(--dim);
-    cursor:pointer;flex:none;white-space:nowrap;
-  }
-  button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
-  button:disabled{opacity:.55;cursor:default}
-  button.primary{color:var(--accent);border-color:var(--accent)}
+  /* -- masthead -------------------------------------------------------- */
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .stamp { margin-left: auto; font-size: 12px; color: var(--mid); font-variant-numeric: tabular-nums; }
 
-  .limits{margin-top:10px;display:flex;flex-direction:column;gap:9px}
-  .limit{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:baseline}
-  .limit .what{font-size:11.5px;color:var(--faint)}
-  .limit .left{
-    font-size:11.5px;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums;
+  /* -- KPI row: one tile per provider, its ACTIVE account's headroom ---- */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile {
+    background: var(--paper); border: 1px solid var(--hairline); border-radius: 24px;
+    box-shadow: var(--shadow); padding: 20px; display: flex; flex-direction: column; gap: 6px;
   }
-  .limit .left b{font-weight:600;color:var(--fg)}
-  .limit .left b.warn{color:var(--warn)} .limit .left b.bad{color:var(--bad)}
-  .track{
-    grid-column:1/-1;height:4px;background:var(--track);border-radius:3px;overflow:hidden;
-  }
-  .track > i{display:block;height:100%;background:var(--ok);border-radius:3px}
-  .track > i.warn{background:var(--warn)} .track > i.bad{background:var(--bad)}
+  .label { font-size: 12px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--mid); }
+  .value { font-size: 30px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; color: var(--ink); }
+  .value small { font-size: 14px; font-weight: 400; letter-spacing: 0; color: var(--mid); margin-left: 6px; }
+  .value.ember { color: var(--ember); }
+  .sub { font-size: 13px; color: var(--mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .note{
-    margin-top:9px;font-size:11.5px;line-height:1.45;color:var(--warn);
-    border-top:1px solid var(--line);padding-top:8px;
-  }
-  .note.bad{color:var(--bad)}
-  .note .why{color:var(--dim)}
+  /* -- provider panels: a tonal step, not a divider ---------------------- */
+  .provider { background: var(--panel); border-radius: 24px; padding: 20px; margin-bottom: 12px; }
+  .provider > h2 { font-size: 12px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--mid); margin: 0 0 12px 4px; }
+  .provider > h2 span { color: var(--mid); font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: 8px; }
 
-  .banner{
-    background:var(--card);border:1px dashed var(--line);border-radius:9px;
-    padding:11px 13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  /* -- account card ------------------------------------------------------ */
+  .card {
+    background: var(--paper); border: 1px solid var(--hairline); border-radius: 24px;
+    box-shadow: var(--shadow); padding: 20px; margin-bottom: 8px;
   }
-  .banner .t{font-size:12.5px}
-  .banner .t b{font-weight:560}
-  .empty{color:var(--faint);font-size:12.5px;padding:2px}
-  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--dim)}
+  .card:last-child { margin-bottom: 0; }
+  .top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .slot { font-size: 13px; color: var(--mid); font-variant-numeric: tabular-nums; flex: none; }
+  .name { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grow { flex: 1; }
 
-  #toast{
-    position:sticky;bottom:12px;margin-top:18px;padding:10px 13px;border-radius:8px;
-    background:var(--card);border:1px solid var(--line);box-shadow:var(--raise);
-    font-size:12.5px;display:none;
+  /* pills: 18px is the only interactive radius in this system */
+  .pill {
+    display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 18px;
+    font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; flex: none;
+    border: 1px solid var(--hairline); color: var(--mid); background: transparent;
   }
-  #toast.show{display:block}
-  #toast.warn{border-color:var(--warn);color:var(--warn)}
-  #toast.bad{border-color:var(--bad);color:var(--bad)}
-  @media(max-width:460px){ .name{max-width:44vw} }
+  .pill.solid { background: var(--ink-soft); border-color: var(--ink-soft); color: var(--on-ink); }
+  .pill.soft  { background: var(--canvas); border-color: transparent; color: var(--ink); }
+
+  button {
+    font: inherit; font-size: 13px; font-weight: 500; height: 32px; padding: 0 14px;
+    border-radius: 18px; border: 1px solid var(--hairline); background: transparent; color: var(--ink);
+    cursor: pointer; flex: none; white-space: nowrap;
+  }
+  button.primary { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
+  button.ghost { background: var(--canvas); border-color: transparent; color: var(--mid); cursor: default; }
+  button:hover:not(:disabled):not(.ghost) { border-color: var(--ink); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  button:disabled { opacity: .6; }
+
+  /* -- meters: one per window, ink on a lighter step of the same ramp ---- */
+  .meters { margin-top: 14px; display: grid; gap: 10px; }
+  .meter { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline; }
+  .meter .label { font-size: 11.5px; }
+  .meter .num { font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+  .meter .num.low { font-weight: 600; }
+  .meter .num.out { font-weight: 600; color: var(--ember); }
+  .meter .num span { color: var(--mid); font-weight: 400; }
+  .meter .track { grid-column: 1 / -1; height: 6px; border-radius: 6px; background: var(--track); overflow: hidden; }
+  .meter .fill { height: 100%; border-radius: 6px; background: var(--ink); }
+  .meter .fill.out { background: var(--ember); }
+
+  /* -- state line under the meters --------------------------------------- */
+  .state { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--mid); }
+  .state.out { color: var(--ember); }
+  .state .glyph { font-size: 10px; }
+
+  /* -- the signed-in-but-unmanaged row ----------------------------------- */
+  .adopt { background: var(--paper); border: 1px solid var(--hairline); border-radius: 24px; box-shadow: var(--shadow); padding: 16px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .adopt .t { font-size: 13px; color: var(--mid); min-width: 0; }
+  .adopt .t b { font-weight: 500; color: var(--ink); }
+  .empty { font-size: 13px; color: var(--mid); padding: 4px; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--ink); background: var(--canvas); padding: 1px 6px; border-radius: 6px; }
+
+  #toast {
+    position: sticky; bottom: 16px; margin-top: 20px; padding: 12px 16px; border-radius: 18px;
+    background: var(--ink); color: var(--on-ink); font-size: 13px; display: none; box-shadow: var(--shadow);
+  }
+  #toast.show { display: block; }
+  #toast.ember { background: var(--ember); color: #fff; }
+
+  @media (max-width: 480px) {
+    .wrap { padding-inline: 16px; }
+    .tile, .card, .provider { border-radius: 18px; padding: 16px; }
+    .value { font-size: 26px; }
+    .top { flex-wrap: wrap; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .meter .fill { transition: width .35s ease; }
+  }
 </style>
 </head>
 <body>
@@ -130,9 +167,13 @@ PAGE_HTML = r"""<!doctype html>
     <h1>agent-switch</h1>
     <span class="stamp" id="stamp">loading…</span>
   </header>
-  <section><h2>Claude Code</h2><div id="claude"></div></section>
-  <section><h2>Codex</h2><div id="codex"></div></section>
-  <div id="toast"></div>
+
+  <section class="kpis" id="kpis" aria-label="Active accounts"></section>
+
+  <section class="provider"><h2>Claude Code<span id="claude-count"></span></h2><div id="claude"></div></section>
+  <section class="provider"><h2>Codex<span id="codex-count"></span></h2><div id="codex"></div></section>
+
+  <div id="toast" role="status" aria-live="polite"></div>
 </div>
 <script>
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
@@ -149,18 +190,11 @@ function api(path, options) {
   return fetch(path, opts).then((r) => r.json().then((b) => ({ok: r.ok, body: b})));
 }
 
-function toast(message, kind) {
+function toast(message, ember) {
   const n = $("toast");
   n.textContent = message;
-  n.className = "show" + (kind ? " " + kind : "");
-  if (!kind) setTimeout(() => { n.className = ""; }, 5000);
-}
-
-// Severity is on HEADROOM, so it reads the same direction as the bar.
-function grade(left) {
-  if (left <= 0) return "bad";
-  if (left <= 20) return "warn";
-  return "";
+  n.className = "show" + (ember ? " ember" : "");
+  if (!ember) setTimeout(() => { n.className = ""; }, 5000);
 }
 
 function duration(seconds) {
@@ -171,96 +205,131 @@ function duration(seconds) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
-function limitRow(w) {
+// Headroom on the account's WORST window: that is what limits it.
+function headroom(a) {
+  const ws = (a.windows || []).filter((w) => typeof w.usedPercent === "number");
+  if (ws.length) return Math.max(0, Math.min(...ws.map((w) => 100 - w.usedPercent)));
+  return (typeof a.percent === "number") ? Math.max(0, 100 - a.percent) : null;
+}
+function soonestReset(a) {
+  const ws = (a.windows || []).filter((w) => w.resetAfterSeconds > 0);
+  return ws.length ? Math.min(...ws.map((w) => w.resetAfterSeconds)) : null;
+}
+
+// -- KPI tile: one per provider, its active account --------------------------
+function tile(name, data) {
+  const t = el("div", "tile");
+  t.appendChild(el("div", "label", name + " · active"));
+  const active = (data.accounts || []).find((a) => a.active);
+  const v = el("div", "value");
+  if (!data.available) { v.textContent = "—"; t.appendChild(v); t.appendChild(el("div", "sub", data.error || "unavailable")); return t; }
+  if (!active) { v.textContent = "—"; t.appendChild(v); t.appendChild(el("div", "sub", "no active account")); return t; }
+  const left = headroom(active);
+  if (active.onCredits) {
+    v.textContent = "0%"; v.appendChild(el("small", null, "included quota"));
+    t.appendChild(v);
+    const s = el("div", "sub"); s.appendChild(el("span", "pill solid", "paid credits")); t.appendChild(s);
+  } else if (left === null) {
+    v.textContent = "?"; t.appendChild(v); t.appendChild(el("div", "sub", active.sentinel || active.error || "usage unknown"));
+  } else {
+    v.textContent = left + "%"; v.appendChild(el("small", null, "left"));
+    if (left <= 0) v.classList.add("ember");
+    t.appendChild(v);
+    const r = duration(soonestReset(active));
+    t.appendChild(el("div", "sub", (active.email || "") + (r ? " · resets " + r : "")));
+  }
+  return t;
+}
+
+// -- meter: one window ---------------------------------------------------------
+function meter(w) {
   const left = Math.max(0, 100 - (w.usedPercent ?? 0));
-  const g = grade(left);
-  const node = el("div", "limit");
-  node.appendChild(el("span", "what", `${w.label} limit`));
-  const right = el("span", "left");
-  const strong = el("b", g, `${left}% left`);
-  right.appendChild(strong);
-  const resets = duration(w.resetAfterSeconds);
-  if (resets) right.appendChild(document.createTextNode(` · resets ${resets}`));
-  node.appendChild(right);
+  const m = el("div", "meter");
+  m.appendChild(el("span", "label", `${w.label} window`));
+  const num = el("span", "num" + (left <= 0 ? " out" : left <= 20 ? " low" : ""));
+  num.textContent = `${left}% left`;
+  const r = duration(w.resetAfterSeconds);
+  if (r) num.appendChild(el("span", null, ` · resets ${r}`));
+  m.appendChild(num);
   const track = el("div", "track");
-  const fill = el("i", g);
+  const fill = el("div", "fill" + (left <= 0 ? " out" : ""));
   fill.style.width = left + "%";
   track.appendChild(fill);
-  node.appendChild(track);
-  return node;
+  m.appendChild(track);
+  return m;
 }
 
-function accountRow(provider, a) {
-  const row = el("div", "row");
-  if (a.active) row.classList.add("active");
-  if (a.onCredits) row.classList.add("credits");
-  if (a.error || a.sentinel) row.classList.add("dead");
-
+// -- account card --------------------------------------------------------------
+function card(provider, a) {
+  const c = el("div", "card");
   const top = el("div", "top");
-  top.appendChild(el("span", "slot", a.number + "."));
+  top.appendChild(el("span", "slot", a.number));
   top.appendChild(el("span", "name", a.email || ("account " + a.number)));
-  if (a.alias) top.appendChild(el("span", "chip", a.alias));
-  if (a.plan) top.appendChild(el("span", "chip", a.plan));
-  if (a.org && a.org !== "personal") top.appendChild(el("span", "chip", a.org));
-  if (a.disabled) top.appendChild(el("span", "chip", "disabled"));
-  top.appendChild(el("div", "spacer"));
+  if (a.alias) top.appendChild(el("span", "pill soft", a.alias));
+  if (a.plan) top.appendChild(el("span", "pill", a.plan));
+  if (a.org && a.org !== "personal") top.appendChild(el("span", "pill", a.org));
+  if (a.disabled) top.appendChild(el("span", "pill", "disabled"));
+  top.appendChild(el("div", "grow"));
+  const b = el("button", a.active ? "ghost" : "", a.active ? "active" : "switch");
+  b.disabled = !!a.active;
+  if (!a.active) b.onclick = () => act("/api/switch", {provider, number: a.number}, b, "switching…");
+  top.appendChild(b);
+  c.appendChild(top);
 
-  const button = el("button", null, a.active ? "active" : "switch");
-  button.disabled = !!a.active;
-  if (!a.active) button.onclick = () => act("/api/switch", {provider, number: a.number}, button, "switching…");
-  top.appendChild(button);
-  row.appendChild(top);
-
-  const windows = a.windows || [];
-  if (windows.length) {
-    const limits = el("div", "limits");
-    windows.forEach((w) => limits.appendChild(limitRow(w)));
-    row.appendChild(limits);
+  const ws = a.windows || [];
+  if (ws.length) {
+    const ms = el("div", "meters");
+    ws.forEach((w) => ms.appendChild(meter(w)));
+    c.appendChild(ms);
   }
 
-  if (a.error) {
-    row.appendChild(el("div", "note bad", a.error));
-  } else if (a.sentinel) {
-    row.appendChild(el("div", "note", a.sentinel));
+  const left = headroom(a);
+  if (a.error || a.sentinel) {
+    const s = el("div", "state out");
+    s.appendChild(el("span", "glyph", "●"));
+    s.appendChild(el("span", null, a.error || a.sentinel));
+    c.appendChild(s);
   } else if (a.onCredits) {
-    // Policy made visible: it works, but it is not spare capacity.
-    const note = el("div", "note", "Included quota spent — now billing paid credits. ");
-    note.appendChild(el("span", "why", "Auto-switch will never choose this; switch by hand if you mean to pay."));
-    row.appendChild(note);
-  } else if (!windows.length) {
-    row.appendChild(el("div", "note", "usage unknown"));
+    const s = el("div", "state");
+    s.appendChild(el("span", "pill solid", "paid credits"));
+    s.appendChild(el("span", null, "Included quota spent; every request now bills credits. Auto-switch will never choose this account — switch by hand if you mean to pay."));
+    c.appendChild(s);
+  } else if (left !== null && left <= 0) {
+    const s = el("div", "state out");
+    s.appendChild(el("span", "glyph", "●"));
+    s.appendChild(el("span", null, "limit reached"));
+    c.appendChild(s);
+  } else if (!ws.length) {
+    c.appendChild(el("div", "state", "usage unknown"));
   }
-  return row;
+  return c;
 }
 
-function banner(provider, live) {
-  const box = el("div", "banner");
-  const text = el("div", "t");
-  text.appendChild(document.createTextNode("Signed in as "));
-  text.appendChild(el("b", null, live.email));
-  text.appendChild(document.createTextNode(" — not managed yet."));
-  box.appendChild(text);
-  box.appendChild(el("div", "spacer"));
-  const button = el("button", "primary", "manage this account");
-  button.onclick = () => act("/api/add", {provider}, button, "adding…");
-  box.appendChild(button);
-  return box;
+function adoptRow(provider, live) {
+  const r = el("div", "adopt");
+  const t = el("div", "t");
+  t.appendChild(document.createTextNode("Signed in as "));
+  t.appendChild(el("b", null, live.email));
+  t.appendChild(document.createTextNode(" — not managed yet."));
+  r.appendChild(t);
+  r.appendChild(el("div", "grow"));
+  const b = el("button", "primary", "Manage this account");
+  b.onclick = () => act("/api/add", {provider}, b, "adding…");
+  r.appendChild(b);
+  return r;
 }
 
 function render(id, data) {
   const host = $(id);
   host.innerHTML = "";
-  if (!data.available) {
-    host.appendChild(el("div", "empty", data.error || "unavailable"));
-    return;
-  }
-  (data.accounts || []).forEach((a) => host.appendChild(accountRow(id, a)));
+  const n = (data.accounts || []).length;
+  $(id + "-count").textContent = data.available && n ? `${n} managed` : "";
+  if (!data.available) { host.appendChild(el("div", "empty", data.error || "unavailable")); return; }
+  (data.accounts || []).forEach((a) => host.appendChild(card(id, a)));
   const live = data.liveLogin;
-  // A machine can be LOGGED IN to an account this tool does not manage.
-  // Saying only "no accounts" there is true and useless.
-  if (live && !live.managed) host.appendChild(banner(id, live));
-  else if (!(data.accounts || []).length) {
-    const e = el("div", "empty", "No accounts managed, and nothing signed in. Run ");
+  if (live && !live.managed) host.appendChild(adoptRow(id, live));
+  else if (!n) {
+    const e = el("div", "empty", "Nothing managed and nothing signed in. Run ");
     e.appendChild(el("code", null, `agent-switch ${id === "codex" ? "codex " : ""}add`));
     host.appendChild(e);
   }
@@ -268,11 +337,14 @@ function render(id, data) {
 
 function load(force) {
   return api("/api/state" + (force ? "?force=1" : "")).then(({ok, body}) => {
-    if (!ok) return toast(body.error || "could not load state", "bad");
+    if (!ok) return toast(body.error || "could not load state", true);
+    const k = $("kpis"); k.innerHTML = "";
+    k.appendChild(tile("Claude Code", body.claude));
+    k.appendChild(tile("Codex", body.codex));
     render("claude", body.claude);
     render("codex", body.codex);
-    $("stamp").textContent = new Date().toLocaleTimeString();
-  }).catch((e) => toast("could not reach agent-switch: " + e, "bad"));
+    $("stamp").textContent = "updated " + new Date().toLocaleTimeString();
+  }).catch((e) => toast("could not reach agent-switch: " + e, true));
 }
 
 function act(path, payload, button, pending) {
@@ -284,16 +356,11 @@ function act(path, payload, button, pending) {
     headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"},
     body: JSON.stringify(payload),
   }).then(({ok, body}) => {
-    // A Codex switch needing a restart is NOT a plain success, so its message
-    // stays up instead of fading.
-    toast(body.message || (ok ? "done" : "failed"),
-          ok ? (body.restartRequired ? "warn" : null) : "bad");
+    // A Codex switch that still needs a restart is not a plain success: it
+    // stays up in the one red the page allows, instead of fading.
+    toast(body.message || (ok ? "done" : "failed"), !ok || !!body.restartRequired);
     return load(true);
-  }).catch((e) => {
-    toast(String(e), "bad");
-    button.disabled = false;
-    button.textContent = was;
-  });
+  }).catch((e) => { toast(String(e), true); button.disabled = false; button.textContent = was; });
 }
 
 load();
