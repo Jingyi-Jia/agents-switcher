@@ -8,6 +8,8 @@ loop never touches file locks, keychain subprocesses, or the network.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 from dataclasses import replace
 from functools import partial
@@ -17,7 +19,7 @@ from textual.binding import Binding
 from textual.reactive import reactive
 from textual.worker import WorkerState
 
-from claude_swap import printer
+from claude_swap import paths, printer
 from claude_swap.models import AccountsSnapshot
 from claude_swap.snapshot_source import account_identity
 from claude_swap.settings import load_settings, load_ui_settings, set_setting
@@ -30,9 +32,9 @@ from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT, CSWAP_MONO_DARK, CSWA
 
 
 class CswapApp(App):
-    """claude-swap interactive dashboard."""
+    """Provider-first dashboard with a compatible direct Claude entry point."""
 
-    TITLE = "claude-swap"
+    TITLE = "agent-switch"
     CSS_PATH = "cswap.tcss"
     # No command palette: actions live in the dashboard's nested menu, in
     # their own context — not in a global searchable list.
@@ -52,16 +54,22 @@ class CswapApp(App):
 
     def __init__(
         self,
-        switcher: ClaudeAccountSwitcher,
+        switcher: ClaudeAccountSwitcher | None = None,
         *,
         start: str = "dashboard",
         detected: str | None = None,
     ) -> None:
         super().__init__()
         self.switcher = switcher
+        self._claude_active = switcher is not None
+        self._loading_claude = False
+        self._claude_requested = False
         self._start = start  # "dashboard" | "watch" (`cswap watch`)
         self._detected = detected  # terminal background sensed pre-driver, or None
-        self.source = SnapshotSource(switcher)
+        self.source = SnapshotSource(switcher) if switcher is not None else None
+        self._settings_root = (
+            switcher.backup_dir if switcher is not None else paths.get_backup_root()
+        )
         self._store_only = False
         self._full_next = False
         self._normal_refreshing = False
@@ -74,12 +82,12 @@ class CswapApp(App):
         # bars everywhere. Missing/invalid settings fall back to the default.
         try:
             self.threshold_pct: float | None = load_settings(
-                switcher.backup_dir
+                self._settings_root
             ).threshold
         except Exception:
             self.threshold_pct = None
         try:
-            self._theme_name = load_ui_settings(switcher.backup_dir).theme
+            self._theme_name = load_ui_settings(self._settings_root).theme
         except Exception:
             self._theme_name = "auto"
 
@@ -94,7 +102,14 @@ class CswapApp(App):
         # We own the theme; $TEXTUAL_THEME is intentionally not honoured.
         self.theme = f"cswap-mono-{resolved}"
         printer.set_theme(resolved)
-        self.push_screen(DashboardScreen())
+        if self.switcher is None:
+            from claude_swap.tui.providers import ProviderScreen
+
+            self.push_screen(ProviderScreen())
+            if self._start == "codex":
+                self.action_open_codex()
+        else:
+            self.push_screen(DashboardScreen())
         if self._start == "watch":
             # Stacked over the dashboard so Esc lands there, not on exit.
             self.push_screen(WatchScreen())
@@ -112,6 +127,8 @@ class CswapApp(App):
         one store-only lane. Auto mode already has an engine fetching, so it
         launches only store-only snapshots.
         """
+        if self.source is None or not self._claude_active:
+            return
         if self._store_only:
             self._start_store_refresh()
         elif not self._normal_refreshing:
@@ -394,6 +411,71 @@ class CswapApp(App):
 
     # -- navigation -------------------------------------------------------------
 
+    def action_open_providers(self) -> None:
+        from claude_swap.tui.providers import ProviderScreen
+
+        if self.busy or getattr(self.screen, "_busy", False):
+            self.notify("Wait for the current action to finish", severity="warning")
+            return
+        self._claude_requested = False
+        self._claude_active = False
+        if any(isinstance(screen, ProviderScreen) for screen in self.screen_stack):
+            while not isinstance(self.screen, ProviderScreen):
+                self.pop_screen()
+        else:
+            while len(self.screen_stack) > 2:
+                self.pop_screen()
+            self.push_screen(ProviderScreen())
+
+    def action_open_claude(self) -> None:
+        self._claude_requested = True
+        if self.switcher is not None:
+            self._show_claude()
+        elif not self._loading_claude:
+            self._loading_claude = True
+            self.notify("Opening Claude Code accounts…")
+            self.run_worker(
+                self._load_claude,
+                thread=True,
+                group="provider-init",
+                exit_on_error=False,
+            )
+
+    def _load_claude(self) -> None:
+        try:
+            switcher = ClaudeAccountSwitcher()
+            if (
+                sys.platform != "win32"
+                and os.geteuid() == 0
+                and not switcher._is_running_in_container()
+            ):
+                raise RuntimeError("Do not run as root outside a container")
+        except Exception as exc:
+            self.call_from_thread(self._claude_failed, str(exc))
+            return
+        self.call_from_thread(self._claude_ready, switcher)
+
+    def _claude_failed(self, message: str) -> None:
+        self._loading_claude = False
+        self.notify(f"Could not open Claude Code: {message}", severity="error")
+
+    def _claude_ready(self, switcher: ClaudeAccountSwitcher) -> None:
+        self._loading_claude = False
+        self.switcher = switcher
+        self.source = SnapshotSource(switcher)
+        self._settings_root = switcher.backup_dir
+        if self._claude_requested:
+            self._show_claude()
+
+    def _show_claude(self) -> None:
+        self._claude_active = True
+        if any(isinstance(screen, DashboardScreen) for screen in self.screen_stack):
+            while not isinstance(self.screen, DashboardScreen):
+                self.pop_screen()
+        else:
+            self.push_screen(DashboardScreen())
+        self.request_refresh()
+
     def action_refresh_full(self) -> None:
         self.request_refresh(full=True)
         self.notify("Refreshing usage…", timeout=2)
@@ -407,7 +489,14 @@ class CswapApp(App):
         """
         from claude_swap.tui.codex import CodexScreen
 
-        self.push_screen(CodexScreen())
+        try:
+            screen = CodexScreen()
+        except Exception as exc:
+            self.notify(f"Could not open Codex: {exc}", severity="error")
+            return
+        self._claude_active = False
+        self._claude_requested = False
+        self.push_screen(screen)
 
     def action_open_auto(self) -> None:
         if isinstance(self.screen, AutoScreen):
@@ -437,7 +526,7 @@ class CswapApp(App):
         self.theme = f"cswap-mono-{resolved}"
         printer.set_theme(resolved)
         try:
-            set_setting(self.switcher.backup_dir, "ui.theme", name)
+            set_setting(self._settings_root, "ui.theme", name)
         except Exception as exc:  # persistence is best-effort; never crash the UI
             self.notify(f"Could not save theme: {exc}", severity="warning")
 

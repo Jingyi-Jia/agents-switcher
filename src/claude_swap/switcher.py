@@ -5754,6 +5754,8 @@ class ClaudeAccountSwitcher:
         (``from != to``) — covering recorded/live drift in plain rotation, not just
         ``switch_to`` onto the already-active account.
         """
+        from claude_swap.client_support import CLAUDE_CLIENT_SCOPE
+
         from_ref = op["from"]
         to_ref = op["to"]
         switched = from_ref != to_ref
@@ -5772,6 +5774,7 @@ class ClaudeAccountSwitcher:
             "reason": reason,
             "message": message,
             "warnings": (extra_warnings or []) + op["warnings"],
+            **CLAUDE_CLIENT_SCOPE,
         }
 
     def _switch_noop(
@@ -5791,6 +5794,8 @@ class ClaudeAccountSwitcher:
         stayed); ``from_ref`` defaults to it so every ``switched: false`` payload
         reports ``from == to``.
         """
+        from claude_swap.client_support import CLAUDE_CLIENT_SCOPE
+
         if from_ref is None:
             from_ref = to_ref
         return {
@@ -5802,6 +5807,7 @@ class ClaudeAccountSwitcher:
             "reason": reason,
             "message": message,
             "warnings": warnings or [],
+            **CLAUDE_CLIENT_SCOPE,
         }
 
     def switch(
@@ -7259,13 +7265,15 @@ class ClaudeAccountSwitcher:
         """Print the note after a successful switch, keyed to where the active
         credential write actually landed.
 
-        A restart is never required: Claude Code clears its cached OAuth token when
+        The CLI clears its cached OAuth token when
         ``.credentials.json`` changes (file storage — effective on the next message)
         or when the macOS Keychain cache TTL (~30s) expires. Both lines are dim
         hints, not warnings; the Keychain line adds that a restart skips the wait.
         The file line also covers macOS when the Keychain was unavailable and the
         switch fell back to the file.
         """
+        from claude_swap.client_support import CLAUDE_SWITCH_NOTICE
+
         backend = self._last_active_credentials_backend
         if backend is None:
             # No write happened this run; fall back to the routing hint.
@@ -7276,7 +7284,8 @@ class ClaudeAccountSwitcher:
                 "session can take up to ~30 seconds to pick up the new account."
             ))
         else:
-            print(dimmed("New account is active on your next message — no restart needed."))
+            print(dimmed("New CLI account is active on your next message — no restart needed."))
+        print(dimmed(CLAUDE_SWITCH_NOTICE))
 
     def purge(self) -> None:
         """Remove all traces of claude-swap from the system.

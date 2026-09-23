@@ -978,6 +978,9 @@ def main() -> None:
     force_utf8_output()
     _use_native_tls()
     argv = sys.argv[1:]
+    explicit_claude = bool(argv and argv[0] == "claude")
+    if explicit_claude:
+        argv = argv[1:] or ["status"]
     try:
         from claude_swap.appearance import cli_should_probe, cli_theme
         # `run` execs a child that takes over the terminal, and `--json`
@@ -996,8 +999,8 @@ def main() -> None:
     if argv and argv[0] == "auto":
         _auto_command(argv[1:])
         return  # only reachable in tests where sys.exit is mocked
-    if len(sys.argv) > 1 and sys.argv[1] == "config":
-        _config_command(sys.argv[2:])
+    if argv and argv[0] == "config":
+        _config_command(argv[1:])
         return
     if argv and argv[0] == "tray":
         from claude_swap.web.cli import tray_command
@@ -1052,7 +1055,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog=_prog_name(),
         usage="%(prog)s <command> [args] [options]",
-        description="""Multi-Account Switcher for Claude Code
+        description="""Multi-Account Switcher for Claude Code and Codex
+
+Providers:
+  %(prog)s claude <command>           manage Claude Code accounts
+  %(prog)s codex <command>            manage Codex accounts
+  %(prog)s tui                        choose Claude Code or Codex
+  Unqualified account commands remain Claude Code shortcuts.
 
 Commands:
   %(prog)s help                       show this help
@@ -1080,7 +1089,7 @@ Commands:
   %(prog)s unclaimed [--purge ID]     list or drop stashed credential entries
   %(prog)s export <path>              export accounts
   %(prog)s import <path>              import accounts
-  %(prog)s tui                        interactive dashboard (also: bare %(prog)s)
+  %(prog)s tui                        provider chooser (also: bare %(prog)s)
   %(prog)s watch                      dashboard, opened on the live watch page
   %(prog)s menubar                    macOS menu bar app
   %(prog)s menubar --install-service  keep the menu bar running via launchd
@@ -1374,6 +1383,11 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
             "--install-service, --uninstall-service and --service-status "
             "can only be used with 'menubar'"
         )
+
+    if args.tui and not explicit_claude:
+        from claude_swap.tui import run as tui_run
+
+        sys.exit(tui_run(None))
 
     # Self-upgrade runs before switcher init so we don't touch config/keychain
     # just to upgrade the tool itself.

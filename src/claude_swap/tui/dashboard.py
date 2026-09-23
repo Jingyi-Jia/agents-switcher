@@ -25,6 +25,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, ListView, Static
 
+from claude_swap.client_support import CLAUDE_SWITCH_NOTICE
 from claude_swap.models import AccountsSnapshot
 from claude_swap.tui.widgets import AccountItem, AccountsPanel, MenuItem
 
@@ -42,6 +43,7 @@ class DashboardScreen(Screen):
     BINDINGS = [
         Binding("s", "open_switch", "Switch accounts"),
         Binding("w", "app.open_watch", "Watch"),
+        Binding("p", "app.open_providers", "Providers"),
         Binding("escape,left", "menu_back", "Back", show=False),
         Binding("q", "app.quit", "Quit"),
         # Power shortcuts; the menu is the discoverable path.
@@ -59,6 +61,7 @@ class DashboardScreen(Screen):
         self._menu_stack: list[tuple[str, MenuEntries]] = []
 
     def compose(self) -> ComposeResult:
+        yield Static(CLAUDE_SWITCH_NOTICE, id="claude-client-notice", markup=False)
         yield AccountsPanel(id="accounts-panel")
         yield Static("", id="menu-title")
         yield ListView(id="menu")
@@ -67,6 +70,9 @@ class DashboardScreen(Screen):
     async def on_mount(self) -> None:
         self.query_one("#menu", ListView).focus()
         await self._push_menu("menu", self._root_entries())
+
+    def on_screen_resume(self) -> None:
+        self.app._claude_active = True
 
     # -- menu plumbing --------------------------------------------------------
 
@@ -204,7 +210,10 @@ class DashboardScreen(Screen):
             self.app.push_screen(SwitchScreen())
 
     async def action_menu_back(self) -> None:
-        await self._pop_menu()
+        if len(self._menu_stack) > 1:
+            await self._pop_menu()
+        else:
+            self.app.action_open_providers()
 
     def action_cursor_down(self) -> None:
         self.query_one("#menu", ListView).action_cursor_down()

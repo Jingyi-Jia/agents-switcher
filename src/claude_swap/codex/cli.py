@@ -40,6 +40,7 @@ def _account_json(account) -> dict:
         "accountId": account.account_id,
         "plan": account.plan,
         "alias": account.alias,
+        "disabled": account.disabled,
         "added": account.added,
     }
 
@@ -478,6 +479,7 @@ auth.json once at startup and will not adopt a different account mid-run.
                    help="Show the current Codex login (the default)")
     sub.add_parser("list", aliases=["ls"], parents=[common],
                    help="List managed Codex accounts")
+    sub.add_parser("tui", help="Open the Codex accounts dashboard")
 
     p_add = sub.add_parser("add", parents=[common],
                            help="Manage the account Codex is logged in as")
@@ -495,6 +497,11 @@ auth.json once at startup and will not adopt a different account mid-run.
     p_remove = sub.add_parser("remove", aliases=["rm"], parents=[common],
                               help="Stop managing an account")
     p_remove.add_argument("account", metavar="NUM|EMAIL|ALIAS")
+
+    for command in ("enable", "disable"):
+        p_state = sub.add_parser(command, parents=[common],
+                                 help=f"{command.capitalize()} automatic rotation for an account")
+        p_state.add_argument("account", metavar="NUM|EMAIL|ALIAS")
 
     p_usage = sub.add_parser("usage", parents=[common],
                              help="Show quota for managed accounts")
@@ -530,6 +537,10 @@ auth.json once at startup and will not adopt a different account mid-run.
     args = parser.parse_args(argv)
     if args.command == "alias" and not args.unset and not args.name:
         parser.error("NAME is required (or pass --unset to remove the alias)")
+    if args.command == "tui":
+        from claude_swap.tui import run
+
+        sys.exit(run(None, start="codex"))
 
     try:
         switcher = CodexSwitcher()
@@ -561,6 +572,12 @@ auth.json once at startup and will not adopt a different account mid-run.
             else:
                 print(f"{accent('Removed')} {removed.display_label} "
                       f"{muted(f'(slot {removed.number})')}")
+        elif command in ("enable", "disable"):
+            updated = switcher.set_account_disabled(args.account, command == "disable")
+            if args.json:
+                print(json.dumps({"account": _account_json(updated)}, indent=2))
+            else:
+                print(f"{accent(command.capitalize() + 'd')} {updated.display_label}")
         elif command == "alias":
             updated = switcher.set_alias(args.account, "" if args.unset else args.name)
             if args.json:
