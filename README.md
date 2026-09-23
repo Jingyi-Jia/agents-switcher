@@ -1,6 +1,18 @@
 # agents-switcher
 
-A fork of [realiti4/claude-swap](https://github.com/realiti4/claude-swap) that adds **Codex CLI** account switching alongside Claude Code, plus a browser dashboard, a clickable launcher and a menu-bar readout.
+Switch between multiple **Claude Code** and **Codex CLI** accounts — by hand, or automatically before you hit a rate limit — from a terminal, a browser dashboard, or the menu bar.
+
+## Origin and credit
+
+agents-switcher is a fork of [claude-swap](https://github.com/realiti4/claude-swap) by Onur Cetinkol ([@realiti4](https://github.com/realiti4)), used under its MIT license. **The Claude Code account switching — the majority of this codebase — is his work**, and the `LICENSE` file carries his copyright alongside the additions here.
+
+What was added in this fork:
+
+- **Codex CLI support** — accounts, rotation-safe switching, quota, stats, restart detection, and an auto-switcher that never lands on a paid-credits account (`src/claude_swap/codex/`)
+- **A local browser dashboard**, a clickable launcher, and a menu-bar / tray readout (`src/claude_swap/web/`)
+- **A cross-node-safe lock** (`dirlock`) replacing `fcntl.flock`, which gives no exclusion on NFS homes — reported upstream as [#372](https://github.com/realiti4/claude-swap/issues/372) and proposed back as [#374](https://github.com/realiti4/claude-swap/pull/374)
+
+The full git history is preserved, so every inherited commit still carries its author.
 
 > **The command is `agent-switch`, not `cswap`.**
 > Upstream installs `cswap` and `claude-swap`; shipping those here would make which tool runs depend on install order. Everything below the fork section is upstream's documentation for the Claude side and still applies — **substitute `agent-switch` wherever it says `cswap`.**
@@ -8,7 +20,7 @@ A fork of [realiti4/claude-swap](https://github.com/realiti4/claude-swap) that a
 ## Install
 
 ```bash
-uv tool install git+https://github.com/Jingyi-Jia/agents-switcher@codex-provider
+uv tool install git+https://github.com/Jingyi-Jia/agents-switcher
 ```
 
 It coexists with an existing `cswap` install; the command names and the distribution name are both distinct.
