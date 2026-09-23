@@ -240,12 +240,10 @@ def _run_pystray(refresh, on_select, on_open, interval: float) -> None:
         state["model"].title,
         menu=build_menu(),
     )
+    stopped = threading.Event()
 
     def poll():
-        while True:
-            import time
-
-            time.sleep(interval)
+        while not stopped.wait(interval):
             try:
                 state["model"] = refresh()
                 icon.icon = _icon_image(state["model"].attention)
@@ -255,11 +253,16 @@ def _run_pystray(refresh, on_select, on_open, interval: float) -> None:
             except Exception:  # noqa: BLE001 - a refresh failure must not kill the tray
                 continue
 
-    threading.Thread(target=poll, daemon=True).start()
-    icon.run()
+    worker = threading.Thread(target=poll, daemon=True)
+    worker.start()
+    try:
+        icon.run()
+    finally:
+        stopped.set()
+        worker.join()
 
 
-def _run_rumps(refresh, on_select, on_open, interval: float) -> None:
+def _run_rumps(refresh, on_select, on_open, interval: float, on_quit) -> None:
     """macOS menu bar, where the title is VISIBLE text rather than a tooltip."""
     import rumps
 
@@ -268,7 +271,8 @@ def _run_rumps(refresh, on_select, on_open, interval: float) -> None:
             model = refresh()
             super().__init__(model.title, quit_button=None)
             self._render(model)
-            rumps.Timer(self._tick, interval).start()
+            self._timer = rumps.Timer(self._tick, interval)
+            self._timer.start()
 
         def _render(self, model):
             self.title = model.title
@@ -286,8 +290,13 @@ def _run_rumps(refresh, on_select, on_open, interval: float) -> None:
                 item.state = 1 if entry.checked else 0
                 entries.append(item)
             entries += [rumps.separator,
-                        rumps.MenuItem("Quit", callback=lambda _: rumps.quit_application())]
+                        rumps.MenuItem("Quit", callback=self._quit)]
             self.menu = entries
+
+        def _quit(self, _):
+            self._timer.stop()
+            on_quit()
+            rumps.quit_application()
 
         def _tick(self, _):
             try:
@@ -295,27 +304,44 @@ def _run_rumps(refresh, on_select, on_open, interval: float) -> None:
             except Exception:  # noqa: BLE001 - a refresh failure must not kill the tray
                 pass
 
-    TrayApp().run()
+    app = TrayApp()
+    try:
+        app.run()
+    finally:
+        app._timer.stop()
 
 
 def run(refresh, on_select, on_open, *, interval: float = 30.0,
-        backend: str | None = None) -> None:
+        backend: str | None = None, on_quit=None) -> None:
     """Run the tray until quit.
 
     Args:
         refresh: Returns a fresh :class:`TrayModel`.
         on_select: ``(provider, number)`` when an account is chosen.
         on_open: Called to open the dashboard.
+        on_quit: Stop owned resources before the tray process exits.
 
     Raises:
         RuntimeError: No usable backend is installed.
     """
     backend = backend or available_backend()
-    if backend == "rumps":
-        _run_rumps(refresh, on_select, on_open, interval)
-    elif backend == "pystray":
-        _run_pystray(refresh, on_select, on_open, interval)
-    else:
-        raise RuntimeError(
-            f"no tray backend available — install one with: {install_hint()}"
-        )
+    closed = False
+
+    def cleanup():
+        nonlocal closed
+        if not closed:
+            closed = True
+            if on_quit is not None:
+                on_quit()
+
+    try:
+        if backend == "rumps":
+            _run_rumps(refresh, on_select, on_open, interval, cleanup)
+        elif backend == "pystray":
+            _run_pystray(refresh, on_select, on_open, interval)
+        else:
+            raise RuntimeError(
+                f"no tray backend available — install one with: {install_hint()}"
+            )
+    finally:
+        cleanup()

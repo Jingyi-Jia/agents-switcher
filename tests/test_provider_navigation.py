@@ -150,6 +150,33 @@ async def test_failed_claude_initialization_does_not_block_codex(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_provider_escape_returns_to_direct_claude_dashboard(tmp_path):
+    app = CswapApp(FakeSwitcher([make_account(1, active=True)], tmp_path))
+    async with app.run_test(size=(100, 32)) as pilot:
+        await settle(pilot)
+        await pilot.press("p")
+        await settle(pilot)
+        assert isinstance(app.screen, ProviderScreen)
+        await pilot.press("escape")
+        await settle(pilot)
+        assert isinstance(app.screen, DashboardScreen)
+        assert app._claude_active
+
+
+@pytest.mark.asyncio
+async def test_provider_escape_exits_when_chooser_is_the_root(monkeypatch):
+    app = CswapApp()
+    async with app.run_test(size=(100, 32)) as pilot:
+        await settle(pilot)
+        exit_app = MagicMock()
+        with monkeypatch.context() as patch:
+            patch.setattr(app, "exit", exit_app)
+            await pilot.press("escape")
+            await settle(pilot)
+            exit_app.assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_lazy_claude_preserves_actions_and_provider_navigation(
     monkeypatch, tmp_path
 ):

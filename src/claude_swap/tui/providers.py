@@ -12,7 +12,8 @@ class ProviderScreen(Screen):
     BINDINGS = [
         Binding("c", "app.open_claude", "Claude Code"),
         Binding("x", "app.open_codex", "Codex"),
-        Binding("q,escape", "app.quit", "Quit"),
+        Binding("escape", "back", "Back"),
+        Binding("q", "app.quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -30,6 +31,12 @@ class ProviderScreen(Screen):
 
     def on_screen_resume(self) -> None:
         self.app._claude_active = False
+
+    def action_back(self) -> None:
+        if len(self.app.screen_stack) > 2:
+            self.app.pop_screen()
+        else:
+            self.app.exit()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.action_id == "claude":
