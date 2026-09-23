@@ -47,10 +47,13 @@ tray-macos = ["rumps>=0.4.0"]
 tray = ["pystray>=0.19", "pillow>=10"]
 
 [project.urls]
+Homepage = "https://github.com/Jingyi-Jia/agents-switcher"
+Repository = "https://github.com/Jingyi-Jia/agents-switcher"
+Issues = "https://github.com/Jingyi-Jia/agents-switcher/issues"
+# The origin. Issues about the Claude Code side may well belong there instead,
+# but a bug report about a feature that only exists here must not land in the
+# original author's tracker.
 Upstream = "https://github.com/realiti4/claude-swap"
-Homepage = "https://github.com/realiti4/claude-swap"
-Repository = "https://github.com/realiti4/claude-swap"
-Issues = "https://github.com/realiti4/claude-swap/issues"
 
 [project.scripts]
 # Deliberately NOT `cswap`/`claude-swap`: upstream claude-swap installs those,
