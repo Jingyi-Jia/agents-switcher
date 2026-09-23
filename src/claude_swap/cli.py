@@ -30,7 +30,7 @@ def _prog_name() -> str:
     an installed entry-point shim renders as an ugly absolute path (e.g.
     ``python.exe C:\\Users\\me\\.local\\bin\\cswap``). We strip that down to the
     bare command the user typed (``cswap`` / ``claude-swap``), falling back to
-    ``cswap`` for ``python -m claude_swap`` and odd launchers.
+    ``agent-switch`` for ``python -m claude_swap`` and odd launchers.
     """
     name = os.path.basename(sys.argv[0] or "")
     for ext in (".exe", ".pyw", ".py"):
@@ -38,7 +38,7 @@ def _prog_name() -> str:
             name = name[: -len(ext)]
             break
     if not name or name in {"__main__", "python", "python3", "py"}:
-        return "cswap"
+        return "agent-switch"
     return name
 
 
@@ -998,6 +998,26 @@ def main() -> None:
         return  # only reachable in tests where sys.exit is mocked
     if len(sys.argv) > 1 and sys.argv[1] == "config":
         _config_command(sys.argv[2:])
+        return
+    if argv and argv[0] == "tray":
+        from claude_swap.web.cli import tray_command
+
+        tray_command(argv[1:])
+        return
+    if argv and argv[0] == "app":
+        from claude_swap.web.cli import app_command
+
+        app_command(argv[1:])
+        return
+    if argv and argv[0] == "web":
+        from claude_swap.web.cli import web_command
+
+        web_command(argv[1:])
+        return
+    if argv and argv[0] == "codex":
+        from claude_swap.codex.cli import codex_command
+
+        codex_command(argv[1:])
         return
     if argv and argv[0] == "map":
         _map_command(argv[1:])

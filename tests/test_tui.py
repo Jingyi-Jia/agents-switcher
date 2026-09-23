@@ -802,14 +802,15 @@ class TestDashboard:
                 "switch",
                 "watch",
                 "auto",
+                "codex",
                 "add-menu",
                 "disable-menu",
                 "remove-menu",
                 "theme-menu",
                 "quit",
             ]
-            # nest into Add (index 3), then back out with escape
-            await pilot.press("down", "down", "down", "enter")
+            # nest into Add (index 4, after the Codex entry), then escape out
+            await pilot.press("down", "down", "down", "down", "enter")
             await pilot.pause()
             ids = [item.action_id for item in menu.query(MenuItem)]
             assert ids == ["add-login", "add-token", "back"]
@@ -1653,7 +1654,7 @@ class TestThemeWiring:
         app = make_app(fake)
         async with app.run_test() as pilot:
             await settle(pilot)
-            assert app.theme == "cswap-light"
+            assert app.theme == "cswap-mono-light"
 
     async def test_auto_setting_uses_detected_light(self, tmp_path):
         (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "auto"}}))
@@ -1662,7 +1663,7 @@ class TestThemeWiring:
         app = CswapApp(fake, detected="light")
         async with app.run_test() as pilot:
             await settle(pilot)
-            assert app.theme == "cswap-light"
+            assert app.theme == "cswap-mono-light"
 
     async def test_auto_setting_no_detection_falls_back_to_dark(self, tmp_path):
         (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "auto"}}))
@@ -1671,7 +1672,7 @@ class TestThemeWiring:
         app = CswapApp(fake, detected=None)
         async with app.run_test() as pilot:
             await settle(pilot)
-            assert app.theme == "cswap-dark"
+            assert app.theme == "cswap-mono-dark"
 
     async def test_toggle_cycles_dark_light_auto(self, tmp_path):
         (tmp_path / "settings.json").write_text(json.dumps({"ui": {"theme": "dark"}}))
@@ -1680,14 +1681,14 @@ class TestThemeWiring:
         app = CswapApp(fake, detected="light")
         async with app.run_test() as pilot:
             await settle(pilot)
-            assert app.theme == "cswap-dark"          # setting dark
+            assert app.theme == "cswap-mono-dark"          # setting dark
             app.action_toggle_theme(); await pilot.pause()
-            assert app.theme == "cswap-light"          # → light
+            assert app.theme == "cswap-mono-light"          # → light
             app.action_toggle_theme(); await pilot.pause()
-            assert app.theme == "cswap-light"          # → auto, detected=light
+            assert app.theme == "cswap-mono-light"          # → auto, detected=light
             assert json.loads((tmp_path / "settings.json").read_text())["ui"]["theme"] == "auto"
             app.action_toggle_theme(); await pilot.pause()
-            assert app.theme == "cswap-dark"           # → back to dark
+            assert app.theme == "cswap-mono-dark"           # → back to dark
 
     async def test_theme_menu_marks_current_and_applies(self, tmp_path):
         from textual.widgets import ListView, Static
@@ -1708,5 +1709,5 @@ class TestThemeWiring:
             assert "●" in current  # the current theme is marked
             await menu_select(pilot, "theme:light")
             assert app._theme_name == "light"
-            assert app.theme == "cswap-light"
+            assert app.theme == "cswap-mono-light"
 

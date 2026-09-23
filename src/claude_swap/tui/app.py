@@ -26,7 +26,7 @@ from claude_swap.tui.autoview import AutoScreen
 from claude_swap.tui.dashboard import DashboardScreen, WatchScreen
 from claude_swap.tui.data import ActionResult, SnapshotSource, format_duration, run_action
 from claude_swap.tui.modals import AddTokenModal, ConfirmModal, OutputModal, TokenForm
-from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT
+from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT, CSWAP_MONO_DARK, CSWAP_MONO_LIGHT
 
 
 class CswapApp(App):
@@ -86,9 +86,13 @@ class CswapApp(App):
     def on_mount(self) -> None:
         self.register_theme(CSWAP_DARK)
         self.register_theme(CSWAP_LIGHT)
+        # This fork's look. The warm pair stays registered so upstream's theme
+        # tests keep meaning something; only the NAME assigned below changes.
+        self.register_theme(CSWAP_MONO_DARK)
+        self.register_theme(CSWAP_MONO_LIGHT)
         resolved = self._resolved_theme()
         # We own the theme; $TEXTUAL_THEME is intentionally not honoured.
-        self.theme = f"cswap-{resolved}"
+        self.theme = f"cswap-mono-{resolved}"
         printer.set_theme(resolved)
         self.push_screen(DashboardScreen())
         if self._start == "watch":
@@ -394,6 +398,17 @@ class CswapApp(App):
         self.request_refresh(full=True)
         self.notify("Refreshing usage…", timeout=2)
 
+    def action_open_codex(self) -> None:
+        """Open the Codex accounts screen.
+
+        Imported here rather than at module level so a Codex-side import error
+        cannot stop the Claude TUI from starting -- the two providers share this
+        app but not a failure mode.
+        """
+        from claude_swap.tui.codex import CodexScreen
+
+        self.push_screen(CodexScreen())
+
     def action_open_auto(self) -> None:
         if isinstance(self.screen, AutoScreen):
             return
@@ -419,7 +434,7 @@ class CswapApp(App):
         detection (never re-probes mid-session)."""
         self._theme_name = name
         resolved = self._resolved_theme()
-        self.theme = f"cswap-{resolved}"
+        self.theme = f"cswap-mono-{resolved}"
         printer.set_theme(resolved)
         try:
             set_setting(self.switcher.backup_dir, "ui.theme", name)

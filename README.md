@@ -1,3 +1,75 @@
+# agents-switcher
+
+A fork of [realiti4/claude-swap](https://github.com/realiti4/claude-swap) that adds **Codex CLI** account switching alongside Claude Code, plus a browser dashboard, a clickable launcher and a menu-bar readout.
+
+> **The command is `agent-switch`, not `cswap`.**
+> Upstream installs `cswap` and `claude-swap`; shipping those here would make which tool runs depend on install order. Everything below the fork section is upstream's documentation for the Claude side and still applies — **substitute `agent-switch` wherever it says `cswap`.**
+
+## Install
+
+```bash
+uv tool install git+https://github.com/Jingyi-Jia/agents-switcher@codex-provider
+```
+
+It coexists with an existing `cswap` install; the command names and the distribution name are both distinct.
+
+Optional extras:
+
+```bash
+pip install 'agents-switcher[tray-macos]'   # menu-bar readout (macOS)
+pip install 'agents-switcher[tray]'         # system-tray readout (Windows/Linux)
+```
+
+## Codex accounts
+
+```bash
+agent-switch codex                    # what Codex is signed in as
+agent-switch codex add --alias work   # manage the account you're logged in as
+agent-switch codex list
+agent-switch codex switch work
+agent-switch codex usage              # quota for every managed account
+agent-switch codex stats              # lifetime tokens, streaks, reset credits
+agent-switch codex auto --once        # switch if the active account is low
+```
+
+**A Codex switch only affects processes started afterwards.** Codex reads `auth.json` once at startup and its 401-recovery reload refuses to cross account ids, so a running `codex` keeps serving the old account until it restarts. Every command that switches says so and names the processes still holding the previous account. This is a Codex design decision, not a limitation of this tool — no switcher can work around it.
+
+### Paid credits are never auto-selected
+
+An account past its included quota keeps working by billing credits per request. Such an account stays switchable **by hand**, but the auto-switcher will never move onto it and never counts it as spare capacity. Spending money is your decision, not a background loop's.
+
+## Dashboard
+
+```bash
+agent-switch web                      # opens a local dashboard in your browser
+agent-switch web --no-open            # print the URL instead (headless)
+```
+
+Binds loopback only and mints a fresh token per run. To use it from a cluster login node, forward the port rather than widening the bind:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 <host>
+# then on the remote host:
+agent-switch web --no-open
+```
+
+## Clickable launcher and tray
+
+```bash
+agent-switch app install              # .app (macOS) / .desktop (Linux) / Start Menu .lnk (Windows)
+agent-switch tray                     # quota in the menu bar / system tray
+```
+
+Both are launchers for the dashboard — there is no separate application and no duplicated logic. A machine with no desktop simply never installs one; the CLI and TUI are unaffected.
+
+## Also fixed here
+
+`FileLock` used `fcntl.flock`, which gives **no cross-node exclusion** on an NFS home mounted `nolock,local_lock=all` — a common cluster export. Measured on such a home, two nodes contending for 20s: 2,653 critical-section violations in 2,829 acquisitions, with contention never once observed. It now holds a directory (`mkdir`), which excludes correctly: 0 violations in the same harness. Reported upstream as [#372](https://github.com/realiti4/claude-swap/issues/372), fix proposed in [#374](https://github.com/realiti4/claude-swap/pull/374).
+
+---
+
+<sub>Everything below this line is upstream's README for the Claude Code side, unchanged. Remember to read `cswap` as `agent-switch`.</sub>
+
 # claude-swap
 
 Multi-account switcher for Claude Code. Easily switch between multiple Claude accounts without logging out, or let it switch for you before you hit a rate limit. Track usage for every account in a live dashboard, and run accounts in parallel. Works with both the Claude Code CLI and the VS Code extension.

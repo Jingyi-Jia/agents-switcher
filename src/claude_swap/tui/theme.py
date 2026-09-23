@@ -139,3 +139,74 @@ Palette.DARK = Palette(
     accent=ACCENT, foreground=FOREGROUND, muted=MUTED,
     sev_ok=SEV_OK, sev_warn=SEV_WARN, sev_crit=SEV_CRIT, track=TRACK,
 )
+
+
+# -- Monochrome pair --------------------------------------------------------
+#
+# "Clinical blueprint": ink on paper, tonal steps instead of dividers, one red.
+# The same system as the web dashboard, so the two surfaces read as one tool.
+#
+# success and warning are BOTH plain ink on purpose. In this system a meter's
+# fill is always ink; what changes as quota runs down is the number's weight
+# and its label, not the bar's hue. error stays red because Palette.severity
+# maps it to the CRIT band, and CRIT mirrors the auto-switch threshold -- so
+# red here means exactly one thing: "the auto-switcher would fire at this
+# level", which is a state and not a decoration.
+
+MONO_INK = "#0a0a0a"
+MONO_MUTED = "#737373"
+MONO_CANVAS = "#f5f5f5"
+MONO_PAPER = "#ffffff"
+MONO_HAIRLINE = "#e5e5e5"
+MONO_EMBER = "#e7000b"
+
+CSWAP_MONO_LIGHT = Theme(
+    name="cswap-mono-light",
+    primary=MONO_INK,
+    secondary=MONO_MUTED,
+    accent=MONO_INK,
+    foreground=MONO_INK,
+    background=MONO_CANVAS,
+    surface=MONO_PAPER,
+    panel=MONO_HAIRLINE,
+    success=MONO_INK,
+    warning=MONO_INK,
+    error=MONO_EMBER,
+    dark=False,
+    variables={
+        "footer-key-foreground": MONO_INK,
+        "block-cursor-background": MONO_HAIRLINE,
+        "block-cursor-foreground": MONO_INK,
+        "block-cursor-text-style": "none",
+        "track": MONO_HAIRLINE,
+    },
+)
+
+MONO_INK_DARK = "#fafafa"
+MONO_MUTED_DARK = "#a3a3a3"
+MONO_CANVAS_DARK = "#0a0a0a"
+MONO_PAPER_DARK = "#171717"
+MONO_HAIRLINE_DARK = "#262626"
+MONO_EMBER_DARK = "#ff6b6b"  # lifted for contrast on the dark ground
+
+CSWAP_MONO_DARK = Theme(
+    name="cswap-mono-dark",
+    primary=MONO_INK_DARK,
+    secondary=MONO_MUTED_DARK,
+    accent=MONO_INK_DARK,
+    foreground=MONO_INK_DARK,
+    background=MONO_CANVAS_DARK,
+    surface=MONO_PAPER_DARK,
+    panel=MONO_HAIRLINE_DARK,
+    success=MONO_INK_DARK,
+    warning=MONO_INK_DARK,
+    error=MONO_EMBER_DARK,
+    dark=True,
+    variables={
+        "footer-key-foreground": MONO_INK_DARK,
+        "block-cursor-background": MONO_HAIRLINE_DARK,
+        "block-cursor-foreground": MONO_INK_DARK,
+        "block-cursor-text-style": "none",
+        "track": "#2a2a2a",
+    },
+)
