@@ -158,14 +158,14 @@ def run_page(node, scenario):
         + "\n})().catch(error => {console.error(error); process.exitCode = 1;});"
     )
     result = subprocess.run(
-        [node, "-"], input=source, text=True, capture_output=True, timeout=15,
+        [node, "-"], input=source, encoding="utf-8", capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_dashboard_javascript_syntax(node):
     result = subprocess.run(
-        [node, "--check"], input=SCRIPT, text=True, capture_output=True, timeout=10,
+        [node, "--check"], input=SCRIPT, encoding="utf-8", capture_output=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
 

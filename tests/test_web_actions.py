@@ -203,6 +203,7 @@ def test_auto_contract_state_and_server_close_join_workers(web, monkeypatch):
     assert ready.wait(2)
     assert web.state._codex.calls == [("switch", "2")]
     worker = web.state.actions.auto._workers["codex"][0]
+    web.server.shutdown()
     web.server.server_close()
     assert not worker.is_alive()
     assert web.state.actions.auto.status("codex")["mode"] == "stopped"
