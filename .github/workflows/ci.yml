@@ -5,10 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # Fork-local addition. Upstream's triggers fire only on main, which a fork
-  # never works on, and workflow_dispatch is only usable when the workflow is
-  # present on the DEFAULT branch -- so it has to live here, not just on the
-  # feature branch, for this fork to be able to run CI on demand at all.
+  # Lets CI be run on demand for any ref, e.g. a branch that has no PR yet.
   workflow_dispatch:
 
 jobs:
