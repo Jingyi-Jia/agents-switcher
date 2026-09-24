@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from datetime import datetime
 
 import pytest
@@ -11,7 +13,7 @@ from claude_swap.tui.autoview import AutoView
 from claude_swap.tui.codex import CodexScreen, codex_snapshot
 from claude_swap.tui.dashboard import DashboardScreen, SwitchScreen, WatchScreen
 from claude_swap.tui.widgets import AccountsPanel, MenuItem, usage_rows
-from tests.test_codex_tui import account
+from tests.test_codex_tui import account, healthy
 from tests.test_provider_navigation import ManagedCodexSwitcher, choose_menu
 from tests.test_tui import FakeSwitcher, make_account, settle
 
@@ -156,3 +158,89 @@ async def test_codex_auto_notifications_render_and_exit_stops_worker(monkeypatch
         assert dashboard.actions.auto._workers
     assert not dashboard.actions.auto._workers
     assert dashboard.actions.auto.status("codex")["mode"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_return_to_codex_refreshes_quota_immediately(monkeypatch, tmp_path):
+    codex = ManagedCodexSwitcher()
+    monkeypatch.setattr(codex_module, "CodexSwitcher", lambda: codex)
+    monkeypatch.setattr(app_module, "ClaudeAccountSwitcher", lambda: FakeSwitcher([], tmp_path))
+    app = CswapApp(start="codex")
+    async with app.run_test(size=(110, 36)) as pilot:
+        await settle(pilot)
+        dashboard = app.screen
+        await choose_menu(pilot, "claude")
+        codex._usage["1"] = healthy(12)
+        await choose_menu(pilot, "codex")
+        assert app.screen is dashboard
+        assert dashboard.snapshot.accounts[0].usage.last_good["windows"][0]["pct"] == 12
+
+
+@pytest.mark.asyncio
+async def test_busy_auto_start_blocks_exit_and_preserves_threshold_edit(monkeypatch):
+    codex = ManagedCodexSwitcher()
+    monkeypatch.setattr(codex_module, "CodexSwitcher", lambda: codex)
+    app = CswapApp(start="codex")
+    started = threading.Event()
+    release = threading.Event()
+    async with app.run_test(size=(110, 36)) as pilot:
+        await settle(pilot)
+        dashboard = app.screen
+        configure = dashboard.actions.auto.configure
+
+        def delayed_configure(provider, mode, **kwargs):
+            if mode == "dry-run" and not release.is_set():
+                started.set()
+                assert release.wait(5)
+            return configure(provider, mode, **kwargs)
+
+        monkeypatch.setattr(dashboard.actions.auto, "configure", delayed_configure)
+        try:
+            await pilot.press("g")
+            assert await asyncio.to_thread(started.wait, 2)
+            auto = app.screen
+            await pilot.press("escape")
+            assert app.screen is auto
+            assert dashboard._busy
+            await pilot.press("t", "left", "enter")
+            assert auto._adjusting
+            assert auto._threshold == 89
+        finally:
+            release.set()
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert dashboard.actions.auto.status("codex")["threshold"] == 89
+        assert not auto._adjusting
+        await pilot.press("escape")
+        await settle(pilot)
+        assert app.screen is dashboard
+        assert dashboard.actions.auto.status("codex")["mode"] == "stopped"
+        assert not dashboard.actions.auto._workers
+
+
+@pytest.mark.asyncio
+async def test_busy_dashboard_does_not_open_an_unstarted_auto_view(monkeypatch):
+    codex = ManagedCodexSwitcher()
+    monkeypatch.setattr(codex_module, "CodexSwitcher", lambda: codex)
+    app = CswapApp(start="codex")
+    release = threading.Event()
+    async with app.run_test(size=(110, 36)) as pilot:
+        await settle(pilot)
+        dashboard = app.screen
+
+        def slow_action():
+            assert release.wait(5)
+            return {"ok": True, "message": "Finished"}
+
+        try:
+            dashboard._start_action("slow action", slow_action)
+            await pilot.press("g")
+            assert app.screen is dashboard
+        finally:
+            release.set()
+        await settle(pilot)
+        await pilot.press("g")
+        await settle(pilot)
+        assert isinstance(app.screen, AutoView)
+        assert dashboard.actions.auto.status("codex")["mode"] == "dry-run"

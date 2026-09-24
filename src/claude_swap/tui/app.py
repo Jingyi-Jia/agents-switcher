@@ -498,6 +498,7 @@ class CswapApp(App):
             self._claude_active = False
             while self.screen is not existing:
                 self.pop_screen()
+            existing.request_refresh()
             return
         try:
             screen = CodexScreen()

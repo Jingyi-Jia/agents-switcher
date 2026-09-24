@@ -158,12 +158,13 @@ class CodexScreen(DashboardScreen):
         self.refresh_status = message
         self.query_one("#codex-status", Static).update(message)
 
-    def _start_action(self, label: str, fn) -> None:
+    def _start_action(self, label: str, fn) -> bool:
         if self._busy:
             self.app.notify("Another Codex action is still running", severity="warning")
-            return
+            return False
         self._busy = True
         self.run_worker(partial(self._run_action, label, fn), thread=True, exit_on_error=False)
+        return True
 
     def _run_action(self, label: str, fn) -> None:
         try:
@@ -223,6 +224,9 @@ class CodexScreen(DashboardScreen):
         self.request_refresh()
 
     def action_open_auto(self) -> None:
+        if self._busy:
+            self.app.notify("Wait for the Codex action to finish", severity="warning")
+            return
         self.app.push_screen(CodexAutoScreen(self))
 
 
@@ -318,10 +322,11 @@ class CodexAutoScreen(AutoView):
         if not self._adjusting:
             return
         state = self.source.actions.auto.status("codex")
-        self.source._start_action("set threshold", partial(
+        if not self.source._start_action("set threshold", partial(
             self.source.actions.auto.configure, "codex", state["mode"],
             threshold=self._threshold, confirm=state["mode"] == "live",
-        ))
+        )):
+            return
         self._adjusting = False
         self.refresh_bindings()
 
