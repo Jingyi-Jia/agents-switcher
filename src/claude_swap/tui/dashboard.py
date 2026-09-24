@@ -25,8 +25,8 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, ListView, Static
 
-from claude_swap.client_support import CLAUDE_SWITCH_NOTICE
 from claude_swap.models import AccountsSnapshot
+from claude_swap.providers import PROVIDERS
 from claude_swap.tui.widgets import AccountItem, AccountsPanel, MenuItem
 
 if TYPE_CHECKING:
@@ -40,15 +40,18 @@ _BACK = ("← back", "back")
 
 
 class DashboardScreen(Screen):
+    provider = "claude"
+    status_id = None
+
     BINDINGS = [
         Binding("s", "open_switch", "Switch accounts"),
-        Binding("w", "app.open_watch", "Watch"),
+        Binding("w", "open_watch", "Watch"),
         Binding("p", "app.open_providers", "Providers"),
         Binding("escape,left", "menu_back", "Back", show=False),
         Binding("q", "app.quit", "Quit"),
         # Power shortcuts; the menu is the discoverable path.
-        Binding("g", "app.open_auto", "Auto view", show=False),
-        Binding("f", "app.refresh_full", "Refresh usage", show=False),
+        Binding("g", "open_auto", "Auto view", show=False),
+        Binding("f", "refresh_full", "Refresh usage", show=False),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
     ]
@@ -60,11 +63,21 @@ class DashboardScreen(Screen):
         # Stack of (title, entries); depth 1 = root menu.
         self._menu_stack: list[tuple[str, MenuEntries]] = []
 
+    @property
+    def controller(self):
+        return self.app
+
     def compose(self) -> ComposeResult:
-        yield Static(CLAUDE_SWITCH_NOTICE, id="claude-client-notice", markup=False)
-        yield AccountsPanel(id="accounts-panel")
+        yield Static(
+            PROVIDERS[self.provider].switch_notice,
+            id="claude-client-notice" if self.provider == "claude" else "codex-notice",
+            classes="provider-notice", markup=False,
+        )
+        yield AccountsPanel(source=self.controller, id="accounts-panel")
         yield Static("", id="menu-title")
         yield ListView(id="menu")
+        if self.status_id:
+            yield Static("", id=self.status_id, markup=False)
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -72,7 +85,7 @@ class DashboardScreen(Screen):
         await self._push_menu("menu", self._root_entries())
 
     def on_screen_resume(self) -> None:
-        self.app._claude_active = True
+        self.app._claude_active = self.provider == "claude"
 
     # -- menu plumbing --------------------------------------------------------
 
@@ -83,7 +96,8 @@ class DashboardScreen(Screen):
             ("Switch account…", "switch"),
             ("Watch accounts", "watch"),
             ("Auto-switch view", "auto"),
-            ("Codex accounts\u2026", "codex"),
+            ("Codex accounts…", "codex") if self.provider == "claude"
+            else ("Claude Code accounts…", "claude"),
             ("Add account…", "add-menu"),
             ("Disable / enable account…", "disable-menu"),
             ("Remove account…", "remove-menu"),
@@ -92,14 +106,14 @@ class DashboardScreen(Screen):
         ]
 
     def _add_entries(self) -> MenuEntries:
-        return [
-            ("From current Claude Code login", "add-login"),
-            ("From a setup-token / API key…", "add-token"),
-            _BACK,
-        ]
+        label = "Claude Code" if self.provider == "claude" else "Codex"
+        entries = [(f"From current {label} login", "add-login")]
+        if "token" in PROVIDERS[self.provider].capabilities:
+            entries.append(("From a setup-token / API key…", "add-token"))
+        return [*entries, _BACK]
 
     def _remove_entries(self) -> MenuEntries:
-        snap = self.app.snapshot
+        snap = self.controller.snapshot
         entries: MenuEntries = [
             (
                 f"{acc.number}  {f'{acc.alias} ({acc.email})' if acc.alias else acc.email}"
@@ -114,7 +128,7 @@ class DashboardScreen(Screen):
     def _disable_entries(self) -> MenuEntries:
         """One row per account, labelled with its current state and the action
         selecting it will take (enable a disabled one, disable an active one)."""
-        snap = self.app.snapshot
+        snap = self.controller.snapshot
         entries: MenuEntries = []
         for acc in (snap.accounts if snap else ()):
             name = f"{acc.alias} ({acc.email})" if acc.alias else acc.email
@@ -164,15 +178,18 @@ class DashboardScreen(Screen):
 
     async def _dispatch(self, action_id: str) -> None:
         app = self.app
+        controller = self.controller
         actions: dict[str, Callable[[], None]] = {
             "switch": self.action_open_switch,
-            "watch": app.action_open_watch,
-            "auto": app.action_open_auto,
+            "watch": self.action_open_watch,
+            "auto": self.action_open_auto,
             "codex": app.action_open_codex,
-            "add-login": app.action_add_current,
-            "add-token": app.action_add_token,
+            "claude": app.action_open_claude,
+            "add-login": controller.action_add_current,
             "quit": app.exit,
         }
+        if self.provider == "claude":
+            actions["add-token"] = controller.action_add_token
         if action_id == "back":
             await self._pop_menu()
         elif action_id == "add-menu":
@@ -181,12 +198,12 @@ class DashboardScreen(Screen):
             await self._push_menu("remove account", self._remove_entries())
         elif action_id.startswith("remove:"):
             number = action_id.split(":", 1)[1]
-            snap = app.snapshot
+            snap = controller.snapshot
             email = next(
                 (a.email for a in (snap.accounts if snap else ()) if a.number == number),
                 "?",
             )
-            app.confirm_remove(number, email)
+            controller.confirm_remove(number, email)
         elif action_id == "theme-menu":
             await self._push_menu("theme", self._theme_entries())
         elif action_id.startswith("theme:"):
@@ -198,7 +215,7 @@ class DashboardScreen(Screen):
             await self._push_menu("disable / enable", self._disable_entries())
         elif action_id.startswith("disable:"):
             number = action_id.split(":", 1)[1]
-            app.do_toggle_disabled(number)
+            controller.do_toggle_disabled(number)
             await self._pop_menu()
         else:
             actions[action_id]()
@@ -207,7 +224,16 @@ class DashboardScreen(Screen):
 
     def action_open_switch(self) -> None:
         if not isinstance(self.app.screen, SwitchScreen):
-            self.app.push_screen(SwitchScreen())
+            self.app.push_screen(SwitchScreen(source=self.controller))
+
+    def action_open_watch(self) -> None:
+        self.app.push_screen(WatchScreen(source=self.controller))
+
+    def action_open_auto(self) -> None:
+        self.controller.action_open_auto()
+
+    def action_refresh_full(self) -> None:
+        self.controller.action_refresh_full()
 
     async def action_menu_back(self) -> None:
         if len(self._menu_stack) > 1:
@@ -232,10 +258,15 @@ class AccountListScreen(Screen):
 
     app: "CswapApp"
 
-    def __init__(self) -> None:
+    def __init__(self, *, source=None) -> None:
         super().__init__()
+        self._source = source
         self._numbers: list[str] = []
         self._stamps: dict[str, float | None] = {}
+
+    @property
+    def source(self):
+        return self._source if self._source is not None else self.app
 
     def compose(self) -> ComposeResult:
         yield Static("", id="list-title")
@@ -243,7 +274,7 @@ class AccountListScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.watch(self.app, "snapshot", self._on_snapshot)
+        self.watch(self.source, "snapshot", self._on_snapshot)
 
     async def _on_snapshot(self, snap: AccountsSnapshot | None) -> None:
         if snap is None:
@@ -314,7 +345,7 @@ class SwitchScreen(AccountListScreen):
         # so "Switch" is visible in the footer; the action delegates right back
         # to the list cursor, so behavior is identical.
         Binding("enter", "select_highlighted", "Switch", priority=True),
-        Binding("b", "app.switch_best", "Best pick"),
+        Binding("b", "switch_best", "Best pick"),
         Binding("escape,q,s", "back", "Back"),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
@@ -328,8 +359,11 @@ class SwitchScreen(AccountListScreen):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item = event.item
         if isinstance(item, AccountItem):
-            self.app.do_switch(item.number)
+            self.source.do_switch(item.number)
             self.app.pop_screen()
+
+    def action_switch_best(self) -> None:
+        self.source.action_switch_best()
 
     def action_select_highlighted(self) -> None:
         listview = self.query_one("#accounts", ListView)
@@ -354,25 +388,25 @@ class WatchScreen(AccountListScreen):
     BINDINGS = [
         Binding("s", "toggle_select", "Switch"),
         Binding("enter", "select_highlighted", "Confirm", priority=True),
-        Binding("f", "app.refresh_full", "Refresh", show=False),
+        Binding("f", "refresh_full", "Refresh", show=False),
         Binding("escape,q", "back", "Back"),
         Binding("down,j", "nav_down", show=False),
         Binding("up,k", "nav_up", show=False),
     ]
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, source=None) -> None:
+        super().__init__(source=source)
         self._selecting = False
 
     def on_mount(self) -> None:
-        self.watch(self.app, "refresh_status", self._on_refresh_status)
+        self.watch(self.source, "refresh_status", self._on_refresh_status)
         self.query_one("#list-title", Static).update(self._title_text())
         super().on_mount()
 
     def _title_text(self) -> str:
         if self._selecting:
             return self._SELECT_TITLE
-        status = self.app.refresh_status
+        status = self.source.refresh_status
         return f"{self._WATCH_TITLE} · {status}" if status else self._WATCH_TITLE
 
     def _on_refresh_status(self, status: str) -> None:
@@ -396,7 +430,7 @@ class WatchScreen(AccountListScreen):
         listview = self.query_one("#accounts", ListView)
         title = self.query_one("#list-title", Static)
         if on:
-            snap = self.app.snapshot
+            snap = self.source.snapshot
             if snap is not None and snap.accounts:
                 listview.index = self._active_index(snap)
             listview.focus()
@@ -415,8 +449,11 @@ class WatchScreen(AccountListScreen):
             return  # e.g. a stray click while just watching
         item = event.item
         if isinstance(item, AccountItem):
-            self.app.do_switch(item.number)
+            self.source.do_switch(item.number)
             self._set_selecting(False)  # stay here, keep watching
+
+    def action_refresh_full(self) -> None:
+        self.source.action_refresh_full()
 
     def action_select_highlighted(self) -> None:
         if self._selecting:

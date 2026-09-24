@@ -49,6 +49,7 @@ class CswapApp(App):
     SNAPSHOT_AGE_NOTE_S = 60.0
 
     snapshot: reactive[AccountsSnapshot | None] = reactive(None)
+    threshold_pct: reactive[float | None] = reactive(None)
     refresh_status: reactive[str] = reactive("")
     busy: reactive[bool] = reactive(False)
 
@@ -469,8 +470,10 @@ class CswapApp(App):
 
     def _show_claude(self) -> None:
         self._claude_active = True
-        if any(isinstance(screen, DashboardScreen) for screen in self.screen_stack):
-            while not isinstance(self.screen, DashboardScreen):
+        dashboard = next((screen for screen in self.screen_stack if
+                          isinstance(screen, DashboardScreen) and screen.provider == "claude"), None)
+        if dashboard is not None:
+            while self.screen is not dashboard:
                 self.pop_screen()
         else:
             self.push_screen(DashboardScreen())
@@ -489,6 +492,13 @@ class CswapApp(App):
         """
         from claude_swap.tui.codex import CodexScreen
 
+        existing = next((screen for screen in self.screen_stack if isinstance(screen, CodexScreen)), None)
+        if existing is not None:
+            self._claude_requested = False
+            self._claude_active = False
+            while self.screen is not existing:
+                self.pop_screen()
+            return
         try:
             screen = CodexScreen()
         except Exception as exc:

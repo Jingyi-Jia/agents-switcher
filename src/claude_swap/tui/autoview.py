@@ -62,7 +62,7 @@ def event_text(event: AutoSwitchEvent, *, palette: Palette = Palette.DARK) -> Te
     return text
 
 
-class AutoScreen(Screen):
+class AutoView(Screen):
     BINDINGS = [
         Binding("l", "toggle_live", "Go live / dry-run"),
         Binding("t", "adjust_threshold", "Threshold"),
@@ -72,6 +72,22 @@ class AutoScreen(Screen):
         Binding("escape,q", "back", "Back"),
     ]
 
+    @property
+    def source(self):
+        return self.app
+
+    def compose(self) -> ComposeResult:
+        yield AccountsPanel(source=self.source, show_minis=False, id="auto-active-panel")
+        with Vertical(id="auto-top"):
+            with Horizontal(id="auto-title-row"):
+                yield Static(" DRY-RUN ", id="mode-badge", classes="dry")
+                yield Static("", id="auto-summary")
+            yield Static("", id="candidates")
+        yield RichLog(id="event-log", highlight=False, markup=False, wrap=True)
+        yield Footer()
+
+
+class AutoScreen(AutoView):
     app: "CswapApp"
 
     def __init__(self) -> None:
@@ -86,16 +102,6 @@ class AutoScreen(Screen):
         self._adjusting = False
         self._configured_threshold: float | None = None
         self._entry_threshold: float | None = None
-
-    def compose(self) -> ComposeResult:
-        yield AccountsPanel(show_minis=False, id="auto-active-panel")
-        with Vertical(id="auto-top"):
-            with Horizontal(id="auto-title-row"):
-                yield Static(" DRY-RUN ", id="mode-badge", classes="dry")
-                yield Static("", id="auto-summary")
-            yield Static("", id="candidates")
-        yield RichLog(id="event-log", highlight=False, markup=False, wrap=True)
-        yield Footer()
 
     # -- lifecycle ----------------------------------------------------------
 

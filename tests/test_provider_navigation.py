@@ -7,7 +7,7 @@ from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
-from textual.widgets import Input, ListView, Static
+from textual.widgets import ListView, Static
 
 from claude_swap import cli, tui
 from claude_swap.codex import cli as codex_cli
@@ -19,7 +19,7 @@ from claude_swap.tui.app import CswapApp
 from claude_swap.tui.codex import CodexScreen
 from claude_swap.tui.dashboard import DashboardScreen
 from claude_swap.tui.providers import ProviderScreen
-from claude_swap.tui.widgets import MenuItem
+from claude_swap.tui.widgets import AccountsPanel, MenuItem
 from tests.test_codex_tui import StubCodexSwitcher, account, healthy, on_credits
 from tests.test_tui import FakeSwitcher, make_account, settle
 
@@ -264,6 +264,13 @@ def managed_codex(monkeypatch):
     return switcher
 
 
+async def choose_menu(pilot, action_id):
+    menu = pilot.app.screen.query_one("#menu", ListView)
+    menu.index = next(i for i, item in enumerate(menu.query(MenuItem)) if item.action_id == action_id)
+    await pilot.press("enter")
+    await settle(pilot)
+
+
 @pytest.mark.asyncio
 async def test_codex_add_and_remove_require_confirmation(managed_codex):
     app = CswapApp(start="codex")
@@ -271,20 +278,22 @@ async def test_codex_add_and_remove_require_confirmation(managed_codex):
         await settle(pilot)
         screen = app.screen
         assert isinstance(screen, CodexScreen)
-        await pilot.click("#codex-add")
+        await choose_menu(pilot, "add-menu")
+        await choose_menu(pilot, "add-login")
         await pilot.press("n")
         await settle(pilot)
         assert managed_codex.calls == []
-        await pilot.click("#codex-add")
+        await choose_menu(pilot, "add-login")
         await pilot.press("y")
         await settle(pilot)
         assert managed_codex.calls == [("add",)]
-        screen.query_one(ListView).index = 1
-        await pilot.click("#codex-remove")
+        await choose_menu(pilot, "back")
+        await choose_menu(pilot, "remove-menu")
+        await choose_menu(pilot, "remove:2")
         await pilot.press("n")
         await settle(pilot)
         assert ("remove", "2") not in managed_codex.calls
-        await pilot.click("#codex-remove")
+        await choose_menu(pilot, "remove:2")
         await pilot.press("y")
         await settle(pilot)
         assert ("remove", "2") in managed_codex.calls
@@ -300,21 +309,23 @@ async def test_codex_disable_enable_and_best_preserve_eligibility(managed_codex)
     async with app.run_test(size=(110, 36)) as pilot:
         await settle(pilot)
         screen = app.screen
-        screen.query_one(ListView).index = 1
-        await pilot.click("#codex-disable")
+        await choose_menu(pilot, "disable-menu")
+        await choose_menu(pilot, "disable:2")
         await settle(pilot)
         assert managed_codex.list_accounts()[1].disabled
         assert (
             "disabled"
-            in screen.query(codex_module.CodexAccountItem)[1]._body.render().plain
+            in screen.query_one(AccountsPanel).render().plain
         )
-        await pilot.click("#codex-best")
+        await pilot.press("s", "b")
         await settle(pilot)
         assert managed_codex.switched_to == []
-        await pilot.click("#codex-disable")
+        await pilot.press("escape")
+        await choose_menu(pilot, "disable-menu")
+        await choose_menu(pilot, "disable:2")
         await settle(pilot)
         assert not managed_codex.list_accounts()[1].disabled
-        await pilot.click("#codex-best")
+        await pilot.press("s", "b")
         await settle(pilot)
         assert managed_codex.switched_to == ["2"]
 
@@ -333,26 +344,27 @@ async def test_codex_auto_dry_run_live_stop_and_exit(monkeypatch, managed_codex)
         await settle(pilot)
         screen = app.screen
         assert screen.actions.auto.status("codex")["mode"] == "stopped"
-        screen.query_one(Input).value = "85"
-        await pilot.click("#codex-dry-run")
+        await pilot.press("g")
+        await settle(pilot)
+        await pilot.press("t", "left", "left", "left", "left", "left", "enter")
         await settle(pilot)
         assert screen.actions.auto.status("codex")["mode"] == "dry-run"
         assert (85, True) in calls
-        await pilot.click("#codex-live")
+        await pilot.press("l")
         await pilot.press("n")
         await settle(pilot)
         assert screen.actions.auto.status("codex")["mode"] == "dry-run"
-        await pilot.click("#codex-live")
+        await pilot.press("l")
         await pilot.press("y")
         await settle(pilot)
         assert screen.actions.auto.status("codex")["mode"] == "live"
         assert (85, False) in calls
-        screen.query_one(Input).value = ""
-        await pilot.click("#codex-stop")
+        await pilot.press("escape")
         await settle(pilot)
         assert screen.actions.auto.status("codex")["mode"] == "stopped"
-        screen.query_one(Input).value = "85"
-        await pilot.click("#codex-dry-run")
+        await pilot.press("g")
+        await settle(pilot)
+        await pilot.press("escape")
         await settle(pilot)
         await pilot.press("p")
         await settle(pilot)

@@ -13,7 +13,8 @@ from claude_swap.codex.store import CodexAccount
 from claude_swap.codex.switcher import SwitchResult
 from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow
 from claude_swap.tui import codex as codex_screen_mod
-from claude_swap.tui.codex import CodexAccountItem, CodexScreen
+from claude_swap.tui.codex import CodexScreen
+from claude_swap.tui.widgets import AccountsPanel
 from tests.test_tui import FakeSwitcher, make_account, make_app, settle
 
 pytestmark = pytest.mark.asyncio
@@ -82,7 +83,7 @@ async def open_codex(tmp_path, pilot_ready=None):
 
 
 def row_text(screen) -> list[str]:
-    return [item._body.render().plain for item in screen.query(CodexAccountItem)]
+    return screen.query_one(AccountsPanel).render().plain.split("\n\n")
 
 
 class TestListing:
@@ -122,9 +123,7 @@ class TestListing:
             await settle(pilot)
             app.push_screen(CodexScreen())
             await settle(pilot)
-            from textual.widgets import Static
-
-            status = app.screen.query_one("#codex-status", Static)
+            status = app.screen.query_one(AccountsPanel)
             assert "codex add" in status.render().plain
 
     async def test_a_failed_quota_read_shows_on_its_own_row(self, tmp_path, stub):
@@ -164,6 +163,8 @@ class TestSwitching:
             await settle(pilot)
             app.push_screen(CodexScreen())
             await settle(pilot)
+            await pilot.press("s")
+            await settle(pilot)
             await pilot.press("down")
             await pilot.press("enter")
             await settle(pilot)
@@ -185,6 +186,8 @@ class TestSwitching:
             await settle(pilot)
             app.push_screen(CodexScreen())
             await settle(pilot)
+            await pilot.press("s")
+            await settle(pilot)
             await pilot.press("enter")
             await settle(pilot)
             from textual.widgets import Static
@@ -201,6 +204,8 @@ class TestSwitching:
         async with app.run_test(size=(100, 32)) as pilot:
             await settle(pilot)
             app.push_screen(CodexScreen())
+            await settle(pilot)
+            await pilot.press("s")
             await settle(pilot)
             await pilot.press("enter")
             await settle(pilot)
@@ -231,6 +236,8 @@ class TestStatusPinning:
             await settle(pilot)
             app.push_screen(CodexScreen())
             await settle(pilot)
+            await pilot.press("s")
+            await settle(pilot)
             await pilot.press("enter")
             await settle(pilot)
             # Let the follow-up reload finish, which is what used to clear it.
@@ -248,11 +255,13 @@ class TestStatusPinning:
             await settle(pilot)
             app.push_screen(CodexScreen())
             await settle(pilot)
+            await pilot.press("s")
+            await settle(pilot)
             await pilot.press("enter")
             await settle(pilot)
             assert "Could not switch" in app.screen.query_one(
                 "#codex-status", Static).render().plain
-            await pilot.press("r")   # the user asked for fresh state
+            await pilot.press("f")
             await settle(pilot)
             assert app.screen.query_one("#codex-status", Static).render().plain == ""
 
