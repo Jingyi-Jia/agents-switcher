@@ -126,6 +126,11 @@ def usage_rows(
     if not isinstance(last_good, dict):
         return []
     rows: list[tuple[str, float, str, str]] = []
+    if "windows" in last_good:
+        for window in last_good["windows"]:
+            reset, reset_full = _reset_parts(window, now)
+            rows.append((window["label"], float(window["pct"]), reset or "", reset_full or ""))
+        return rows
     spend = last_good.get("spend")
     if spend:
         amounts = f"${spend['used']:,.2f} / ${spend['limit']:,.2f}"
@@ -271,6 +276,19 @@ def mini_account_text(
     last_good = acc.usage.last_good
     fetched_at = acc.usage.fetched_at
     stale = acc.usage.age_s is not None and acc.usage.age_s > STALE_OK_S
+    if isinstance(last_good, dict) and "windows" in last_good:
+        rows = usage_rows(last_good, now, fetched_at)
+        for i, (label, pct, suffix, _full) in enumerate(rows):
+            if i:
+                text.append(" · ", style=palette.track)
+            text.append(f"{label} ", style=palette.muted)
+            color = palette.severity(pct)
+            text.append(f"{pct:3.0f}%", style=f"{color} dim" if stale else color)
+            if pct >= 100 and suffix:
+                text.append(f" ({suffix})", style=palette.muted)
+        if not rows:
+            text.append("usage unknown", style=palette.muted)
+        return text
     parts = 0
     for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
         window = last_good.get(key) if isinstance(last_good, dict) else None
@@ -311,25 +329,31 @@ class AccountsPanel(Static):
     one-line minis (in slot order, expanded in place). The dashboard's — and
     with ``show_minis=False`` the auto screen's — always-visible monitor."""
 
-    def __init__(self, *, show_minis: bool = True, id: str | None = None) -> None:
+    def __init__(self, *, source=None, show_minis: bool = True, id: str | None = None) -> None:
         super().__init__(id=id)
+        self._source = source
         self._show_minis = show_minis
 
+    @property
+    def source(self):
+        return self._source if self._source is not None else self.app
+
     def on_mount(self) -> None:
-        self.watch(self.app, "snapshot", lambda _snap: self.refresh(layout=True))
+        self.watch(self.source, "snapshot", lambda _snap: self.refresh(layout=True))
+        self.watch(self.source, "threshold_pct", lambda _value: self.refresh())
         self.watch(self.app, "theme", lambda _t: self.refresh(layout=True))
 
     def render(self) -> Text:
         app: "CswapApp" = self.app  # type: ignore[assignment]
         palette = Palette.from_theme(app.current_theme)
-        snap = app.snapshot
+        snap = self.source.snapshot
         if snap is None:
             return Text("loading…", style=palette.muted)
         if not snap.accounts:
             return Text(
-                "No managed accounts yet.\n"
+                getattr(self.source, "empty_message", "No managed accounts yet.\n"
                 "Use the menu below: Add account — from your current "
-                "Claude Code login, or from a setup-token / API key.",
+                "Claude Code login, or from a setup-token / API key."),
                 style=palette.muted,
             )
         now = time.time()
@@ -339,7 +363,7 @@ class AccountsPanel(Static):
             if acc.is_active:
                 blocks.append(
                     account_card_text(
-                        acc, width, threshold=app.threshold_pct, now=now,
+                        acc, width, threshold=self.source.threshold_pct, now=now,
                         palette=palette,
                     )
                 )
