@@ -23,8 +23,11 @@ needs, and rotation is not free.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
+import re
 import secrets
 import time
 from http import HTTPStatus
@@ -335,6 +338,16 @@ class _Server(ThreadingHTTPServer):
 
 
 def _make_handler(state: DashboardState, token: str):
+    script_hashes = " ".join(
+        "'sha256-" + base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii") + "'"
+        for script in re.findall(r"<script>(.*?)</script>", PAGE_HTML, re.DOTALL)
+    )
+    policy = (
+        f"default-src 'none'; script-src {script_hashes}; style-src 'unsafe-inline'; "
+        "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
+        "frame-ancestors 'none'; form-action 'none'"
+    )
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "agent-switch"
 
@@ -361,6 +374,8 @@ def _make_handler(state: DashboardState, token: str):
             self.send_header("Cache-Control", "no-store")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", policy)
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             self.end_headers()
             self.wfile.write(body)
 

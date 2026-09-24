@@ -145,6 +145,22 @@ PAGE_HTML = r"""<!doctype html>
   .check input { flex: none; margin-top: 4px; }
   .dialog-actions { justify-content: flex-end; margin-bottom: 0; }
   #dialog-feedback { color: var(--ember); }
+  .guide { background: var(--paper); border: 1px solid var(--hairline); border-radius: 24px; padding: 24px; margin-bottom: 20px; box-shadow: var(--shadow); }
+  .guide-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  .guide h2 { margin: 4px 0 0; font-size: 22px; font-weight: 500; letter-spacing: -.03em; }
+  .guide h3 { margin: 0; font-size: 14px; font-weight: 500; }
+  .guide p, .guide li { font-size: 13px; overflow-wrap: anywhere; }
+  .guide-intro { color: var(--mid); max-width: 72ch; }
+  .guide-providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; margin-top: 20px; }
+  .guide-provider { background: var(--panel); border-radius: 18px; padding: 16px; min-width: 0; }
+  .guide-provider .pill { margin-top: 10px; }
+  .guide-provider .actions { margin-bottom: 0; }
+  .guide a { color: var(--ink); text-underline-offset: 3px; font-size: 12px; }
+  .guide a:focus-visible, .guide h2:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+  .guide-steps { padding-left: 22px; margin-block: 18px; }
+  .guide-steps li { padding: 3px 0 3px 4px; }
+  .guide-boundary { border-top: 1px solid var(--hairline); padding-top: 14px; }
+  .guide-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
   [hidden] { display: none !important; }
 
   /* -- meters: one per window, ink on a lighter step of the same ramp ---- */
@@ -180,7 +196,7 @@ PAGE_HTML = r"""<!doctype html>
 
   @media (max-width: 480px) {
     .wrap { padding-inline: 16px; }
-    .tile, .card, .provider { border-radius: 18px; padding: 16px; }
+    .tile, .card, .provider, .guide { border-radius: 18px; padding: 16px; }
     .value { font-size: 26px; }
     .top { flex-wrap: wrap; }
   }
@@ -196,8 +212,9 @@ PAGE_HTML = r"""<!doctype html>
 <body>
 <div class="wrap">
   <header>
-    <h1>agent-switch</h1>
+    <h1 id="app-title">agent-switch</h1>
     <span class="stamp" id="stamp">loading…</span>
+    <button type="button" id="help-toggle" aria-controls="desktop-guide" aria-expanded="false" hidden>Help</button>
   </header>
 
   <div class="preferences">
@@ -205,6 +222,24 @@ PAGE_HTML = r"""<!doctype html>
     <label for="watch"><input id="watch" type="checkbox" checked> Live updates</label>
     <span id="watch-status">Every 20 seconds · auto-switch runs independently</span>
   </div>
+
+  <section class="guide" id="desktop-guide" aria-labelledby="guide-title" hidden>
+    <div class="guide-heading">
+      <div><div class="label" id="guide-label">Getting started</div><h2 id="guide-title" tabindex="-1">Start with an existing CLI login</h2></div>
+      <button type="button" id="help-close">Hide help</button>
+    </div>
+    <p class="guide-intro">Keep your Claude Code and Codex CLI accounts in one place. This app includes its own runtime; you don't need to install Python or Node to run it. The provider CLIs and their sign-ins are separate prerequisites.</p>
+    <div class="guide-providers" id="guide-providers"></div>
+    <ol class="guide-steps">
+      <li><strong>Set up a provider CLI.</strong> Install it and sign in through that CLI, using its official setup guide. Then return here and choose Check again.</li>
+      <li><strong>Save the current login.</strong> Add existing login saves that provider's current CLI credentials for switching later. It doesn't start a new sign-in.</li>
+      <li><strong>Add another account when you're ready.</strong> Sign in to a different account in the same CLI, then add that login here. Switch by hand, or try Dry run before enabling live auto-switch.</li>
+    </ol>
+    <p class="guide-boundary">CLI credentials only. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
+    <p class="hint">Paid-credit accounts remain manual-only; auto-switch never chooses them. After switching, follow any provider restart notice shown below.</p>
+    <p class="hint">Closing the app stops its automation. Pausing live updates only pauses this view.</p>
+    <div class="guide-footer"><button type="button" id="guide-check" data-action>Check again</button><span class="hint" id="desktop-meta"></span></div>
+  </section>
 
   <section class="kpis" id="kpis" aria-label="Active accounts"></section>
 
@@ -235,8 +270,79 @@ const el = (tag, cls, text) => {
 };
 const providers = {claude: "Claude Code", codex: "Codex"};
 const providerUI = {};
+const helpUI = {};
+const setupLinks = {claude: "https://code.claude.com/docs/en/setup", codex: "https://developers.openai.com/codex/cli"};
 let state = {}, busy = false, requestVersion = 0, loadingVersion = 0, toastTimer;
 let dialogAction = null, dialogOpener = null;
+let helpRequested = false, helpDismissed = false;
+
+function isDesktop() {
+  return !!state.desktop;
+}
+
+function automationLifecycle() {
+  return isDesktop()
+    ? "Runs only while this app is open. Closing the app stops its automation. Pausing live updates does not stop it; use Stop. These controls apply to this app session only."
+    : "Runs only while the local dashboard server is open. Closing this tab or pausing live updates does not stop it. These controls apply to this server session only.";
+}
+
+function setupHelp(id) {
+  const ui = helpUI[id] = {};
+  const host = el("article", "guide-provider");
+  host.id = id + "-setup";
+  const title = el("h3", null, providers[id] + " CLI");
+  title.id = id + "-setup-title";
+  host.setAttribute("aria-labelledby", title.id);
+  ui.installed = el("span", "pill");
+  ui.login = el("p");
+  ui.next = el("p", "hint");
+  ui.add = actionButton("Add existing login", () => act("/api/add", {provider: id}, ui.add, "adding…"));
+  ui.add.title = "Save or refresh this provider's current CLI login. This does not sign in.";
+  block(ui.add, true);
+  const link = el("a", null, "Official setup guide ↗");
+  link.href = setupLinks[id];
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.setAttribute("aria-label", providers[id] + " CLI official setup guide (opens in browser)");
+  const actions = el("div", "actions");
+  actions.append(ui.add, link);
+  host.append(title, ui.installed, ui.login, ui.next, actions);
+  $("guide-providers").appendChild(host);
+}
+
+function renderHelp() {
+  const desktop = isDesktop();
+  const managed = Object.keys(providers).some((id) => (state[id]?.accounts || []).length);
+  const guide = $("desktop-guide");
+  $("help-toggle").hidden = !desktop;
+  guide.hidden = !desktop || !(helpRequested || (!managed && !helpDismissed));
+  $("help-toggle").setAttribute("aria-expanded", String(!guide.hidden));
+  if (guide.hidden && guide.contains(document.activeElement)) $("help-toggle").focus();
+  $("app-title").textContent = desktop ? "Agent Switch" : "agent-switch";
+  document.title = desktop ? "Agent Switch" : "agent-switch";
+  if (!desktop) return;
+  $("guide-label").textContent = managed ? "Help" : "Getting started";
+  $("guide-title").textContent = managed ? "Account switching, step by step" : "Start with an existing CLI login";
+  const platform = {darwin: "macOS", win32: "Windows", linux: "Linux"}[state.desktop.platform] || "Desktop";
+  $("desktop-meta").textContent = `Agent Switch ${state.desktop.version || ""} · ${platform}`;
+  for (const id of Object.keys(providers)) {
+    const ui = helpUI[id], data = state[id] || {};
+    const installed = state.desktop.providers?.[id]?.installed;
+    const live = data.liveLogin;
+    const count = (data.accounts || []).length;
+    ui.installed.textContent = installed === true ? "CLI detected" : installed === false ? "CLI not detected" : "CLI detection unavailable";
+    ui.login.textContent = live
+      ? `Signed in as ${live.email || "an existing CLI account"}${live.managed ? " · already managed" : " · not managed yet"}.`
+      : count ? `${count} managed ${count === 1 ? "account" : "accounts"}. No current CLI login detected.` : data.available ? "No CLI login detected yet." : "Current CLI login could not be checked.";
+    ui.next.textContent = !data.available
+      ? "Account access is unavailable. Check the provider's status below, then try Check again."
+      : live
+        ? live.managed ? "This login is saved. Add existing login can refresh its saved credentials." : "Add existing login saves this account without signing you in again."
+        : "Sign in through this provider's CLI, then choose Check again.";
+    if (installed === false) ui.next.textContent += " If the CLI isn't installed, use the official setup guide. If you just installed it, reopen this app if detection hasn't updated.";
+    block(ui.add, !live || !supports(data, "add"));
+  }
+}
 
 async function api(path, options) {
   const opts = Object.assign({headers: {"X-Auth-Token": TOKEN}}, options || {});
@@ -399,7 +505,7 @@ function adoptRow(provider, live) {
   t.appendChild(document.createTextNode(" — not managed yet."));
   r.appendChild(t);
   r.appendChild(el("div", "grow"));
-  r.appendChild(el("span", "hint", "Use Add current to manage it."));
+  r.appendChild(el("span", "hint", isDesktop() ? "Use Add existing login to manage it." : "Use Add current to manage it."));
   return r;
 }
 
@@ -458,7 +564,8 @@ function setupProvider(id) {
   ui.status = el("span", "pill", "unavailable");
   heading.appendChild(ui.status);
   auto.appendChild(heading);
-  auto.appendChild(el("p", "hint", "Runs only while the local dashboard server is open. Closing this tab or pausing live updates does not stop it. These controls apply to this server session only."));
+  ui.lifecycle = el("p", "hint", automationLifecycle());
+  auto.appendChild(ui.lifecycle);
   const field = el("div", "threshold-field");
   const label = el("label", "hint", "Session threshold (% used)");
   label.htmlFor = id + "-threshold";
@@ -503,8 +610,13 @@ function renderAccounts(id, data, force = false) {
   const live = data.liveLogin;
   if (live && !live.managed) host.appendChild(adoptRow(id, live));
   else if (!n) {
-    const e = el("div", "empty", "Nothing managed and nothing signed in. Run ");
-    e.appendChild(el("code", null, `agent-switch ${id === "codex" ? "codex " : ""}add`));
+    const e = el("div", "empty");
+    if (isDesktop()) {
+      e.textContent = "No accounts saved yet. Sign in through this provider's CLI, then use Add existing login. Open Help for setup instructions.";
+    } else {
+      e.textContent = "Nothing managed and nothing signed in. Run ";
+      e.appendChild(el("code", null, `agent-switch ${id === "codex" ? "codex " : ""}add`));
+    }
     host.appendChild(e);
   }
   if (focused) {
@@ -521,6 +633,8 @@ function updateProvider(id, data, force = false) {
   notice.textContent = data.switchNotice || (id === "claude" ? "CLI only. Claude desktop, including the Code tab, has a separate sign-in and is not switched here." : "");
   notice.hidden = !notice.textContent;
   Object.entries(ui.buttons).forEach(([capability, button]) => block(button, !supports(data, capability)));
+  ui.buttons.add.textContent = isDesktop() ? "Add existing login" : "Add current";
+  ui.lifecycle.textContent = automationLifecycle();
   const auto = data.auto || {};
   const available = supports(data, "auto");
   ui.mode = ["dry-run", "live", "stopped"].includes(auto.mode) ? auto.mode : "stopped";
@@ -537,7 +651,7 @@ function updateProvider(id, data, force = false) {
   ui.error.textContent = auto.error || "";
   ui.error.hidden = !auto.error;
   const events = (auto.events || []).slice(-20);
-  ui.reason.textContent = available ? (events.length ? events[events.length - 1].message : "No auto-switch events yet.") : "Auto-switch is not available from this provider/server.";
+  ui.reason.textContent = available ? (events.length ? events[events.length - 1].message : "No auto-switch events yet.") : isDesktop() ? "Auto-switch is not available for this provider in the app." : "Auto-switch is not available from this provider/server.";
   ui.events.replaceChildren();
   events.forEach((event) => {
     const item = el("li");
@@ -561,12 +675,13 @@ async function load(force = false, silent = false) {
       return false;
     }
     state = body;
+    renderHelp();
     $("kpis").replaceChildren(tile("Claude Code", body.claude || {}), tile("Codex", body.codex || {}));
     Object.keys(providers).forEach((id) => updateProvider(id, body[id] || {}, force));
     $("stamp").textContent = "updated " + new Date().toLocaleTimeString();
     return true;
   } catch {
-    if (version === requestVersion && !silent) toast("Could not reach agent-switch. Check that the local dashboard server is still open.", true);
+    if (version === requestVersion && !silent) toast(isDesktop() ? "Could not reach the app's local service. Reopen Agent Switch and try again." : "Could not reach agent-switch. Check that the local dashboard server is still open.", true);
     return false;
   } finally {
     if (loadingVersion === version) loadingVersion = 0;
@@ -601,7 +716,7 @@ async function act(path, payload, button, pending) {
     let message = safeMessage(body.message || body.error || body.reason || (noSwitch ? "No account was switched." : success ? "Request completed." : "Request failed."), payload.token);
     if (path === "/api/auto" && success && payload.threshold !== undefined) providerUI[payload.provider].dirty = false;
     const refreshed = await load(true, true);
-    if (!refreshed) message += " State could not be refreshed; check the local dashboard server.";
+    if (!refreshed) message += isDesktop() ? " State could not be refreshed; try Refresh usage or reopen the app." : " State could not be refreshed; check the local dashboard server.";
     toast(message, !success || !!body.restartRequired || !refreshed, noSwitch);
     if ($("action-dialog").open && !success) {
       $("dialog-feedback").textContent = message;
@@ -609,7 +724,7 @@ async function act(path, payload, button, pending) {
     }
     return success;
   } catch {
-    const message = "Could not complete the request. Check the local dashboard server and refresh the state before retrying.";
+    const message = isDesktop() ? "Could not complete the request. Try Refresh usage or reopen the app before retrying." : "Could not complete the request. Check the local dashboard server and refresh the state before retrying.";
     toast(message, true);
     if ($("action-dialog").open) {
       $("dialog-feedback").textContent = message;
@@ -650,7 +765,7 @@ function setAuto(id, mode, opener, stop = false) {
   const submit = (button) => act("/api/auto", payload, button, "saving…");
   if (mode === "live") {
     payload.confirm = true;
-    confirmAction({title: `Start live auto-switch for ${providers[id]}?`, description: `This can change the active CLI account automatically, using a ${payload.threshold}% used-quota threshold. It runs only while this local dashboard server is open. Closing the tab does not stop it; use Stop.`, label: "Confirm live mode", opener, submit});
+    confirmAction({title: `Start live auto-switch for ${providers[id]}?`, description: `This can change the active CLI account automatically, using a ${payload.threshold}% used-quota threshold. ${automationLifecycle()}`, label: "Confirm live mode", opener, submit});
   } else {
     submit(opener);
   }
@@ -660,7 +775,7 @@ function tokenDialog(opener) {
   let credential, email, slot, overwrite;
   confirmAction({
     title: "Add Claude token / API key",
-    description: "Save a Claude credential for CLI use. Desktop sign-in, including the Code tab, stays separate. The credential is sent only to this local dashboard server and is never shown in activity messages.",
+    description: `Save a Claude credential for CLI use. Claude Desktop sign-in, including the Code tab, stays separate. The credential is sent only to ${isDesktop() ? "this app's local service" : "this local dashboard server"} and is never shown in activity messages.`,
     label: "Save credential", opener,
     fields: (host) => {
       const field = (id, text, type) => {
@@ -738,6 +853,19 @@ $("watch").onchange = () => {
   $("watch-status").textContent = $("watch").checked ? "Every 20 seconds · auto-switch runs independently" : "Updates paused · auto-switch is not stopped";
   if ($("watch").checked && !busy && !$("action-dialog").open) load();
 };
+$("help-toggle").onclick = () => {
+  helpRequested = true;
+  renderHelp();
+  $("guide-title").focus();
+};
+$("help-close").onclick = () => {
+  helpRequested = false;
+  helpDismissed = true;
+  renderHelp();
+  $("help-toggle").focus();
+};
+$("guide-check").onclick = () => refreshUsage($("guide-check"));
+Object.keys(providers).forEach(setupHelp);
 Object.keys(providers).forEach(setupProvider);
 load();
 setInterval(() => { if ($("watch").checked && !busy && !$("action-dialog").open) load(); }, 20000);

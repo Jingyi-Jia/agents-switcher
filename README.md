@@ -25,6 +25,33 @@ uv tool install git+https://github.com/Jingyi-Jia/agents-switcher
 
 It coexists with an existing `cswap` install; the command names and the distribution name are both distinct.
 
+### Standalone desktop app
+
+**Agent Switch** is a standalone desktop window for the same account engines.
+When installers are available, download the matching asset from
+[GitHub Releases](https://github.com/jingyi-jia/agents-switcher/releases):
+
+- **macOS 13+**: choose the `mac-arm64.dmg` for Apple Silicon or `mac-x64.dmg`
+  for Intel, then drag Agent Switch to Applications.
+- **Windows 10+ (x64)**: run the `win-x64.exe` installer and open Agent Switch
+  from Start.
+- **Linux (x64)**: use the `.deb` on Debian/Ubuntu or the `.AppImage` on compatible
+  desktops. Ubuntu 22.04 is the build baseline; a `.tar.gz` fallback is also built.
+
+The installer bundles Electron, Python and the app dependencies: **no Python,
+uv, Node.js or npm installation is needed to use it**. The provider CLIs are not
+bundled. Install Claude Code and/or Codex and sign in there first, then add the
+current login in Agent Switch. Claude Desktop has its own separate login, and
+the provider safety rules below still apply.
+
+Public macOS downloads require Developer ID signing and notarization; Windows
+downloads require code signing. Those credentials must be provisioned before a
+trusted public launch. Unsigned CI artifacts are developer previews, not
+recommended end-user downloads; do not disable OS security checks to open them.
+There is no auto-updater yet: use **Help → Download updates** to open Releases and install
+updates manually. See [desktop installation and build instructions](desktop/README.md)
+for platform requirements, preview limitations and release-signing setup.
+
 ## Choose a provider
 
 Claude Code and Codex are separate providers, with independent account stores and
@@ -131,7 +158,9 @@ agent-switch app install              # .app (macOS) / .desktop (Linux) / Start 
 agent-switch tray                     # quota in the menu bar / system tray
 ```
 
-Both are launchers for the dashboard — there is no separate application and no duplicated logic. A machine with no desktop simply never installs one; the CLI and TUI are unaffected.
+These Python-installed launchers open the browser dashboard and are separate from
+the standalone desktop installer above. A machine with no desktop simply never
+installs a launcher; the CLI and TUI are unaffected.
 
 ## Also fixed here
 
