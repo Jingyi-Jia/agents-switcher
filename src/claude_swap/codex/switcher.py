@@ -121,12 +121,12 @@ class CodexSwitcher:
         """What Codex is logged in as right now."""
         live = read_auth()
         if not has_live_login(live):
-            return CodexStatus(False, None, None, self.store.active_number())
+            return CodexStatus(False, None, None, None)
         identity = identity_from_auth(live)
         account = (
             self.store.find_by_account_id(identity.account_id) if identity else None
         )
-        return CodexStatus(True, identity, account, self.store.active_number())
+        return CodexStatus(True, identity, account, account.number if account else None)
 
     def list_accounts(self) -> list[CodexAccount]:
         return list(self.store.accounts().values())

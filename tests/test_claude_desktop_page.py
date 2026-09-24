@@ -3,6 +3,41 @@
 from tests.test_web_page_actions import node, run_page
 
 
+def test_disabled_launch_controls_explain_how_to_quit_and_recheck(node):
+    run_page(node, r"""
+apiState.claudeDesktop = {available: true, canCreate: true, supported: true, installed: true,
+  running: true, profiles: [{id: 'a'.repeat(32), name: 'Work'}]};
+await load();
+assert.match($('claude-desktop-status').className, /launch-blocked/);
+for (const open of [button('claude-desktop-profiles', 'Open'), button('claude-desktop-actions', 'Open usual Claude (default)')]) {
+  assert.equal(open.disabled, true);
+  assert.match(open.title, /Fully quit Claude Desktop.*⌘Q.*Check again.*Closing its window is not enough/);
+  assert.equal(open.attributes['aria-describedby'], 'claude-desktop-status');
+}
+apiState.claudeDesktop.running = false;
+await button('claude-desktop-actions', 'Check again').click();
+assert.equal($('claude-desktop-status').className, 'notice');
+for (const open of [button('claude-desktop-profiles', 'Open'), button('claude-desktop-actions', 'Open usual Claude (default)')]) {
+  assert.equal(open.disabled, false);
+  assert.equal(open.title, '');
+}
+""")
+
+
+def test_missing_installation_does_not_claim_a_failed_process_check(node):
+    run_page(node, r"""
+apiState.claudeDesktop = {available: false, canCreate: true, supported: true, installed: false,
+  running: null, profiles: [{id: 'a'.repeat(32), name: 'Work'}],
+  error: 'Install official Claude Desktop in /Applications/Claude.app, then check again.'};
+await load();
+assert.match($('claude-desktop-status').textContent, /not installed.*Applications\/Claude.app/);
+assert.doesNotMatch($('claude-desktop-status').textContent, /process status is unknown|Fully quit/);
+assert.match(button('claude-desktop-profiles', 'Open').title, /Applications\/Claude.app/);
+assert.equal(button('claude-desktop-profiles', 'Open').disabled, true);
+assert.equal(button('claude-desktop-actions', 'Create empty profile').disabled, false);
+""")
+
+
 def test_codex_comes_first_and_claude_panels_stay_together(node):
     run_page(node, r"""
 await load();

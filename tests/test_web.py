@@ -15,7 +15,7 @@ import urllib.request
 import pytest
 
 from claude_swap.codex.store import CodexAccount
-from claude_swap.codex.switcher import SwitchResult
+from claude_swap.codex.switcher import CodexStatus, SwitchResult
 from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow
 from claude_swap.web.server import DashboardState, serve
 
@@ -24,8 +24,8 @@ class StubCodex:
     def __init__(self, accounts=(), usage=None, active="1", result=None, error=None):
         self._accounts, self._usage = list(accounts), dict(usage or {})
         self._result, self._error = result, error
+        self.active = active
         self.switched: list[str] = []
-        outer = self
 
         class Store:
             def active_number(self):
@@ -36,6 +36,13 @@ class StubCodex:
     def list_accounts(self):
         return list(self._accounts)
 
+    def status(self):
+        account = next((a for a in self._accounts if a.number == self.active), None)
+        return CodexStatus(
+            bool(account), account.identity if account else None,
+            account, account.number if account else None,
+        )
+
     def usage_all(self):
         return dict(self._usage)
 
@@ -43,6 +50,7 @@ class StubCodex:
         self.switched.append(number)
         if self._error:
             raise self._error
+        self.active = number
         return self._result
 
 
@@ -271,7 +279,7 @@ class TestLiveLogin:
 
     def test_no_login_reports_none_rather_than_failing(self, dashboard):
         codex = StubCodex()
-        codex.status = lambda: (_ for _ in ()).throw(RuntimeError("no codex"))
+        codex.status = lambda: CodexStatus(False, None, None, None)
         base, token, _ = dashboard(codex=codex)
         payload = json.loads(get(base, "/api/state", token=token)[1])
         assert payload["codex"]["liveLogin"] is None

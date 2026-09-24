@@ -200,7 +200,8 @@ class DashboardState:
             return {"available": False, "error": "not configured", "accounts": []}
         try:
             managed = self._codex.list_accounts()
-            active = self._codex.store.active_number()
+            status = self._codex.status()
+            active = status.active_number
             usage = self._codex.usage_all() if managed else {}
             accounts = []
             for account in managed:
@@ -242,16 +243,12 @@ class DashboardState:
                     })
                 accounts.append(entry)
             live = None
-            try:
-                status = self._codex.status()
-                if status.logged_in and status.identity:
-                    live = {
-                        "email": status.identity.email,
-                        "plan": status.identity.plan,
-                        "managed": status.is_managed,
-                    }
-            except Exception:  # noqa: BLE001 - a label, never fatal
-                live = None
+            if status.logged_in and status.identity:
+                live = {
+                    "email": status.identity.email,
+                    "plan": status.identity.plan,
+                    "managed": status.is_managed,
+                }
             return {"available": True, "activeNumber": active,
                     "accounts": accounts, "liveLogin": live}
         except Exception as e:  # noqa: BLE001 - reported, never fatal

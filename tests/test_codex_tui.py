@@ -10,7 +10,7 @@ import pytest
 
 from claude_swap.codex import switcher as switcher_mod
 from claude_swap.codex.store import CodexAccount
-from claude_swap.codex.switcher import SwitchResult
+from claude_swap.codex.switcher import CodexStatus, SwitchResult
 from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow
 from claude_swap.tui import codex as codex_screen_mod
 from claude_swap.tui.codex import CodexScreen
@@ -45,6 +45,7 @@ class StubCodexSwitcher:
         self.switched_to: list[str] = []
         self._switch_result = switch_result
         self._switch_error = switch_error
+        self.active = active
 
         class Store:
             root = None
@@ -57,6 +58,13 @@ class StubCodexSwitcher:
     def list_accounts(self):
         return list(self._accounts)
 
+    def status(self):
+        account = next((a for a in self._accounts if a.number == self.active), None)
+        return CodexStatus(
+            bool(account), account.identity if account else None,
+            account, account.number if account else None,
+        )
+
     def usage_all(self):
         return dict(self._usage)
 
@@ -64,6 +72,7 @@ class StubCodexSwitcher:
         self.switched_to.append(number)
         if self._switch_error:
             raise self._switch_error
+        self.active = number
         return self._switch_result
 
 

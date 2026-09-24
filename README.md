@@ -127,6 +127,12 @@ not import a Desktop session.
    (default)**. Launching Claude normally from the Dock also uses its usual profile,
    not the last named profile chosen here.
 
+If **Open** is disabled, read the status box above it. A running Claude app must
+be fully quit with **⌘Q** on Mac before choosing **Check again**. If Claude is not
+detected, move the official app into one of the supported installation locations
+above. A failed process check or unreadable profile registry also blocks launch;
+creating a profile does not bypass those checks.
+
 This uses Claude's `--user-data-dir` launch flag without copying session cookies,
 importing tokens, changing CLI credentials, modifying the official app, or
 force-quitting it. The feature only confirms that a launch was requested, not
@@ -165,6 +171,12 @@ For every switch:
 1. **Quit Codex completely**, including its desktop app and terminal sessions.
 2. Run `agent-switch codex switch work` (or select a saved account in Agent Switch).
 3. Reopen Codex and verify the account before continuing work.
+
+The active badge follows the managed account in Codex's current `auth.json`, not
+the last slot selected in Agent Switch. Signing in outside Agent Switch can
+change it. This reports the login file, not the account held in a running client's
+memory. **Unavailable** quota means a request failed; **Not reported** means no
+quota was supplied. Neither means the account has zero quota left.
 
 Codex holds credentials in memory and rotates refresh tokens. Switching the file
 does not move an already-running client to another account. The app/dashboard/TUI

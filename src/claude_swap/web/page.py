@@ -86,6 +86,7 @@ PAGE_HTML = r"""<!doctype html>
   /* -- provider panels: a tonal step, not a divider ---------------------- */
   .provider { background: var(--panel); border-radius: 24px; padding: 20px; margin-bottom: 12px; }
   #claude-group { min-width: 0; }
+  #claude-desktop-status.launch-blocked { background: var(--paper); border: 1px solid var(--hairline); border-radius: 12px; padding: 12px; color: var(--ink); }
   .provider > h2 { font-size: 12px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--mid); margin: 0 0 12px 4px; }
   .provider > h2 span { color: var(--mid); font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: 8px; }
 
@@ -414,7 +415,11 @@ function tile(name, data) {
     t.appendChild(v);
     const s = el("div", "sub"); s.appendChild(el("span", "pill solid", "paid credits")); t.appendChild(s);
   } else if (left === null) {
-    v.textContent = "?"; t.appendChild(v); t.appendChild(el("div", "sub", active.sentinel || active.error || "usage unknown"));
+    v.textContent = active.error ? "Unavailable" : "Not reported";
+    t.appendChild(v);
+    const detail = el("div", "sub", active.sentinel || active.error || "The provider has not reported quota for this account.");
+    detail.title = detail.textContent;
+    t.appendChild(detail);
   } else {
     v.textContent = left + "%"; v.appendChild(el("small", null, "left"));
     if (left <= 0) v.classList.add("ember");
@@ -571,13 +576,20 @@ function renderDesktopProfiles(data) {
     : !data.installed ? "Claude Desktop is not installed in a supported location."
     : !data.available ? "Opening Claude Desktop profiles is unavailable."
     : "";
-  $("claude-desktop-status").textContent = [unavailable, data.error,
-    data.canCreate && !data.available ? "You can still create empty profiles; creating does not launch Claude." : "",
-    data.running === true ? "Claude is running. Fully quit it before opening another profile."
-      : data.running === null || data.running === undefined ? "Claude process status is unknown. Opening is blocked until a check confirms it is quit."
-      : "Claude is quit; you can open a profile."].filter(Boolean).join(" ");
+  const processStatus = !data.supported || !data.installed ? ""
+    : data.running === true ? "Claude is running. Fully quit Claude Desktop (⌘Q on Mac), then choose Check again. Closing its window is not enough."
+    : data.running !== false ? "Claude process status is unknown. Opening is blocked until a check confirms it is quit. Choose Check again to retry."
+    : data.available ? "Claude is quit; you can open a profile." : "";
+  const openBlocked = !data.available || data.running !== false;
+  const openReason = [unavailable, data.error, processStatus].filter(Boolean).join(" ");
+  const status = $("claude-desktop-status");
+  status.className = openBlocked ? "notice launch-blocked" : "notice";
+  status.textContent = [openReason,
+    data.canCreate && !data.available ? "You can still create empty profiles; creating does not launch Claude." : ""].filter(Boolean).join(" ");
   block(desktopProfileUI.create, !(data.canCreate ?? data.available));
-  block(desktopProfileUI.default, !data.available || data.running !== false);
+  block(desktopProfileUI.default, openBlocked);
+  desktopProfileUI.default.title = openBlocked ? openReason : "";
+  desktopProfileUI.default.setAttribute("aria-describedby", "claude-desktop-status");
   const host = $("claude-desktop-profiles");
   host.replaceChildren();
   const profiles = Array.isArray(data.profiles) ? data.profiles : [];
@@ -589,7 +601,9 @@ function renderDesktopProfiles(data) {
     row.appendChild(el("span", "grow"));
     const open = actionButton("Open", () => openDesktopProfile(profile.id, profile.name, open));
     open.setAttribute("aria-label", `Open Claude Desktop profile ${profile.name}`);
-    block(open, !data.available || data.running !== false);
+    block(open, openBlocked);
+    open.title = openBlocked ? openReason : "";
+    open.setAttribute("aria-describedby", "claude-desktop-status");
     row.appendChild(open);
     card.appendChild(row);
     host.appendChild(card);

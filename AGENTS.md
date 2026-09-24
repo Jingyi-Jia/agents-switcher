@@ -167,6 +167,10 @@ are in [desktop/README.md](desktop/README.md) and
    `ProviderActions.add_current` calls `add_current(refresh_existing=True)` to
    refresh a saved slot; the CLI's `codex add` does not. Regression coverage:
    [test_codex_login_recovery.py](tests/test_codex_login_recovery.py).
+   Display and selection decisions must use the live login reported by
+   `CodexSwitcher.status()`, not the historical store active marker. An unmanaged
+   or missing live login is not an active managed account; an unreadable auth
+   file is an error, never permission to fall back to the saved marker.
 6. **Dry-run is not a credential sandbox.** It prevents account switching, but
    usage collection may refresh tokens or write cache data. Keep automation
    selection based on eligible, sufficiently fresh data, not display-only

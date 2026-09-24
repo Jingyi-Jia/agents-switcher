@@ -46,7 +46,7 @@ const walk = node => [node, ...node.children.flatMap(walk)];
 class Element {
   constructor(tag, text = '') {
     this.tagName = tag.toUpperCase(); this.children = []; this.parent = null;
-    this.dataset = {}; this.attributes = {}; this.listeners = {};
+    this.dataset = {}; this.attributes = {}; this.listeners = {}; this.style = {};
     this._text = text; this.value = ''; this.className = '';
     this.hidden = false; this.disabled = false; this.checked = false;
     this.classList = {add: name => { this.className += ' ' + name; }};
