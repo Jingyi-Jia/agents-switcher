@@ -6,34 +6,15 @@ import os
 import ssl
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import trustme
 
 from claude_swap import cli, tls
-
-
-_LOCALHOST_TEST_CERTIFICATE = """-----BEGIN CERTIFICATE-----
-MIIBuzCCAWKgAwIBAgIUYDgsma1cx1EAMEMBaPHa6aOjHowwCgYIKoZIzj0EAwIw
-FDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MDkyNDA1Mjc1MloYDzIxMjYwODMx
-MDUyNzUyWjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO
-PQMBBwNCAARe/1G7ktIUY253PEQg+NsRVSEJylgcHki/FqrK64baWErpUmBOpVdz
-uLU/ggJCofGR7IrqPuKES2C6+k+1RVT5o4GPMIGMMB0GA1UdDgQWBBRevvLe4T0I
-ToDxRW9EchwwdLK4yDAfBgNVHSMEGDAWgBRevvLe4T0IToDxRW9EchwwdLK4yDAU
-BgNVHREEDTALgglsb2NhbGhvc3QwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8E
-BAMCAoQwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDRwAwRAIgB2l/
-PZ2HO8EvbFcJTZqG/XdYNItJgWk7yENW/AlRvFoCIBc8F579bj3btPRWoXmQ0tmZ
-HYe0rUbzqwhYOF5oHvbi
------END CERTIFICATE-----
-"""
-_LOCALHOST_TEST_KEY = """-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg79qeOIPMWOOwnTVA
-DSbv1nQpnpyYBXHQVyncg0szebKhRANCAARe/1G7ktIUY253PEQg+NsRVSEJylgc
-Hki/FqrK64baWErpUmBOpVdzuLU/ggJCofGR7IrqPuKES2C6+k+1RVT5
------END PRIVATE KEY-----
-"""
 
 
 @pytest.fixture
@@ -117,8 +98,13 @@ for context in (
 def test_local_tls_rejects_untrusted_certificates_and_wrong_hostnames(tmp_path, mode, scenario):
     certificate = tmp_path / "localhost.pem"
     key = tmp_path / "localhost-key.pem"
-    certificate.write_text(_LOCALHOST_TEST_CERTIFICATE)
-    key.write_text(_LOCALHOST_TEST_KEY)
+    ca_certificate = tmp_path / "ca.pem"
+    ca = trustme.CA()
+    now = datetime.now(timezone.utc)
+    server = ca.issue_cert("localhost", not_before=now - timedelta(days=1), not_after=now + timedelta(days=30))
+    server.cert_chain_pems[0].write_to_path(certificate)
+    server.private_key_pem.write_to_path(key)
+    ca.cert_pem.write_to_path(ca_certificate)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     result = subprocess.run(
@@ -130,7 +116,7 @@ import threading
 
 from claude_swap.tls import use_native_tls
 
-mode, scenario, certificate, key = sys.argv[1:]
+mode, scenario, certificate, key, ca_certificate = sys.argv[1:]
 server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 server_context.load_cert_chain(certificate, key)
 listener = socket.socket()
@@ -153,7 +139,7 @@ thread.start()
 if mode == "fallback":
     sys.modules["truststore"] = None
 use_native_tls()
-context = ssl.create_default_context(cafile=None if scenario == "untrusted" else certificate)
+context = ssl.create_default_context(cafile=None if scenario == "untrusted" else ca_certificate)
 hostname = "wrong.invalid" if scenario == "wrong-hostname" else "localhost"
 try:
     with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
@@ -167,7 +153,7 @@ finally:
     listener.close()
     thread.join(timeout=5)
     assert not thread.is_alive()
-""", mode, scenario, str(certificate), str(key)],
+""", mode, scenario, str(certificate), str(key), str(ca_certificate)],
         env=env,
         capture_output=True,
         text=True,
