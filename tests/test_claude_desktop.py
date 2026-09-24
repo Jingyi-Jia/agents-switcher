@@ -305,14 +305,14 @@ def test_install_detection_never_uses_claude_code_cli(monkeypatch, platform, exp
 ])
 def test_running_app_detection_does_not_confuse_cli_or_other_users(monkeypatch, command, expected):
     monkeypatch.setattr(cd.os, "getuid", lambda: 1000, raising=False)
-    scan = Mock(return_value=SimpleNamespace(stdout=f"1000 {command}\n1001 /Applications/Claude.app/Contents/MacOS/Claude\n"))
+    scan = Mock(return_value=SimpleNamespace(stdout=f"1000 S {command}\n1001 S /Applications/Claude.app/Contents/MacOS/Claude\n"))
     monkeypatch.setattr(cd.subprocess, "run", scan)
     assert cd.running() is expected
-    assert scan.call_args.args[0] == ["/bin/ps", "-axo", "uid=,comm="]
+    assert scan.call_args.args[0] == ["/bin/ps", "-axww", "-o", "uid=,stat=,comm="]
     assert scan.call_args.kwargs["timeout"] == 3
 
 
-@pytest.mark.parametrize("output", ["", "bad output", "1000", "1000 node\ninvalid", None])
+@pytest.mark.parametrize("output", ["", "bad output", "1000", "1000 S node\ninvalid", None])
 def test_unreliable_process_listing_fails_closed(monkeypatch, output):
     monkeypatch.setattr(cd.os, "getuid", lambda: 1000, raising=False)
     monkeypatch.setattr(cd.subprocess, "run", Mock(return_value=SimpleNamespace(stdout=output)))

@@ -52,7 +52,7 @@ def installed_executable() -> Path | None:
 def running() -> bool:
     try:
         result = subprocess.run(
-            ["/bin/ps", "-axo", "uid=,comm="],
+            ["/bin/ps", "-axww", "-o", "uid=,stat=,comm="],
             capture_output=True, text=True, timeout=3, check=True,
         )
         if not isinstance(result.stdout, str) or not result.stdout.strip():
@@ -60,16 +60,29 @@ def running() -> bool:
         uid = os.getuid()
         found = False
         for line in result.stdout.splitlines():
-            owner, command = line.strip().split(None, 1)
+            owner, state, *commands = line.strip().split(None, 2)
             if not owner.isascii() or not owner.isdigit():
                 raise ValueError
+            if state.startswith("Z"):
+                continue
+            if not commands:
+                raise ValueError
+            command = commands[0]
             if int(owner) == uid and Path(command).name in {"Claude", "claude-desktop"}:
                 found = True
         return found
-    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
-        raise ProviderActionError(
-            "Unable to check whether Claude Desktop is running. No launch was attempted. Try refreshing."
-        ) from None
+    except subprocess.TimeoutExpired:
+        detail = "The system process check timed out."
+    except subprocess.SubprocessError:
+        detail = "The system process check failed."
+    except OSError:
+        detail = "The system process checker could not be started."
+    except (ValueError, AttributeError):
+        detail = "The system returned an unreadable process list."
+    raise ProviderActionError(
+        f"Unable to check whether Claude Desktop is running. {detail} "
+        "No launch was attempted. Try Check again; if it still fails, report this message."
+    ) from None
 
 
 def _valid_name(name) -> bool:

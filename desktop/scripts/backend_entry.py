@@ -36,6 +36,16 @@ def smoke_tls() -> int:
 def main() -> int:
     if sys.argv[1:] == ["--smoke-tls"]:
         return smoke_tls()
+    if sys.argv[1:] == ["--smoke-processes"]:
+        from claude_swap.claude_desktop import running
+
+        try:
+            running()
+        except Exception:
+            print("Frozen helper process smoke failed", file=sys.stderr)
+            return 1
+        print("Frozen helper process smoke passed")
+        return 0
     runpy.run_module("claude_swap.desktop", run_name="__main__")
     return 0
 
