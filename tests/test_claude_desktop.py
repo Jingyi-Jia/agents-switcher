@@ -84,7 +84,8 @@ def test_duplicate_label_is_refused_without_changing_registry(profiles):
 
 
 @pytest.mark.parametrize("raw", [b"{", b"null", b"{}", b'{"version":true,"profiles":[]}',
-    b'{"version":1,"profiles":[{"id":"../../private","name":"Work"}]}', b"x" * 65537,
+    b'{"version":1,"profiles":[{"id":"../../private","name":"Work"}]}',
+    pytest.param(b"x" * 65537, id="oversized-registry"),
     b'{"version":1,"profiles":[],"profiles":[]}',
     b'{"version":1,"profiles":[],"token":"private-value"}', b"\xff"])
 def test_corrupt_registry_is_not_an_empty_store_and_is_never_overwritten(profiles, raw):
