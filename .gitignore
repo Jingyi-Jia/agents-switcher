@@ -9,5 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
+# Standalone desktop build outputs
+desktop/node_modules/
+desktop/backend/
+desktop/.build/
+desktop/release/
+
 # superpowers session planning artifacts (not part of the project)
 docs/superpowers/

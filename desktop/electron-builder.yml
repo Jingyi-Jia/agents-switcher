@@ -1,0 +1,52 @@
+appId: io.github.jingyi-jia.agent-switch
+productName: Agent Switch
+artifactName: Agent-Switch-${version}-${os}-${arch}.${ext}
+extraMetadata:
+  homepage: https://github.com/jingyi-jia/agents-switcher
+directories:
+  output: release
+  buildResources: assets
+files:
+  - src/**/*
+  - assets/**/*
+  - "!assets/*.py"
+  - package.json
+extraResources:
+  - from: ../LICENSE
+    to: LICENSE
+  - from: backend/agent-switch-backend
+    to: backend
+    filter:
+      - "**/*"
+asar: true
+npmRebuild: false
+publish: null
+mac:
+  category: public.app-category.developer-tools
+  minimumSystemVersion: "13.0"
+  hardenedRuntime: true
+  entitlements: scripts/entitlements.mac.plist
+  entitlementsInherit: scripts/entitlements.mac.plist
+  binaries:
+    - Contents/Resources/backend/agent-switch-backend
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+linux:
+  category: Utility
+  executableName: agent-switch-desktop
+  syncDesktopName: true
+  maintainer: Jingyi Jia
+  target:
+    - AppImage
+    - deb
+    - tar.gz

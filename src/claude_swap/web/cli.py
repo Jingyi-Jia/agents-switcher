@@ -28,7 +28,7 @@ def _open(url: str) -> None:
         print(muted("  (could not open a browser — copy the URL above)"), flush=True)
 
 
-def _build_state() -> DashboardState:
+def _build_state(*, state_class=DashboardState) -> DashboardState:
     """Compose both providers, tolerating either being unusable.
 
     Each is constructed independently so a machine with only one of the two set
@@ -47,7 +47,7 @@ def _build_state() -> DashboardState:
         codex = CodexSwitcher()
     except Exception:  # noqa: BLE001
         codex = None
-    return DashboardState(claude_switcher=claude, codex_switcher=codex)
+    return state_class(claude_switcher=claude, codex_switcher=codex)
 
 
 def web_command(argv: list[str]) -> None:

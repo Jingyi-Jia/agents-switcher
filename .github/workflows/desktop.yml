@@ -1,0 +1,180 @@
+name: Desktop installers
+
+on:
+  pull_request:
+    paths:
+      - desktop/**
+      - src/**
+      - tests/**
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/desktop.yml
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: mac
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+          - os: windows-2022
+            platform: win
+            arch: x64
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          version: "0.12.3"
+          python-version: "3.12"
+          enable-cache: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Install locked build dependencies
+        run: |
+          uv sync --locked --group desktop-build
+          npm ci --prefix desktop
+      - name: Test Python backend
+        run: uv run --no-sync pytest -o faulthandler_timeout=600
+        timeout-minutes: 15
+      - name: Test Electron shell
+        run: npm test --prefix desktop
+      - name: Build frozen backend
+        run: uv run --no-sync python desktop/scripts/build_backend.py
+      - name: Smoke-test frozen backend in disposable account directories
+        run: uv run --no-sync python desktop/scripts/smoke_backend.py --disposable-runner
+      - name: Build unsigned preview installers
+        if: github.event_name != 'release'
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist -- --${{ matrix.platform }} --${{ matrix.arch }}
+      - name: Build signed and notarized macOS release
+        if: github.event_name == 'release' && matrix.platform == 'mac'
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_CONTENT APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name}" ]; then echo "Required release signing secret is missing: $name" >&2; exit 1; fi
+          done
+          export APPLE_API_KEY="$RUNNER_TEMP/agent-switch-notarization.p8"
+          trap 'rm -f "$APPLE_API_KEY"' EXIT
+          umask 077
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY"
+          unset APPLE_API_KEY_CONTENT
+          npm run dist -- --mac --${{ matrix.arch }} -c.forceCodeSigning=true -c.mac.notarize=true
+          codesign --verify --deep --strict "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/Agent Switch.app"
+          xcrun stapler validate "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/Agent Switch.app"
+      - name: Build signed Windows release
+        if: github.event_name == 'release' && matrix.platform == 'win'
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "Required release signing secret is missing: $name" >&2; exit 1; fi
+          done
+          npm run dist -- --win --x64 -c.forceCodeSigning=true
+      - name: Verify Windows release signatures
+        if: github.event_name == 'release' && matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $files = @(
+            'desktop/release/win-unpacked/Agent Switch.exe',
+            'desktop/release/win-unpacked/resources/backend/agent-switch-backend.exe'
+          ) + @(Get-ChildItem desktop/release/*.exe | ForEach-Object { $_.FullName })
+          foreach ($file in $files) {
+            if ((Get-AuthenticodeSignature -FilePath $file).Status -ne 'Valid') {
+              throw "Invalid release signature: $file"
+            }
+          }
+      - name: Build Linux release
+        if: github.event_name == 'release' && matrix.platform == 'linux'
+        working-directory: desktop
+        run: npm run dist -- --linux --x64
+      - name: Smoke-test the helper copied into the app
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          case "$TARGET_PLATFORM" in
+            mac)
+              suffix=""; if [ "$TARGET_ARCH" = arm64 ]; then suffix="-arm64"; fi
+              helper="desktop/release/mac$suffix/Agent Switch.app/Contents/Resources/backend/agent-switch-backend" ;;
+            win) helper="desktop/release/win-unpacked/resources/backend/agent-switch-backend.exe" ;;
+            linux) helper="desktop/release/linux-unpacked/resources/backend/agent-switch-backend" ;;
+          esac
+          uv run --no-sync python desktop/scripts/smoke_backend.py --disposable-runner --executable "$helper"
+      - name: Generate artifact checksums
+        run: |
+          uv run --no-sync python desktop/scripts/checksums.py
+          mv desktop/release/SHA256SUMS-*.txt desktop/release/SHA256SUMS-${{ matrix.platform }}-${{ matrix.arch }}.txt
+      - name: Upload installers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.exe
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.tar.gz
+            desktop/release/SHA256SUMS-*.txt
+
+  upload-release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: installers
+      - name: Attach installers to the existing published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release view "$RELEASE_TAG" --json isDraft --jq 'if .isDraft then error("Release is still a draft") else . end'
+          gh release upload "$RELEASE_TAG" installers/* --clobber
