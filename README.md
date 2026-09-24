@@ -1,581 +1,215 @@
-# agents-switcher
+# Agent Switch
 
-Switch between multiple **Claude Code** and **Codex CLI** accounts — by hand, or automatically before you hit a rate limit — from a terminal, a browser dashboard, or the menu bar.
+A local account manager for **Claude Code and Codex**. Save existing logins,
+see quota, and choose which account to use from a desktop window, browser
+dashboard, or terminal. Automatic switching is optional.
 
-## Origin and credit
+The executable is **`agent-switch`**; the Python package is `agents-switcher`.
+This fork does not install or replace upstream's `cswap` command.
 
-agents-switcher is a fork of [claude-swap](https://github.com/realiti4/claude-swap) by Onur Cetinkol ([@realiti4](https://github.com/realiti4)), used under its MIT license. **The Claude Code account switching — the majority of this codebase — is his work**, and the `LICENSE` file carries his copyright alongside the additions here.
+## What it switches
 
-What was added in this fork:
-
-- **Codex CLI support** — accounts, rotation-safe switching, quota, stats, restart detection, and an auto-switcher that never lands on a paid-credits account (`src/claude_swap/codex/`)
-- **A local browser dashboard**, a clickable launcher, and a menu-bar / tray readout (`src/claude_swap/web/`)
-- **A cross-node-safe lock** (`dirlock`) replacing `fcntl.flock`, which gives no exclusion on NFS homes — reported upstream as [#372](https://github.com/realiti4/claude-swap/issues/372) and proposed back as [#374](https://github.com/realiti4/claude-swap/pull/374)
-
-The full git history is preserved, so every inherited commit still carries its author.
-
-> **The command is `agent-switch`, not `cswap`.**
-> Upstream installs `cswap` and `claude-swap`; shipping those here would make which tool runs depend on install order. Everything below the fork section is upstream's documentation for the Claude side and still applies — **substitute `agent-switch` wherever it says `cswap`.**
-
-## Install
-
-```bash
-uv tool install git+https://github.com/Jingyi-Jia/agents-switcher
-```
-
-It coexists with an existing `cswap` install; the command names and the distribution name are both distinct.
-
-### Standalone desktop app
-
-**Agent Switch** is a standalone desktop window for the same account engines.
-When installers are available, download the matching asset from
-[GitHub Releases](https://github.com/jingyi-jia/agents-switcher/releases):
-
-- **macOS 13+**: choose the `mac-arm64.dmg` for Apple Silicon or `mac-x64.dmg`
-  for Intel, then drag Agent Switch to Applications.
-- **Windows 10+ (x64)**: run the `win-x64.exe` installer and open Agent Switch
-  from Start.
-- **Linux (x64)**: use the `.deb` on Debian/Ubuntu or the `.AppImage` on compatible
-  desktops. Ubuntu 22.04 is the build baseline; a `.tar.gz` fallback is also built.
-
-The installer bundles Electron, Python and the app dependencies: **no Python,
-uv, Node.js or npm installation is needed to use it**. The provider CLIs are not
-bundled. Install Claude Code and/or Codex and sign in there first, then add the
-current login in Agent Switch. Claude Desktop has its own separate login, and
-the provider safety rules below still apply.
-
-Public macOS downloads require Developer ID signing and notarization; Windows
-downloads require code signing. Those credentials must be provisioned before a
-trusted public launch. Unsigned CI artifacts are developer previews, not
-recommended end-user downloads; do not disable OS security checks to open them.
-There is no auto-updater yet: use **Help → Download updates** to open Releases and install
-updates manually. See [desktop installation and build instructions](desktop/README.md)
-for platform requirements, preview limitations and release-signing setup.
-
-## Choose a provider
-
-Claude Code and Codex are separate providers, with independent account stores and
-credential handling. An account number always belongs to the provider you selected;
-switching Claude does not change Codex, or vice versa.
-
-```bash
-agent-switch tui                     # choose Claude Code or Codex
-agent-switch claude list
-agent-switch claude switch work
-agent-switch codex list
-agent-switch codex switch work
-```
-
-Unqualified commands such as `agent-switch list` still target Claude Code for
-backward compatibility. Provider differences remain intentional: Claude supports
-setup-token/API-key accounts, while Codex automatic switching only chooses accounts
-with included quota and does not switch underneath running Codex processes.
-
-## Which client is switched?
-
-**Claude Code CLI credentials are not the Claude Desktop login.** Claude Desktop,
-including its Code tab, signs in separately. Switching here does not switch the
-desktop account, and restarting Desktop alone does not transfer the CLI login.
-To change that account, use Claude Desktop's account menu, or sign out and sign in
-inside Desktop for a different login. This tool does not copy, modify, or export
-desktop session cookies.
-
-The CLI uses its credential file or the macOS Keychain; its existing sessions can
-pick up a switch after their credential cache refreshes. Codex processes keep their
-existing login in memory, so the switch result tells you when they need restarting.
-See Anthropic's [authentication documentation](https://code.claude.com/docs/en/authentication)
-and [Desktop documentation](https://code.claude.com/docs/en/desktop).
-
-Optional extras:
-
-```bash
-pip install 'agents-switcher[tray-macos]'   # menu-bar readout (macOS)
-pip install 'agents-switcher[tray]'         # system-tray readout (Windows/Linux)
-```
-
-## Codex accounts
-
-```bash
-agent-switch codex                    # what Codex is signed in as
-agent-switch codex add --alias work   # manage the account you're logged in as
-agent-switch codex list
-agent-switch codex switch work
-agent-switch codex usage              # quota for every managed account
-agent-switch codex stats              # lifetime tokens, streaks, reset credits
-agent-switch codex auto --once        # switch if the active account is low
-```
-
-**Quit Codex before switching, then reopen it.** Codex caches its login, and its
-401-recovery reload refuses to cross account ids. Replacing `auth.json` while it
-is running does not switch that running session. The dashboard and TUI now refuse
-to change accounts until Codex's desktop app and terminal processes have exited;
-they do not force-close your work. The lower-level CLI switch command retains its
-restart warning, but quitting first is the safe order there too. Codex desktop
-sessions using the same file-based login pick up the saved account when reopened;
-separate homes or keyring-backed authentication are not switched by this file swap.
-
-Usage checks reconcile the matching live login before refreshing a saved token,
-and serialize refreshes so two Agent Switch processes cannot rotate the same
-saved login at once. A switch refreshes a saved access token with a known expiry
-when it is expired or expiring, before replacing the current login. If that
-refresh fails, the current login is left in place. An opaque token has no locally
-readable expiry and remains subject to Codex's own authentication checks.
-
-If a saved login has already been revoked or its rotating refresh token has been
-reused, it cannot be repaired by restoring the old file. Sign in to that account
-again through Codex (or `codex login`), then choose **Add existing login** in Agent
-Switch to update its saved slot. Do not share `auth.json` or tokens when reporting
-an authentication error.
-
-### Paid credits are never auto-selected
-
-An account past its included quota keeps working by billing credits per request. Such an account stays switchable **by hand**, but the auto-switcher will never move onto it and never counts it as spare capacity. Spending money is your decision, not a background loop's.
-
-## Dashboard
-
-```bash
-agent-switch web                      # opens a local dashboard in your browser
-agent-switch web --no-open            # print the URL instead (headless)
-```
-
-The dashboard provides the same account-management actions as the TUI:
-
-| Action | Claude Code | Codex |
+| Provider | Supported today | Boundary |
 | --- | --- | --- |
-| Add or refresh the current login | Yes | Yes |
-| Switch to a saved account or choose the best available account | Yes | Yes |
-| Enable/disable automatic selection; remove a saved account | Yes | Yes |
-| Watch usage and refresh it manually | Yes | Yes |
-| Start dry-run/live auto-switching, stop it, adjust its threshold | Yes | Yes |
-| Add a setup-token or API key | Yes | Not supported by the Codex account engine |
+| Claude Code | Saved CLI logins, setup tokens and managed API keys; manual and quota-based switching | **Not Claude Desktop**, including its Code tab. Desktop has a separate sign-in; restarting it does not transfer a CLI login. |
+| Codex | File-backed ChatGPT/OAuth accounts, quota, activity stats and automatic selection | Supports Codex CLI and Desktop when they use the same `auth.json`, not keyring-only or API-key logins. Quit both before switching; running processes keep their old account until restarted. |
 
-Removal and live auto-switching require confirmation. Token replacement also
-requires confirmation, and token fields are masked. Disabled accounts can still
-be selected explicitly; they are excluded from automatic selection.
+Agent Switch does not install the provider CLIs or sign you in. Install
+[Claude Code](https://code.claude.com/docs/en/setup) or
+[Codex CLI](https://developers.openai.com/codex/cli), then sign in through that
+provider. **Add existing login** in Agent Switch saves the current provider login;
+it is not a login button. Claude API-key accounts have no subscription quota
+readout and can incur per-token charges.
 
-Auto-switching starts **stopped** in the browser. Dry-run evaluates the existing
-provider policy without switching accounts; live mode applies it. Mode and
-threshold changes made here are session-only, not new saved rules. Automation
-continues while the local dashboard **server** is running: closing a browser tab
-or pausing live updates does not stop it. Use **Stop** or quit the server.
-An independently started CLI auto-switcher is not controlled by these buttons.
+## Get the app
 
-The theme selector offers light, dark and system appearance. Neither the web UI
-nor the TUI initiates a new provider OAuth login: sign in to the provider first,
-then add the current login (or add a Claude token).
+**There is no published installer release yet.** The repository currently has
+only a draft `v1.0.0` release with no assets. The
+[Releases page](https://github.com/jingyi-jia/agents-switcher/releases) is where
+future release downloads will appear; a version in package metadata is not a
+download announcement.
 
-Binds loopback only and mints a fresh token per run. To use it from a cluster login node, forward the port rather than widening the bind:
+For developers, successful runs of
+[Desktop installers](https://github.com/jingyi-jia/agents-switcher/actions/workflows/desktop.yml)
+provide preview artifacts for macOS arm64/x64, Windows x64 and Linux x64.
+Artifacts expire after **14 days**. macOS previews are **ad-hoc signed, not
+Developer ID signed or notarized**; Windows and Linux previews are unsigned.
+Gatekeeper or SmartScreen may block them. Do not disable OS protections to make
+a preview run. See the [desktop guide](desktop/README.md) for preview handling,
+platform requirements and native build instructions.
+
+The standalone app bundles Electron and its Python backend: end users do not
+need Python, uv, Node.js or npm, but still need their provider CLI and login.
+Public macOS/Windows release builds require signing credentials, and macOS also
+requires notarization. The workflow exists; a trusted signed release still needs
+successful builds and clean-machine installation checks. There is no auto-updater.
+
+## Install the CLI from source
+
+Use Python 3.12+ and [uv](https://docs.astral.sh/uv/):
 
 ```bash
-ssh -L 8765:127.0.0.1:8765 <host>
-# then on the remote host:
+git clone https://github.com/jingyi-jia/agents-switcher.git
+cd agents-switcher
+uv tool install .
+agent-switch --help
+```
+
+Alternatively, use `uv sync --locked` in the checkout and prefix commands with
+`uv run agent-switch`. This is a source installation, not a promise of a published
+PyPI package or signed desktop download.
+
+Choose an interface:
+
+```bash
+agent-switch tui          # terminal provider chooser
+agent-switch claude tui   # Claude Code accounts
+agent-switch codex tui    # Codex accounts
+agent-switch web          # local browser dashboard; Ctrl-C stops its server
 agent-switch web --no-open
 ```
 
-## Clickable launcher and tray
+`agent-switch app install` creates a shortcut that runs `agent-switch web`;
+it is **not** the standalone Electron app and still needs the CLI installation.
+`agent-switch app uninstall` removes that shortcut. `agent-switch tray` provides
+a menu-bar/system-tray readout when the optional platform dependency is installed
+(`uv tool install '.[tray-macos]'` on macOS, `uv tool install '.[tray]'` elsewhere).
+
+## Save and switch Claude Code accounts
+
+Sign in to Claude Code, then save that login. Repeat after signing in to each
+additional account through Claude Code.
 
 ```bash
-agent-switch app install              # .app (macOS) / .desktop (Linux) / Start Menu .lnk (Windows)
-agent-switch tray                     # quota in the menu bar / system tray
+agent-switch claude add --alias work
+agent-switch claude list
+agent-switch claude status
+agent-switch claude switch 2
+agent-switch claude switch --strategy best
 ```
 
-These Python-installed launchers open the browser dashboard and are separate from
-the standalone desktop installer above. A machine with no desktop simply never
-installs a launcher; the CLI and TUI are unaffected.
+Unqualified commands such as `agent-switch list` and `agent-switch switch 2`
+are Claude Code shortcuts. `disable 2` excludes a saved account from automatic
+selection; `enable 2` restores eligibility. Neither deletes the saved login.
 
-## Also fixed here
+For setup tokens or managed API keys, use `agent-switch add-token` and its hidden
+prompt rather than putting a secret in shell history. Experimental
+`agent-switch run 2 -- --resume` launches a Claude Code account in a separate
+terminal profile; it does not support API-key accounts and is not Desktop
+profile switching. See `agent-switch run --help` for isolation and sharing options.
 
-`FileLock` used `fcntl.flock`, which gives **no cross-node exclusion** on an NFS home mounted `nolock,local_lock=all` — a common cluster export. Measured on such a home, two nodes contending for 20s: 2,653 critical-section violations in 2,829 acquisitions, with contention never once observed. It now holds a directory (`mkdir`), which excludes correctly: 0 violations in the same harness. Reported upstream as [#372](https://github.com/realiti4/claude-swap/issues/372), fix proposed in [#374](https://github.com/realiti4/claude-swap/pull/374).
+## Save and switch Codex accounts safely
 
----
-
-<sub>Everything below this line is upstream's README for the Claude Code side, unchanged. Remember to read `cswap` as `agent-switch`.</sub>
-
-# claude-swap
-
-Multi-account switcher for Claude Code. Easily switch between multiple Claude accounts without logging out, or let it switch for you before you hit a rate limit. Track usage for every account in a live dashboard, and run accounts in parallel. Works with both the Claude Code CLI and the VS Code extension.
-
-## Installation
-
-### Using uv (recommended)
+Sign in with `codex login`, then save the login:
 
 ```bash
-uv tool install claude-swap
+agent-switch codex add --alias work
+agent-switch codex list
+agent-switch codex status
+agent-switch codex usage
+agent-switch codex stats work
 ```
 
-### Using pipx
+For every switch:
+
+1. **Quit Codex completely**, including its desktop app and terminal sessions.
+2. Run `agent-switch codex switch work` (or select a saved account in Agent Switch).
+3. Reopen Codex and verify the account before continuing work.
+
+Codex holds credentials in memory and rotates refresh tokens. Switching the file
+does not move an already-running client to another account. The app/dashboard/TUI
+refuses a Codex switch while detected processes are running; the CLI can still
+switch and print a restart warning. Follow the quit-first sequence even when a
+CLI switch succeeds. Do not use `--force` as a repair tool: it permits discarding
+an unmanaged current login.
+
+### If a login is already revoked
+
+A revoked, expired or reused refresh token cannot be repaired by switching back
+and forth. Stop auto-switching and quit Codex, then:
+
+1. Run `codex login` and sign in as the **affected account**.
+2. In Agent Switch, choose **Add existing login** (browser dashboard: **Add current**).
+   This replaces that account's saved credentials while preserving its slot.
+3. Refresh the account view, then reopen Codex and verify the login.
+
+The CLI's `agent-switch codex add` currently rejects an already-managed account;
+it is not the same recovery action as the UI button. Avoid deleting saved
+accounts or copying old `auth.json` files around to fix a revoked token. For a
+Claude Code re-login warning, sign in again through Claude Code and re-add that
+current login; signing in to Claude Desktop will not repair CLI credentials.
+
+## Automatic switching: opt in, then keep it running
+
+Start by observing decisions:
 
 ```bash
-pipx install claude-swap
+agent-switch auto --once --dry-run
+agent-switch codex auto --once --dry-run
 ```
 
-### From source
+Remove `--once` for a foreground loop; remove `--dry-run` to allow switching.
+Use Ctrl-C to stop. `agent-switch config` shows persistent settings, and
+`agent-switch config set autoswitch.threshold 80` changes the shared threshold.
+Explicit CLI flags override defaults; see each provider's `auto --help`.
+
+**Dry-run means no account switch, not no side effects.** Usage collection can
+contact providers, update local caches and safely refresh credentials. It is not
+an offline test mode or a substitute for a disposable test account store.
+
+Dashboard/TUI auto modes and threshold overrides belong to that session and are
+not saved as rules. Closing a browser tab or pausing its view does not stop the
+server or automation. Stop it in the UI or stop its server. Closing the standalone
+app's only window quits its backend and session automation; exiting the TUI does
+the same for its session. None of these stops independently launched CLI loops.
+
+Codex auto-switch waits while Codex processes are running and never selects an
+account that needs paid billing credits. Claude API-key accounts are excluded by
+default; the explicit `--include-api-key-accounts` option permits a metered fallback.
+Quota failures and exhausted accounts can block selection; auto-switching is not
+a guarantee of uninterrupted work or a way around provider limits.
+
+## JSON output for scripting
 
 ```bash
-git clone https://github.com/realiti4/claude-swap.git
-cd claude-swap
-uv sync
-uv run cswap help
+agent-switch claude list --json
+agent-switch claude status --json
+agent-switch codex list --json
+agent-switch codex status --json
+agent-switch codex usage --json
+agent-switch config list --json
 ```
 
-### Updating
-
-```bash
-cswap upgrade          # uv/pipx installs on macOS/Linux: auto-detects and upgrades
-# or run your installer directly:
-uv tool upgrade claude-swap
-pipx upgrade claude-swap
-```
-
-## Usage
-
-### Add your first account
-
-Log into Claude Code with your first account, then:
-
-```bash
-cswap add
-```
-
-### Add more accounts
-
-Log in with another account, then:
-
-```bash
-cswap add
-```
-
-Do not run `/logout` first: current Claude Code may revoke the refresh token stored for the account you are leaving.
-
-### Switch accounts
-
-Rotate to the next account:
-
-```bash
-cswap switch
-```
-
-Or switch to a specific account:
-
-```bash
-cswap switch 2
-cswap switch user@example.com
-cswap switch dev                # or by alias, once set with `cswap alias 2 dev`
-```
-
-Not sure which one? `cswap list` is the dashboard — every account's 5-hour and 7-day usage and reset times at a glance:
-
-```bash
-cswap list
-```
-
-Or let claude-swap auto-pick by remaining quota — `cswap switch --strategy best` (most quota left) or `--strategy next-available` (skip rate-limited accounts).
-
-**Note:** You usually don't need to restart — on Linux/Windows the new account is picked up automatically, and on macOS after the Keychain cache expires. To apply it instantly, restart Claude Code or reopen the VS Code extension tab. See [Tips](#tips) for the per-platform details.
-
-### Automatic switching
-
-Let claude-swap watch your usage and switch for you. When the active account's 5-hour or 7-day window reaches the threshold (default 90%), it switches to the account with the most quota left — before you hit the limit, and safe to run while Claude Code is working:
-
-```bash
-cswap auto                     # foreground loop, polls every 60s
-cswap auto --threshold 80      # switch earlier
-cswap auto --model Fable       # also switch when the Fable weekly limit is hit
-cswap auto --once              # single check-and-switch, for cron/scripts
-cswap auto --dry-run           # log what it would do, never switch
-cswap auto --strategy consume-first   # burn the soonest-resetting account first
-```
-
-<details>
-<summary>How it behaves & advanced usage</summary>
-
-- Runs safely alongside Claude Code: switches take the same credential locks Claude Code uses, so a swap never collides with a token refresh.
-- A cooldown (default 5 min) and a hysteresis margin stop it flip-flopping near the threshold: a proactive switch only lands on an account that's below the threshold *and* better than the current one by the margin — a candidate that clears the margin is always taken, but two accounts hovering at the line never ping-pong. When every account is exhausted it keeps checking on a bounded slow cadence, waking sooner for an imminent reset.
-- **Strategies** (`--strategy`, or `cswap config set autoswitch.strategy`): `best` (default) stays put until the active account nears its limit, then moves to the account with the most quota left. `consume-first` proactively keeps you on the account whose **weekly window resets soonest** — use-it-or-lose-it — switching to a sooner-resetting account (with room to spare) even below the threshold, so perishable weekly quota isn't wasted.
-- Usage polling is adaptive — a couple of accounts per check, busy alternates watched more closely, and exhausted ones checked about every ten minutes (or slower after 429s) — so API traffic stays flat no matter how many accounts you manage.
-- It fails safe: if a usage check errors it keeps trusting the last-known numbers while retries back off, and an expired token on an idle machine makes it hold rather than fail over (Claude Code refreshes the token on your next message).
-- An account whose refresh token has died is quarantined and reported until you either log in with it and re-run `cswap add --slot N`, or replace its stored credentials from a known-good export — a plain `cswap import backup.cswap` replaces dead-token slots on its own (`--force` is still required to replace other existing accounts; note a stale export can carry an already-superseded token). API-key accounts are never rotated onto unless you pass `--include-api-key-accounts`.
-- To hold an account out of rotation yourself — a work account you don't want touched, one you're resting — run `cswap disable <num|email>`; `cswap enable <num|email>` puts it back. Disabled accounts are skipped by auto-switch, bare `cswap switch`, and the `best` / `next-available` strategies, but stay fully managed and remain a valid explicit `cswap switch <num|email>` target. They show a `(disabled)` marker in `cswap list`, in the [TUI](#interactive-dashboard-tui), and in the [menu bar](#menu-bar-macos) — both of which also let you toggle the state in place (TUI: menu → *Disable / enable account…*; menu bar: *Disable / enable account*).
-- By default only the account-wide 5h/7d windows drive switching. If you work on one model and hit its **weekly per-model limit** first (e.g. Fable), add `--model Fable` (or `cswap config set autoswitch.model Fable`) to fold that model's window into the decision, so it switches off an account whose model quota is spent even while its 5h/7d windows still have room.
-  - **Model names** are Anthropic's own per-model `display_name`s, matched case-insensitively. The exact strings for your accounts are the per-model rows in `cswap list` (e.g. a line reading `Fable: 100%`).
-
-For cron/systemd timers, `--once` reports the outcome in its exit code (`0` switched, `1` error, `2` nothing to do, `3` blocked — no viable target), and `--json` emits one JSON event per line:
-
-```bash
-*/5 * * * * cswap auto --once --json >> ~/.cswap-auto.log 2>&1
-```
-
-Defaults like the threshold and cooldown are configurable with `cswap config set autoswitch.threshold 80` — flags override them (see [Configuration](#configuration)).
-
-</details>
-
-### Run multiple accounts at the same time (session mode)
-
-Launch Claude Code as a specific account in the current terminal only — every other terminal and the VS Code extension stay on your default account, so two accounts can work in parallel.
-
-```bash
-cswap run 2                     # launch Claude Code as account 2, here only
-cswap run user@example.com      # by email
-cswap run 2 -- --resume         # everything after '--' is forwarded to claude
-cswap run 2 --share-history     # share your chat history with this account too
-cswap run 2 --require-session   # refuse rather than run plain claude if 2 is the default login
-```
-
-Sessions use your normal `~/.claude` setup (settings, CLAUDE.md, skills, MCP servers, etc.), but each account keeps its own chat history — pass `--share-history` if you want your accounts to continue the same conversations.
-
-Running the account that is already your default login launches plain `claude` on that login instead of a session (a second copy of the active credential would go stale). Scripts that need the isolation guaranteed can pass `--require-session`, which refuses in that case instead.
-  
-A session refreshes its own copy of the account's token, so once it exits, the credential it rotated is captured back into the account's stored backup before a switch or usage check uses that backup. While a session is still running, `cswap switch` refuses to move the default login onto its account if the stored backup has already fallen behind (activating it could only fail); exit the session first, or pick another account. While a session runs, its account's usage is read with the session's own credential and never refreshed by cswap; a read the server refuses shows as token expired, and is not requested again, until the session renews the credential on its next call.
-
-<details>
-<summary>Sharing details — MCP servers & chat history</summary>
-
-- With `--share-history`, a session started under one account shows up in `--resume` under the others, and nothing already saved is lost.
-- User-scope MCP servers (`claude mcp add -s user`) are mirrored from your default profile on every launch — manage them there; changes made inside a session don't persist. Definitions are copied as-is (including inline `env`/`headers` values), but MCP OAuth logins are not — HTTP servers may ask you to authenticate once per profile via `/mcp`.
-- `--no-share` turns sharing off and removes the mirrored MCP config (profiles that never mirrored are left alone).
-
-</details>
-
-<details>
-<summary>Map accounts to directories — auto-pick per repo</summary>
-
-Bind a directory to an account, and a bare `cswap run` there launches that account in session mode — e.g. work account in work repos, personal elsewhere:
-
-```bash
-cswap map 2 ~/work/client-app   # map a directory to account 2
-cswap map user@example.com      # map the current directory
-cswap map                       # list mappings
-cswap unmap ~/work/client-app   # remove one (defaults to current directory)
-
-cd ~/work/client-app/src
-cswap run                       # → account 2, session mode
-```
-
-Subfolders inherit the nearest mapped ancestor. In an unmapped directory, `cswap run` just launches plain `claude` with your default login. Mappings are per-machine (not part of `cswap export`) and are cleaned up when their account is removed.
-
-</details>
-
-### Interactive dashboard (TUI)
-
-Run `cswap` on its own (or `cswap tui`) for the full-screen dashboard: live usage for every account, switching, and the auto-switcher, all keyboard-driven. `cswap watch` opens it straight to the live monitor. Works on macOS, Linux, and Windows.
-
-<img src="assets/tui-watch.png" width="760" alt="cswap watch — live 5h/7d usage bars for every account, with reset times and the active account marked">
-
-### Refresh expired tokens
-
-If an account's token expires, log back into Claude Code with that account and re-run:
-
-```bash
-cswap add
-```
-
-This will update the stored credentials without creating a duplicate.
-
-### Other commands
-
-```bash
-cswap run 2                     # Run an account in this terminal only (session mode)
-cswap auto                      # Auto-switch when nearing rate limits (see above)
-cswap config                    # Show or edit settings (see Configuration below)
-cswap list                      # Show all accounts with 5h/7d usage and reset times
-cswap list --token-status       # Add source-labelled OAuth token diagnostics
-cswap status                    # Show current account
-cswap add --slot 3              # Add account to a specific slot (prompts before overwrite)
-cswap add --alias dev           # Add account and give it a short alias
-cswap remove 2                  # Remove an account
-cswap disable 2                 # Hold an account out of auto-rotation (keeps its login)
-cswap enable 2                  # Return a disabled account to rotation
-cswap alias 2 dev               # Give an account a short alias (usable anywhere NUM|EMAIL is)
-cswap alias 2 --unset           # Remove an account's alias
-cswap alias                     # List all aliases
-cswap move 2 1                  # Assign an account to a slot (relocates to an empty slot, swaps if taken)
-cswap unclaimed                 # List stashed credential entries (slot + why they were stashed)
-cswap unclaimed --purge ID      # Drop one (deletes its bytes; recover with /login + `cswap add`)
-cswap tui                       # Interactive dashboard (also: bare `cswap`)
-cswap watch                     # Dashboard, opened on the live watch page
-cswap upgrade                   # Upgrade claude-swap to the latest version
-cswap purge                     # Remove all claude-swap data
-```
-
-The original flag spellings (`cswap --switch`, `cswap --list`, ...) keep working.
-
-## Tips
-
-- **Do you need to restart after switching?** Usually not. On **Linux and Windows**, credentials are stored in a file and Claude Code re-reads them whenever that file changes, so the new account takes effect on your next message — no restart needed. On **macOS**, credentials live in the Keychain, which Claude Code caches for about 30 seconds; a running session picks up the switch once that cache expires. Restart Claude Code (or close and reopen the VS Code extension tab) only if you want the change to apply instantly.
-- **Continuing sessions after switching:** You can keep using the same Claude Code session after switching — run `cswap switch` in any terminal and carry on. If you'd prefer a clean start, close and reopen Claude Code (or the VS Code extension tab) and use `--resume` to pick your previous session. Either way, the first message on the new account may use extra usage as its conversation cache rebuilds.
-
-## How it works
-
-- Backs up OAuth tokens and config when you add an account
-- Swaps only the account-specific Claude login when you switch accounts;
-  live account-independent OAuth state (such as MCP server logins) is
-  preserved instead of being overwritten by a slot's older snapshot
-- Account credentials stored securely using platform-appropriate methods
-- Switches (manual and automatic) hold Claude Code's own credential locks while writing, so a swap never interleaves with a token refresh
-- Auto-switch freshens a target's token before activating it, and quarantines accounts whose refresh token has died (recover by re-adding it with `cswap add --slot N`, or by replacing its stored credentials from a known-good export — a plain `cswap import backup.cswap` replaces dead-token slots automatically)
-- Usage numbers refresh every few minutes — faster for an account being used or close to switching, slower for idle ones — keeping cswap comfortably inside Anthropic's rate limits however many dashboards you keep open on a machine. An age note like `· 6m ago` just means the next scheduled check hasn't come yet, not that something is stuck.
-
-## Data locations
-
-| Platform | Credentials | Config backups |
-|----------|-------------|----------------|
-| Windows | File-based (inside the backup directory, under `credentials/`) | `~/.claude-swap-backup/` |
-| macOS | macOS Keychain | `~/.claude-swap-backup/` |
-| Linux / WSL | File-based (inside the backup directory, under `credentials/`) | `${XDG_DATA_HOME:-~/.local/share}/claude-swap/` |
-
-Session-mode profiles (`cswap run`) live under the backup directory in `sessions/`. Tool preferences (`settings.json`) and auto-switch state (`autoswitch_state.json` — cooldown and quarantined accounts; delete it to reset) live in the backup directory root.
-
-On Linux/WSL, set `XDG_DATA_HOME` to override the default location.
-
-## Menu bar (macOS)
-
-<details>
-<summary>Optional macOS menu bar app — usage at a glance, click to switch</summary>
-
-Needs the `menubar` extra (macOS only):
-
-```bash
-uv tool install 'claude-swap[menubar]'   # or: pipx install 'claude-swap[menubar]'
-cswap menubar
-```
-
-Shows every account's 5h / 7d / spend usage and switches with a click (specific / rotate / best / next-available), plus the TUI's add / disable-enable / remove / refresh actions. Enable *Settings → Auto-switch accounts* to run the same engine as [`cswap auto`](#automatic-switching) in the background; it shares the `autoswitch.*` settings, so the menu bar and CLI stay in sync. Off until you turn it on.
-
-**Keep it running without a terminal.** `cswap menubar` runs in the foreground, so the status item dies with the terminal that started it and does not come back after a reboot. `--install-service` hands it to launchd instead — starts at login, restarts on crash, no `.app` bundle:
-
-```bash
-cswap menubar --install-service     # start now, and at every login
-cswap menubar --service-status      # installed? loaded? pid?
-cswap menubar --uninstall-service   # stop it and remove the plist
-```
-
-The agent lives at `~/Library/LaunchAgents/com.cswap.menubar.plist` and logs to `~/Library/Logs/com.cswap.menubar.{log,err}`. It pins the `cswap` console script, whose path survives an upgrade — but the running process keeps the old build until it restarts, so after `cswap upgrade` either re-run `--install-service` or `launchctl kickstart -k gui/$(id -u)/com.cswap.menubar`.
-
-</details>
-
-## Advanced
-
-### Configuration
-
-Tool preferences live in `settings.json` in the backup root; `cswap config` reads and edits it with validation, so you never have to find the file or guess valid ranges.
-
-<details>
-<summary>Commands & usage</summary>
-
-```bash
-cswap config                              # list effective settings ("(default)" = not set)
-cswap config get autoswitch.threshold
-cswap config set autoswitch.threshold 80  # validated: rejects out-of-range values loudly
-cswap config set autoswitch.model Fable   # per-model switching (see "auto"); Fable,Opus for several
-cswap config unset autoswitch.threshold   # back to the default
-cswap config path                         # where settings.json lives
-```
-
-`cswap config --help` lists every key with its valid range and default. Hand-editing the file still works — `cswap config` is just a safer front door. `list` and `get` take `--json` for scripting.
-
-</details>
-
-### Backup and migration
-
-Move account data between machines or back it up:
-
-```bash
-cswap export backup.cswap                    # All accounts to a file
-cswap export backup.cswap --account 2        # One account
-cswap export backup.cswap --full             # Include full ~/.claude.json and credential object (same-PC backup)
-cswap import backup.cswap                    # Skips accounts that already exist
-cswap import backup.cswap --force            # Overwrite existing
-```
-
-The export file is plaintext JSON and, by default, carries only each account's own login — machine-shared MCP/plugin OAuth tokens and the device token stay on the source machine (`--full` keeps everything, for same-PC backups). If you need encryption, pipe through your tool of choice (e.g. `cswap export - | gpg -c > backup.gpg`).
-
-If an imported account is the one you're currently logged in as, activate the imported credentials with `cswap switch N --force` (a plain `switch` to the current account is a safe no-op and won't touch the import).
-
-### JSON output for scripting
-
-Add `--json` to `list`, `status`, or `switch` to emit a single machine-readable JSON object on stdout (human-readable notices go to stderr). Useful for scripting auto-swap and quota tracking.
-
-```bash
-cswap list --json                   # all accounts with usage/quota
-cswap status --json                 # current active account
-cswap switch --strategy best --json # switch, then report the result
-cswap switch 2 --json
-```
-
-<details>
-<summary>Example output & schema notes</summary>
-
-```json
-{
-  "schemaVersion": 1,
-  "activeAccountNumber": 2,
-  "accounts": [
-    { "number": 2, "email": "you@example.com", "active": true, "usageStatus": "ok",
-      "usage": { "fiveHour": { "pct": 25.0, "resetsAt": "2026-06-22T23:29:59Z" },
-                 "sevenDay": { "pct": 16.0, "resetsAt": "2026-06-26T17:59:59Z" } } }
-  ]
-}
-```
-
-Every payload carries a `schemaVersion` (currently `1`); on a handled error stdout is `{"schemaVersion":1,"error":{...}}` with a non-zero exit code. `--switch`/`--switch-to` report `{"switched": true|false, "from": …, "to": …, "reason": …}`.
-
-Usage is served from a per-account cache: when the usage API is briefly unreachable, the last-known numbers are shown instead of nothing (the human view marks them with their age, e.g. `· 2m ago`). Rows with decision-trusted usage carry additive `usageFetchedAt`/`usageAgeSeconds` fields telling you how old the measurement is. Whenever `usage` is null but a last-known measurement exists — data too old to drive a decision (`usageStatus` stays `unavailable`), or a row in a non-`ok` state such as `token_expired` — additive `lastGoodUsage`/`lastGoodFetchedAt`/`lastGoodAgeSeconds` fields preserve the human display without making the account actionable. When `usage` is null and nothing else explains it (`usageStatus` is `unavailable`), an additive `usageError` names the last fetch failure by kind (e.g. `http-429`, `timeout`) and, while the cache is backing off from it, `usageRetryAt` gives the time of the next attempt. These fields apply to list rows and the managed active row from `status --json`. An account held out of rotation with `cswap disable` carries an additive `"disabled": true` on its row (absent otherwise).
-
-A row carries an additive `loginExpiresAt` (ISO-8601 UTC) when the stored login records when its refresh token expires, which is the moment the slot will need a fresh `/login` and `cswap add --slot N`; a script can warn a few days ahead instead of discovering `relogin_required`. Absent when Claude Code recorded no such date for that login.
-
-An account row also carries an additive `alias` field once one is set with `cswap alias` (e.g. `"alias": "dev"`); accounts without one simply omit the key.
-
-Weekly windows (`sevenDay` and per-model `scoped` entries — never `fiveHour`) additively carry pace fields once the week is ~a day old: `expectedPct` (where usage would sit if spread evenly across the week) and `aheadOfPace` (`true` when meaningfully above that — the same signal the human views show as an `(ahead)`/`(ahead of pace)` marker). `projectedExhaustionAt`/`willLastToReset` extrapolate the current rate into an ETA to 100% and a yes/no "will it last to the reset"; they stay `--json`-only since a linear projection is too rough to present as fact in the UI.
-
-</details>
-
-`cswap auto --json` emits an event *stream* instead — one JSON object per line (`{"schemaVersion":1,"event":"switch","ts":…, …}` with kinds like `poll`, `switch`, `no-switch`, `account-quarantined`, `all-exhausted`, `error`). The contract is additive: new kinds and fields may appear, so scripts should ignore unknown ones.
-
-### Add an account from a raw token or API key
-
-If you only have a long-lived setup-token (e.g., produced by `claude setup-token`)
-or a managed API key (`sk-ant-api...`) and you don't want to log in via the browser
-flow first — useful on headless servers or when receiving a token from another
-machine — register it directly. The token type is auto-detected:
-
-```bash
-cswap add-token sk-ant-oat01-...             # OAuth setup-token
-cswap add-token sk-ant-api03-...             # managed API key
-cswap add-token sk-ant-oat01-... --slot 3
-cswap add-token - --slot 3                   # read token from stdin
-cswap add-token --email user@example.com     # optional label override
-```
-
-`--email` is optional; omitted values use `setup-token-{slot}@token.local`
-(or `api-key-{slot}@token.local` for API keys). No Anthropic API calls are made.
-
-**API-key accounts.** An `sk-ant-api...` value registers a managed API-key account
-(the kind Claude Code uses after `/login` with a key) rather than an OAuth
-setup-token. It switches like any other account; since API keys have no subscription
-quota, they show no usage and the usage-aware `switch` strategies never skip them as
-rate-limited.
-
-## Uninstall
-
-Remove all data:
-
-```bash
-cswap purge
-```
-
-Then uninstall the tool:
-
-```bash
-uv tool uninstall claude-swap
-# or
-pipx uninstall claude-swap
-```
-
-## Requirements
-
-- Python 3.12+
-- Claude Code installed and logged in
-
-## License
-
-MIT
+Claude list/status/switch payloads use `schemaVersion: 1`; Codex has its own
+payload shapes. Claude `auto --json` emits JSON events, while Codex auto emits
+decisions. For `auto --once`, exit codes are 0 for a switch decision (including
+dry-run), 1 for an error, 2 for no change, and 3 for blocked/no viable target
+(including Codex waiting for a restart). See [AGENTS.md](AGENTS.md) for source refs.
+
+## Local data and privacy
+
+Saved accounts use `~/.local/share/claude-swap` on Linux/WSL (or
+`$XDG_DATA_HOME/claude-swap`), and `~/.claude-swap-backup` on macOS/Windows.
+Codex backups occupy a separate `codex/` subdirectory. The historical names remain
+for compatibility; do not assume this fork's data is isolated from upstream.
+
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` affect which CLI profile is read and switched.
+macOS Claude credentials can use Keychain; file backups are permission-restricted
+but base64 encoding is **not encryption**. Treat backups and exports as secrets.
+Do not attach tokens, auth files or full stores to bug reports.
+
+The browser dashboard binds to loopback by default and uses a per-run access
+token. Keep its URL private and use SSH forwarding for remote access instead of
+exposing the server publicly. Quota and stats requests still contact providers.
+
+## Development and credit
+
+[AGENTS.md](AGENTS.md) covers the repository map, safe tests and contribution
+checks; [desktop/README.md](desktop/README.md) covers packaging and signing.
+Report this fork's bugs in [its issue tracker](https://github.com/jingyi-jia/agents-switcher/issues).
+
+Agent Switch is a fork of [claude-swap](https://github.com/realiti4/claude-swap)
+by **Onur Cetinkol (@realiti4)**. The inherited Claude Code switching is his work.
+This repo focuses on shared Claude Code/Codex account management and a standalone
+desktop app. Original history and attribution are retained.
+Licensed under [MIT](LICENSE).
