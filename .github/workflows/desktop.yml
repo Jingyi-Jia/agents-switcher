@@ -82,9 +82,9 @@ jobs:
         env:
           CSC_FOR_PULL_REQUEST: "true"
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          CSC_LINK: ""
-          CSC_KEY_PASSWORD: ""
-        run: npm run dist -- --mac --${{ matrix.arch }} -c.mac.identity=- -c.mac.notarize=false
+        run: |
+          unset CSC_LINK CSC_KEY_PASSWORD
+          npm run dist -- --mac --${{ matrix.arch }} -c.mac.identity=- -c.mac.notarize=false
       - name: Build signed and notarized macOS release
         if: github.event_name == 'release' && matrix.platform == 'mac'
         working-directory: desktop

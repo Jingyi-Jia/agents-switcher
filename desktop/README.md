@@ -131,7 +131,7 @@ PR path changes and **Run workflow** produce preview artifacts in the workflow
 run's Artifacts section. Neither path receives signing secrets or release write
 permission. The macOS preview step explicitly enables the builder's PR signing
 path only for an ad-hoc identity (`-`), with certificate discovery disabled and
-certificate inputs empty. This seals the modified bundle without using a private
+certificate inputs removed from the environment. This seals the modified bundle without using a private
 key; it does not enable trusted release signing for PRs. The workflow uses
 `pull_request`, never `pull_request_target`, and does not check out a different
 branch during the build.
