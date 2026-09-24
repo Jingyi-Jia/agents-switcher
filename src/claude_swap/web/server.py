@@ -26,12 +26,12 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from claude_swap.providers import ProviderActionError, ProviderActions, safe_error
 from claude_swap.web.page import PAGE_HTML
 
 _logger = logging.getLogger("claude-swap")
@@ -46,6 +46,7 @@ DEFAULT_PORT = 8765
 #: the wrong answer to that.
 URL_FILENAME = "web-url"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+MAX_BODY_BYTES = 32768
 
 
 def _claude_windows(last_good: dict | None) -> list[dict]:
@@ -97,9 +98,11 @@ class DashboardState:
     def __init__(self, claude_switcher=None, codex_switcher=None) -> None:
         self._claude = claude_switcher
         self._codex = codex_switcher
-        self._lock = threading.Lock()
+        self.actions = ProviderActions(claude=claude_switcher, codex=codex_switcher)
+        self._lock = self.actions.lock
         self._cached: dict | None = None
         self._cached_at = 0.0
+        self._cached_revision = -1
 
     def invalidate(self) -> None:
         """Drop the cache so the next read reflects a change we just made."""
@@ -111,19 +114,29 @@ class DashboardState:
             fresh = (
                 self._cached is not None
                 and not force
+                and self._cached_revision == self.actions.revision
                 and time.time() - self._cached_at < STATE_TTL_S
             )
-            if fresh:
-                return self._cached
-        collected = {
-            "claude": self._collect_claude(),
-            "codex": self._collect_codex(),
-            "generatedAt": time.time(),
-        }
-        with self._lock:
-            self._cached = collected
-            self._cached_at = time.time()
-        return collected
+            if not fresh:
+                self._cached = {
+                    "claude": self._collect_claude(),
+                    "codex": self._collect_codex(),
+                    "generatedAt": time.time(),
+                }
+                self._cached_at = time.time()
+                self._cached_revision = self.actions.revision
+            return {
+                **self._cached,
+                **{
+                    provider: {
+                        **self._cached[provider],
+                        "capabilities": self.actions.capabilities(provider),
+                        "switchNotice": self.actions.switch_notice(provider),
+                        "auto": self.actions.auto.status(provider),
+                    }
+                    for provider in ("claude", "codex")
+                },
+            }
 
     # -- providers -------------------------------------------------------
 
@@ -132,8 +145,6 @@ class DashboardState:
             return {"available": False, "error": "not configured", "accounts": []}
         try:
             from claude_swap.poll_policy import binding_pct
-            from claude_swap.tui.data import window_pct
-
             snapshot = self._claude.accounts_snapshot()
             accounts = []
             for account in snapshot.accounts:
@@ -164,8 +175,8 @@ class DashboardState:
                 "liveLogin": self._claude_live_login(),
             }
         except Exception as e:  # noqa: BLE001 - reported, never fatal
-            _logger.warning("Dashboard could not read Claude accounts: %s", e)
-            return {"available": False, "error": str(e), "accounts": []}
+            _logger.warning("Dashboard could not read Claude accounts")
+            return {"available": False, "error": safe_error(e, include_detail=True), "accounts": []}
 
     def _claude_live_login(self) -> dict | None:
         """Who Claude Code is currently signed in as, managed or not."""
@@ -197,7 +208,7 @@ class DashboardState:
                     "disabled": account.disabled,
                 }
                 if isinstance(result, Exception):
-                    entry["error"] = str(result)
+                    entry["error"] = safe_error(result, include_detail=True)
                 elif result is not None:
                     entry.update({
                         "windows": [
@@ -238,8 +249,8 @@ class DashboardState:
             return {"available": True, "activeNumber": active,
                     "accounts": accounts, "liveLogin": live}
         except Exception as e:  # noqa: BLE001 - reported, never fatal
-            _logger.warning("Dashboard could not read Codex accounts: %s", e)
-            return {"available": False, "error": str(e), "accounts": []}
+            _logger.warning("Dashboard could not read Codex accounts")
+            return {"available": False, "error": safe_error(e, include_detail=True), "accounts": []}
 
     # -- actions ---------------------------------------------------------
 
@@ -249,45 +260,50 @@ class DashboardState:
         ``assume_yes`` on the Claude side, and an auto-assigned slot on both:
         an HTTP request must never block on a terminal prompt nobody can see.
         """
-        if provider == "codex":
-            if self._codex is None:
-                raise ValueError("Codex is not configured")
-            account = self._codex.add_current()
+        try:
+            return self.actions.add_current(provider)
+        finally:
             self.invalidate()
-            return {"ok": True,
-                    "message": f"Now managing {account.display_label} "
-                               f"as slot {account.number}."}
-        if provider == "claude":
-            if self._claude is None:
-                raise ValueError("Claude is not configured")
-            self._claude.add_account(assume_yes=True)
-            self.invalidate()
-            return {"ok": True, "message": "Now managing the current Claude account."}
-        raise ValueError(f"unknown provider '{provider}'")
 
     def switch(self, provider: str, number: str) -> dict:
         """Switch one provider, returning what the user still has to do."""
-        if provider == "codex":
-            if self._codex is None:
-                raise ValueError("Codex is not configured")
-            result = self._codex.switch_to(number)
-            message = f"Switched to {result.account.display_label}."
-            if result.restart_required:
-                message += (
-                    f" Restart Codex — {len(result.processes)} process(es) still "
-                    "hold the previous account."
-                )
+        try:
+            return self.actions.switch(provider, number)
+        finally:
             self.invalidate()
-            return {"ok": True, "message": message,
-                    "restartRequired": result.restart_required}
-        if provider == "claude":
-            if self._claude is None:
-                raise ValueError("Claude is not configured")
-            self._claude.switch_to(number)
+
+    def set_disabled(self, provider: str, number, disabled: bool) -> dict:
+        try:
+            return self.actions.set_disabled(provider, number, disabled)
+        finally:
             self.invalidate()
-            return {"ok": True, "message": f"Switched to account {number}.",
-                    "restartRequired": False}
-        raise ValueError(f"unknown provider '{provider}'")
+
+    def remove(self, provider: str, number, *, confirm=False) -> dict:
+        try:
+            return self.actions.remove(provider, number, confirm=confirm)
+        finally:
+            self.invalidate()
+
+    def switch_best(self, provider: str) -> dict:
+        try:
+            return self.actions.switch_best(provider)
+        finally:
+            self.invalidate()
+
+    def add_token(self, provider: str, token: str, email=None, slot=None, *, confirm=False) -> dict:
+        try:
+            return self.actions.add_token(provider, token, email, slot, confirm=confirm)
+        finally:
+            self.invalidate()
+
+    def configure_auto(self, provider: str, mode: str, *, threshold=None, confirm=False) -> dict:
+        try:
+            return self.actions.auto.configure(provider, mode, threshold=threshold, confirm=confirm)
+        finally:
+            self.invalidate()
+
+    def close(self) -> None:
+        self.actions.close()
 
 
 class _Server(ThreadingHTTPServer):
@@ -309,13 +325,21 @@ class _Server(ThreadingHTTPServer):
         self.server_name = host
         self.server_port = port
 
+    def server_close(self):
+        try:
+            state = getattr(self, "dashboard_state", None)
+            if state is not None:
+                state.close()
+        finally:
+            super().server_close()
+
 
 def _make_handler(state: DashboardState, token: str):
     class Handler(BaseHTTPRequestHandler):
         server_version = "agent-switch"
 
         def log_message(self, fmt, *args):  # noqa: A003 - stdlib hook
-            _logger.debug("dashboard %s", fmt % args)
+            _logger.debug("dashboard request completed")
 
         # -- helpers ----------------------------------------------------
 
@@ -325,7 +349,9 @@ def _make_handler(state: DashboardState, token: str):
                 or (query.get("token") or [""])[0]
             )
             # compare_digest so a wrong token cannot be narrowed by timing.
-            return bool(supplied) and secrets.compare_digest(supplied, token)
+            return bool(supplied) and secrets.compare_digest(
+                supplied.encode("utf-8"), token.encode("utf-8")
+            )
 
         def _send(self, status, body: bytes, content_type: str) -> None:
             self.send_response(status)
@@ -333,11 +359,53 @@ def _make_handler(state: DashboardState, token: str):
             self.send_header("Content-Length", str(len(body)))
             # No CORS: another origin must not be able to read this page.
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
 
         def _json(self, status, payload: dict) -> None:
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+
+        def _body(self) -> dict:
+            lengths = self.headers.get_all("Content-Length", [])
+            if (
+                len(lengths) != 1 or not lengths[0].isascii()
+                or not lengths[0].isdigit() or len(lengths[0]) > 10
+                or self.headers.get("Transfer-Encoding") is not None
+            ):
+                raise ProviderActionError("Provide one valid Content-Length; transfer encoding is not supported")
+            length = int(lengths[0])
+            if not 0 < length <= MAX_BODY_BYTES:
+                raise ProviderActionError(f"JSON body must contain 1 to {MAX_BODY_BYTES} bytes")
+            if self.headers.get_content_type() != "application/json":
+                raise ProviderActionError("Content-Type must be application/json")
+            self.connection.settimeout(10)
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ProviderActionError("Incomplete JSON body")
+
+            def object_pairs(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ProviderActionError("Duplicate JSON fields are not supported")
+                    result[key] = value
+                return result
+
+            def invalid_constant(value):
+                raise ProviderActionError("JSON numbers must be finite")
+
+            try:
+                payload = json.loads(
+                    raw.decode("utf-8"), object_pairs_hook=object_pairs,
+                    parse_constant=invalid_constant,
+                )
+            except (ValueError, UnicodeError, RecursionError):
+                raise ProviderActionError("Provide a valid JSON object") from None
+            if not isinstance(payload, dict):
+                raise ProviderActionError("JSON body must be an object")
+            return payload
 
         # -- routes -----------------------------------------------------
 
@@ -357,22 +425,31 @@ def _make_handler(state: DashboardState, token: str):
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib hook
             parsed = urlparse(self.path)
-            if not self._authorized(parse_qs(parsed.query)):
+            if not self._authorized({}):
                 self._json(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
                 return
-            if parsed.path not in ("/api/switch", "/api/add"):
+            routes = {
+                "/api/switch": (state.switch, {"provider", "number"}, set()),
+                "/api/add": (state.add_current, {"provider"}, set()),
+                "/api/remove": (state.remove, {"provider", "number", "confirm"}, set()),
+                "/api/disabled": (state.set_disabled, {"provider", "number", "disabled"}, set()),
+                "/api/switch-best": (state.switch_best, {"provider"}, set()),
+                "/api/token": (state.add_token, {"provider", "token"}, {"email", "slot", "confirm"}),
+                "/api/auto": (state.configure_auto, {"provider", "mode"}, {"threshold", "confirm"}),
+            }
+            if parsed.path not in routes:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
             try:
-                length = int(self.headers.get("Content-Length") or 0)
-                payload = json.loads(self.rfile.read(length) or b"{}")
-                provider = str(payload.get("provider", ""))
-                if parsed.path == "/api/add":
-                    result = state.add_current(provider)
-                else:
-                    result = state.switch(provider, str(payload.get("number", "")))
+                payload = self._body()
+                action, required, optional = routes[parsed.path]
+                if not required <= payload.keys() or payload.keys() - required - optional:
+                    raise ProviderActionError("Missing required or unsupported request fields")
+                if "threshold" in payload and payload["threshold"] is None:
+                    raise ProviderActionError("threshold must be a number")
+                result = action(**payload)
             except Exception as e:  # noqa: BLE001 - surfaced to the page
-                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(e)})
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": safe_error(e)})
                 return
             self._json(HTTPStatus.OK, result)
 
@@ -393,6 +470,7 @@ def serve(
     """
     token = token or secrets.token_urlsafe(24)
     server = _Server((host, port), _make_handler(state, token))
+    server.dashboard_state = state
     server.daemon_threads = True
     shown_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
     url = f"http://{shown_host}:{server.server_port}/?token={token}"

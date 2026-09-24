@@ -25,6 +25,39 @@ uv tool install git+https://github.com/Jingyi-Jia/agents-switcher
 
 It coexists with an existing `cswap` install; the command names and the distribution name are both distinct.
 
+## Choose a provider
+
+Claude Code and Codex are separate providers, with independent account stores and
+credential handling. An account number always belongs to the provider you selected;
+switching Claude does not change Codex, or vice versa.
+
+```bash
+agent-switch tui                     # choose Claude Code or Codex
+agent-switch claude list
+agent-switch claude switch work
+agent-switch codex list
+agent-switch codex switch work
+```
+
+Unqualified commands such as `agent-switch list` still target Claude Code for
+backward compatibility. Provider differences remain intentional: Claude supports
+setup-token/API-key accounts, while Codex automatic switching only chooses accounts
+with included quota and does not switch underneath running Codex processes.
+
+## Which client is switched?
+
+**Claude Code CLI credentials are not the Claude Desktop login.** Claude Desktop,
+including its Code tab, signs in separately. Switching here does not switch the
+desktop account, and restarting Desktop alone does not transfer the CLI login.
+To change that account, sign out and sign in inside Claude Desktop. This tool does
+not copy, modify, or export desktop session cookies.
+
+The CLI uses its credential file or the macOS Keychain; its existing sessions can
+pick up a switch after their credential cache refreshes. Codex processes keep their
+existing login in memory, so the switch result tells you when they need restarting.
+See Anthropic's [authentication documentation](https://code.claude.com/docs/en/authentication)
+and [Desktop documentation](https://code.claude.com/docs/en/desktop).
+
 Optional extras:
 
 ```bash
@@ -56,6 +89,32 @@ An account past its included quota keeps working by billing credits per request.
 agent-switch web                      # opens a local dashboard in your browser
 agent-switch web --no-open            # print the URL instead (headless)
 ```
+
+The dashboard provides the same account-management actions as the TUI:
+
+| Action | Claude Code | Codex |
+| --- | --- | --- |
+| Add or refresh the current login | Yes | Yes |
+| Switch to a saved account or choose the best available account | Yes | Yes |
+| Enable/disable automatic selection; remove a saved account | Yes | Yes |
+| Watch usage and refresh it manually | Yes | Yes |
+| Start dry-run/live auto-switching, stop it, adjust its threshold | Yes | Yes |
+| Add a setup-token or API key | Yes | Not supported by the Codex account engine |
+
+Removal and live auto-switching require confirmation. Token replacement also
+requires confirmation, and token fields are masked. Disabled accounts can still
+be selected explicitly; they are excluded from automatic selection.
+
+Auto-switching starts **stopped** in the browser. Dry-run evaluates the existing
+provider policy without switching accounts; live mode applies it. Mode and
+threshold changes made here are session-only, not new saved rules. Automation
+continues while the local dashboard **server** is running: closing a browser tab
+or pausing live updates does not stop it. Use **Stop** or quit the server.
+An independently started CLI auto-switcher is not controlled by these buttons.
+
+The theme selector offers light, dark and system appearance. Neither the web UI
+nor the TUI initiates a new provider OAuth login: sign in to the provider first,
+then add the current login (or add a Claude token).
 
 Binds loopback only and mints a fresh token per run. To use it from a cluster login node, forward the port rather than widening the bind:
 

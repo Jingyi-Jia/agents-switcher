@@ -239,6 +239,8 @@ dashboard" is instant. Needs a desktop session -- on a headless machine use
     # The tray hosts the dashboard itself rather than shelling out, so opening
     # it is instant and there is one process to quit rather than two.
     url_holder: dict[str, str] = {}
+    server = None
+    server_thread = None
     existing = live_dashboard_url()
     if existing:
         url_holder["url"] = existing
@@ -257,7 +259,8 @@ dashboard" is instant. Needs a desktop session -- on a headless machine use
                 continue
             publish_url(url)
             url_holder["url"] = url
-            threading.Thread(target=server.serve_forever, daemon=True).start()
+            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
             break
 
     def refresh():
@@ -273,11 +276,32 @@ dashboard" is instant. Needs a desktop session -- on a headless machine use
         if url_holder.get("url"):
             _open(url_holder["url"])
 
+    closed = False
+
+    def on_quit() -> None:
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        try:
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+                server_thread.join()
+            else:
+                state.close()
+        finally:
+            if server is not None:
+                clear_url()
+
     print(f"{accent('Tray running')} ({backend}). Quit from the menu.", flush=True)
     try:
-        tray.run(refresh, on_select, on_open, interval=args.interval, backend=backend)
+        tray.run(
+            refresh, on_select, on_open, interval=args.interval,
+            backend=backend, on_quit=on_quit,
+        )
     except RuntimeError as e:
         error(str(e))
         sys.exit(1)
     finally:
-        clear_url()
+        on_quit()

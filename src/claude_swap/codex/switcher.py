@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from claude_swap.codex.auth_file import has_live_login, read_auth, write_auth
 from claude_swap.codex.identity import CodexIdentity, identity_from_auth
@@ -123,13 +123,14 @@ class CodexSwitcher:
 
     # -- mutation --------------------------------------------------------
 
-    def add_current(self, *, alias: str = "") -> CodexAccount:
+    def add_current(self, *, alias: str = "", refresh_existing: bool = False) -> CodexAccount:
         """Capture the CURRENT Codex login into a new slot.
 
         Raises:
             ValidationError: Nothing is logged in, or the login is an API key
                 (no id_token, so no derivable account identity).
-            SwitchError: This account already occupies a slot.
+            SwitchError: This account already occupies a slot and
+                ``refresh_existing`` was not requested.
         """
         with self.store.lock():
             live = read_auth()
@@ -146,6 +147,15 @@ class CodexSwitcher:
                 )
             existing = self.store.find_by_account_id(identity.account_id)
             if existing is not None:
+                if refresh_existing:
+                    updated = replace(
+                        existing, email=identity.email or existing.email,
+                        plan=identity.plan or existing.plan,
+                    )
+                    self.store.write_credentials(existing.number, live)
+                    self.store.update(updated)
+                    self.store.set_active(existing.number)
+                    return updated
                 raise SwitchError(
                     f"{identity.display_label} is already managed as slot "
                     f"{existing.number}."
@@ -254,6 +264,16 @@ class CodexSwitcher:
                 alias=normalized,
                 disabled=target.disabled,
             )
+            self.store.update(updated)
+            return updated
+
+    def set_account_disabled(self, identifier: str, disabled: bool) -> CodexAccount:
+        """Change automatic-selection eligibility without touching credentials."""
+        if type(disabled) is not bool:
+            raise ValidationError("disabled must be a boolean")
+        with self.store.lock():
+            target = self.resolve(identifier)
+            updated = replace(target, disabled=disabled)
             self.store.update(updated)
             return updated
 

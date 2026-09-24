@@ -14,11 +14,12 @@ if TYPE_CHECKING:
     from claude_swap.switcher import ClaudeAccountSwitcher
 
 
-def run(switcher: "ClaudeAccountSwitcher", start: str = "dashboard") -> int:
-    """Run the TUI over an existing switcher. Returns the process exit code.
+def run(switcher: "ClaudeAccountSwitcher | None" = None, start: str = "dashboard") -> int:
+    """Run the provider chooser, or an existing Claude switcher's dashboard.
 
     ``start="watch"`` (the ``cswap watch`` command) opens directly on the
-    live watch page, stacked over the dashboard.
+    live watch page, stacked over the dashboard. ``start="codex"`` opens
+    Codex above the chooser without initializing Claude.
     """
     from claude_swap.appearance import detect_terminal_background, drain_stdin
     from claude_swap.tui.app import CswapApp
