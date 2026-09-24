@@ -295,3 +295,121 @@ def test_ui_switch_refuses_running_codex_without_altering_login(account_env, mon
         actions.close()
     assert read_auth() == current
     assert account_env.store.active_number() == "2"
+
+
+@pytest.mark.parametrize("last_refresh", [None, "malformed", "2020-01-01T00:00:00"])
+@pytest.mark.parametrize("opaque", [False, True])
+def test_partial_write_recovery_without_a_usable_live_timestamp(
+    account_env, monkeypatch, last_refresh, opaque
+):
+    original = login(expired=True)
+    if last_refresh is not None:
+        original["last_refresh"] = last_refresh
+    if opaque:
+        original["tokens"]["access_token"] = "opaque-original-access"
+    write_auth(original)
+    account_env.switcher.add_current()
+    write_auth(login("two"))
+    account_env.switcher.add_current()
+    write_auth(original)
+    rotated = login(refresh="retained-after-write-error")["tokens"]
+    refreshes = []
+
+    def refresh(tokens):
+        assert not refreshes
+        refreshes.append(tokens)
+        return rotated
+
+    monkeypatch.setattr(switcher_mod, "refresh_tokens", refresh)
+
+    def fail_write(auth):
+        raise OSError("Unavailable live file")
+
+    monkeypatch.setattr(switcher_mod, "write_auth", fail_write)
+    with pytest.raises(OSError):
+        account_env.switcher.usage_for("1")
+    monkeypatch.setattr(switcher_mod, "write_auth", write_auth)
+
+    def fetch(tokens):
+        assert tokens == rotated
+        return CodexUsage()
+
+    monkeypatch.setattr(switcher_mod, "fetch_usage", fetch)
+    account_env.switcher.usage_for("1")
+    assert account_env.store.read_credentials("1")["tokens"] == rotated
+    account_env.switcher.switch_to("2")
+    assert account_env.store.read_credentials("1")["tokens"] == rotated
+    account_env.switcher.switch_to("1")
+    assert read_auth()["tokens"] == rotated
+    assert len(refreshes) == 1
+
+
+def test_newer_live_token_without_timestamp_is_still_adopted(account_env, monkeypatch):
+    saved = {**login(), "last_refresh": "2020-01-01T00:00:00Z"}
+    write_auth(saved)
+    account_env.switcher.add_current()
+    latest = login(refresh="newer-native-login")
+    latest["tokens"]["access_token"] = jwt({"exp": time.time() + 7200})
+    write_auth(latest)
+
+    def fetch(tokens):
+        assert tokens == latest["tokens"]
+        return CodexUsage()
+
+    monkeypatch.setattr(switcher_mod, "fetch_usage", fetch)
+    account_env.switcher.usage_for("1")
+    assert account_env.store.read_credentials("1") == latest
+
+
+def test_equal_expiry_does_not_discard_a_rotation_after_a_failed_write(account_env, monkeypatch):
+    original = login()
+    write_auth(original)
+    account_env.switcher.add_current()
+    rotated = {**original["tokens"], "refresh_token": "new-with-same-expiry"}
+    refreshes = []
+
+    def refresh(tokens):
+        assert not refreshes
+        refreshes.append(tokens)
+        return rotated
+
+    def fetch(tokens):
+        if tokens == original["tokens"]:
+            raise UsageAuthError("HTTP 401")
+        assert tokens == rotated
+        return CodexUsage()
+
+    def fail_write(auth):
+        raise OSError("Unavailable live file")
+
+    monkeypatch.setattr(switcher_mod, "refresh_tokens", refresh)
+    monkeypatch.setattr(switcher_mod, "fetch_usage", fetch)
+    monkeypatch.setattr(switcher_mod, "write_auth", fail_write)
+    with pytest.raises(OSError):
+        account_env.switcher.usage_for("1")
+    account_env.switcher.usage_for("1")
+    assert len(refreshes) == 1
+    assert account_env.store.read_credentials("1")["tokens"] == rotated
+
+
+def test_quota_network_wait_does_not_hold_the_credential_store_lock(account_env, monkeypatch):
+    write_auth(login())
+    account_env.switcher.add_current()
+    waiting = threading.Event()
+    finish = threading.Event()
+
+    def fetch(tokens):
+        waiting.set()
+        assert finish.wait(timeout=5)
+        return CodexUsage()
+
+    monkeypatch.setattr(switcher_mod, "fetch_usage", fetch)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(account_env.switcher.usage_for, "1")
+        try:
+            assert waiting.wait(timeout=5)
+            with account_env.store.lock(timeout=0.1):
+                assert account_env.store.active_number() == "1"
+        finally:
+            finish.set()
+        result.result(timeout=5)

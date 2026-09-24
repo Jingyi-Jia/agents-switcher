@@ -26,6 +26,7 @@ running ``codex`` keeps the old account until it restarts. The result says so.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -53,12 +54,25 @@ _logger = logging.getLogger("claude-swap")
 
 
 def _live_login_is_older(saved: dict, live: dict) -> bool:
-    try:
-        saved_at = datetime.fromisoformat(saved.get("last_refresh", ""))
-        live_at = datetime.fromisoformat(live.get("last_refresh", ""))
-    except (TypeError, ValueError):
-        return False
-    return saved_at.tzinfo is not None and live_at.tzinfo is not None and saved_at > live_at
+    refreshed = []
+    for credentials in (saved, live):
+        try:
+            at = datetime.fromisoformat(credentials.get("last_refresh", ""))
+        except (TypeError, ValueError):
+            at = None
+        refreshed.append(at if at is not None and at.tzinfo is not None else None)
+    saved_at, live_at = refreshed
+    if saved_at is not None and live_at is not None:
+        return saved_at > live_at
+    saved_expiry = access_token_expiry(saved.get("tokens") or {})
+    live_expiry = access_token_expiry(live.get("tokens") or {})
+    if (
+        saved_expiry is not None and live_expiry is not None
+        and math.isfinite(saved_expiry) and math.isfinite(live_expiry)
+        and saved_expiry != live_expiry
+    ):
+        return saved_expiry > live_expiry
+    return saved_at is not None and live_at is None and saved.get("tokens") != live.get("tokens")
 
 
 @dataclass(frozen=True)
@@ -347,15 +361,10 @@ class CodexSwitcher:
             UsageError: The call failed, including a refresh that could not be
                 completed.
         """
+        refreshed = False
         with self.store.lock():
-            current = self.resolve(account.number)
-            if current.account_id != account.account_id:
-                raise SwitchError("This saved Codex account changed. Refresh the account list and try again.")
-            account = current
             credentials = self._credentials_with_live_updates(account)
             tokens = credentials.get("tokens") or {}
-            refreshed = False
-
             if (
                 allow_refresh
                 and needs_refresh(tokens, now=time.time())
@@ -365,24 +374,24 @@ class CodexSwitcher:
                 tokens = credentials["tokens"]
                 refreshed = True
 
-            try:
-                return fetcher(tokens)
-            except UsageAuthError:
+        try:
+            return fetcher(tokens)
+        except UsageAuthError:
+            with self.store.lock():
                 latest = self._credentials_with_live_updates(account)
                 if latest.get("tokens") != tokens:
                     credentials = latest
-                    tokens = credentials.get("tokens") or {}
-                    try:
-                        return fetcher(tokens)
-                    except UsageAuthError:
-                        pass
-                if refreshed or not allow_refresh or not self._refresh_is_safe(account):
+                elif refreshed or not allow_refresh or not self._refresh_is_safe(account):
                     raise
-                credentials = self._refresh_and_persist(account, credentials)
-                return fetcher(credentials["tokens"])
+                else:
+                    credentials = self._refresh_and_persist(account, latest)
+            return fetcher(credentials.get("tokens") or {})
 
     def _credentials_with_live_updates(self, account: CodexAccount) -> dict:
         """Reconcile a saved login while the caller holds the store lock."""
+        current = self.resolve(account.number)
+        if current.account_id != account.account_id:
+            raise SwitchError("This saved Codex account changed. Refresh the account list and try again.")
         credentials = self.store.read_credentials(account.number)
         if credentials is None:
             raise SwitchError(
