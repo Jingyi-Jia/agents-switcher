@@ -43,6 +43,30 @@ def test_process_failures_report_the_stage_without_private_output(monkeypatch, f
     assert "No launch was attempted" in str(error.value)
 
 
+@pytest.mark.parametrize("owner,uid,expected", [
+    ("-2", 501, False),
+    ("-2", 2**32 - 2, True),
+    ("-2147483648", 2**31, True),
+    ("4294967294", 2**32 - 2, True),
+])
+def test_macos_signed_uid_representation_preserves_process_ownership(monkeypatch, owner, uid, expected):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(cd.os, "getuid", lambda: uid, raising=False)
+    monkeypatch.setattr(cd.subprocess, "run", Mock(return_value=SimpleNamespace(
+        stdout=f"{owner} S /Applications/Claude.app/Contents/MacOS/Claude\n501 S /bin/ps\n",
+    )))
+    assert cd.running() is expected
+
+
+@pytest.mark.parametrize("owner", ["-2147483649", "4294967296", "--2", "+501", "٥٠١"])
+def test_invalid_uid_representations_still_fail_closed(monkeypatch, owner):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(cd.os, "getuid", lambda: 501, raising=False)
+    monkeypatch.setattr(cd.subprocess, "run", Mock(return_value=SimpleNamespace(stdout=f"{owner} S /bin/ps\n")))
+    with pytest.raises(ProviderActionError, match="unreadable process list"):
+        cd.running()
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="Exercises native macOS ps zombie formatting")
 def test_native_macos_zombie_has_no_command_and_does_not_break_scan():
     source = (
@@ -70,10 +94,42 @@ def test_native_macos_zombie_has_no_command_and_does_not_break_scan():
                 assert time.monotonic() < deadline, "Disposable child did not become a zombie"
                 time.sleep(0.05)
             assert row[0] == str(os.getuid())
-            assert len(row) == 2, "macOS zombie command formatting changed"
+            assert row[2:] == ["<defunct>"], "macOS zombie command formatting changed"
             assert isinstance(cd.running(), bool)
         finally:
             process.stdin.close()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" or os.environ.get("GITHUB_ACTIONS") != "true",
+    reason="Creates a disposable nobody-owned process on macOS CI only",
+)
+def test_native_macos_signed_nobody_uid_does_not_break_scan():
+    with subprocess.Popen(
+        ["/usr/bin/sudo", "-n", "-u", "nobody", "/bin/sleep", "15"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ) as process:
+        try:
+            deadline = time.monotonic() + 5
+            while True:
+                rows = subprocess.run(
+                    ["/bin/ps", "-axww", "-o", "uid=,comm="],
+                    capture_output=True, text=True, timeout=3, check=True,
+                ).stdout.splitlines()
+                if any(row.split(None, 1)[:1] == ["-2"] for row in rows):
+                    break
+                assert process.poll() is None, "Disposable nobody process exited early"
+                assert time.monotonic() < deadline, "macOS did not report the nobody UID as -2"
+                time.sleep(0.05)
+            assert isinstance(cd.running(), bool)
+        finally:
+            if process.poll() is None:
+                process.terminate()
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:

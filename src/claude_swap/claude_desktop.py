@@ -61,14 +61,19 @@ def running() -> bool:
         found = False
         for line in result.stdout.splitlines():
             owner, state, *commands = line.strip().split(None, 2)
-            if not owner.isascii() or not owner.isdigit():
+            if re.fullmatch(r"-?[0-9]+", owner) is None:
+                raise ValueError
+            owner_id = int(owner)
+            if sys.platform == "darwin" and -(2**31) <= owner_id < 0:
+                owner_id += 2**32
+            if not 0 <= owner_id < 2**32:
                 raise ValueError
             if state.startswith("Z"):
                 continue
             if not commands:
                 raise ValueError
             command = commands[0]
-            if int(owner) == uid and Path(command).name in {"Claude", "claude-desktop"}:
+            if owner_id == uid and Path(command).name in {"Claude", "claude-desktop"}:
                 found = True
         return found
     except subprocess.TimeoutExpired:

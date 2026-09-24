@@ -211,8 +211,11 @@ are in [desktop/README.md](desktop/README.md) and
   boundaries; [test_claude_desktop_page.py](tests/test_claude_desktop_page.py)
   checks consent and rendering. Do not run native sign-ins as an unattended test.
   [test_claude_desktop_processes.py](tests/test_claude_desktop_processes.py) also
-  reproduces macOS's blank command field for a disposable zombie process. Skip
-  only confirmed zombies; missing commands on live rows must still block launch.
+  covers macOS's `<defunct>` zombie marker and signed 32-bit UID formatting
+  (`nobody` appears as `-2`). It creates a short-lived nobody-owned process only
+  on disposable macOS CI, never on a developer's workstation. Normalize signed
+  Mac UIDs before comparing ownership. Skip only confirmed zombies; missing
+  commands on live rows must still block launch.
   Packaging CI runs `--check-processes` on the frozen and bundled helper even
   when Claude is not installed, so installation detection cannot hide a scan failure.
 - Keep the human [README](README.md), this guide, CLI help and visible notices
