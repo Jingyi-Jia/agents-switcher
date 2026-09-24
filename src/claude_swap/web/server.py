@@ -34,6 +34,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from claude_swap.claude_desktop import ClaudeDesktopProfiles
 from claude_swap.providers import ProviderActionError, ProviderActions, safe_error
 from claude_swap.web.page import PAGE_HTML
 
@@ -101,6 +102,7 @@ class DashboardState:
     def __init__(self, claude_switcher=None, codex_switcher=None) -> None:
         self._claude = claude_switcher
         self._codex = codex_switcher
+        self.claude_desktop = ClaudeDesktopProfiles()
         self.actions = ProviderActions(claude=claude_switcher, codex=codex_switcher)
         self._lock = self.actions.lock
         self._cached: dict | None = None
@@ -130,6 +132,7 @@ class DashboardState:
                 self._cached_revision = self.actions.revision
             return {
                 **self._cached,
+                "claudeDesktop": self.claude_desktop.status(),
                 **{
                     provider: {
                         **self._cached[provider],
@@ -444,6 +447,8 @@ def _make_handler(state: DashboardState, token: str):
                 self._json(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
                 return
             routes = {
+                "/api/claude-desktop/create": (state.claude_desktop.create, {"name", "confirm"}, set()),
+                "/api/claude-desktop/open": (state.claude_desktop.open, {"profileId", "confirm"}, set()),
                 "/api/switch": (state.switch, {"provider", "number"}, set()),
                 "/api/add": (state.add_current, {"provider"}, set()),
                 "/api/remove": (state.remove, {"provider", "number", "confirm"}, set()),

@@ -4,6 +4,9 @@ A local account manager for **Claude Code and Codex**. Save existing logins,
 see quota, and choose which account to use from a desktop window, browser
 dashboard, or terminal. Automatic switching is optional.
 
+The app and browser dashboard also offer **experimental Claude Desktop profiles**
+on macOS and Linux. These are separate from Claude Code accounts and automation.
+
 The executable is **`agent-switch`**; the Python package is `agents-switcher`.
 This fork does not install or replace upstream's `cswap` command.
 
@@ -13,6 +16,7 @@ This fork does not install or replace upstream's `cswap` command.
 | --- | --- | --- |
 | Claude Code | Saved CLI logins, setup tokens and managed API keys; manual and quota-based switching | **Not Claude Desktop**, including its Code tab. Desktop has a separate sign-in; restarting it does not transfer a CLI login. |
 | Codex | File-backed ChatGPT/OAuth accounts, quota, activity stats and automatic selection | Supports Codex CLI and Desktop when they use the same `auth.json`, not keyring-only or API-key logins. Quit both before switching; running processes keep their old account until restarted. |
+| Claude Desktop profiles | Experimental, manual launcher for separate local profiles on macOS/Linux | Sign in inside each profile. Mac account persistence and Code/Cowork behavior are unverified; custom profiles disable local Claude-in-Chrome pairing. No quota-based switching or Windows support. |
 
 Agent Switch does not install the provider CLIs or sign you in. Install
 [Claude Code](https://code.claude.com/docs/en/setup) or
@@ -40,6 +44,8 @@ platform requirements and native build instructions.
 
 The standalone app bundles Electron and its Python backend: end users do not
 need Python, uv, Node.js or npm, but still need their provider CLI and login.
+The experimental Claude Desktop panel needs the official Claude Desktop app
+instead of a CLI installation.
 Public macOS/Windows release builds require signing credentials, and macOS also
 requires notarization. The workflow exists; a trusted signed release still needs
 successful builds and clean-machine installation checks. There is no auto-updater.
@@ -97,6 +103,48 @@ prompt rather than putting a secret in shell history. Experimental
 `agent-switch run 2 -- --resume` launches a Claude Code account in a separate
 terminal profile; it does not support API-key accounts and is not Desktop
 profile switching. See `agent-switch run --help` for isolation and sharing options.
+
+## Try Claude Desktop profiles (experimental)
+
+Use the **Claude Desktop — Experimental profiles** panel in the app or browser
+dashboard. It is not the Claude Code account list, and **Add existing login** does
+not import a Desktop session.
+
+1. Install official Claude Desktop in `/Applications/Claude.app` or
+   `~/Applications/Claude.app` on macOS, or its official Linux package at
+   `/usr/bin/claude-desktop`. Custom install locations and Windows are not supported.
+2. Choose **Create empty profile**, give it a label such as “Work”, and acknowledge
+   the experimental limitations. This only creates empty private directories.
+3. Fully **quit Claude Desktop**. Closing its window may leave it running. Choose
+   **Check again**, then **Open** beside the profile and confirm the launch.
+4. Sign in directly inside Claude. Repeat with another empty profile for another
+   account. To return to a saved profile, quit Claude first and open that profile
+   from Agent Switch. **Verify the selected account inside Claude before working**;
+   labels are yours, not identities checked by Agent Switch.
+5. To use your original profile again, quit Claude and choose **Open usual Claude
+   (default)**. Launching Claude normally from the Dock also uses its usual profile,
+   not the last named profile chosen here.
+
+This uses Claude's `--user-data-dir` launch flag without copying session cookies,
+importing tokens, changing CLI credentials, modifying the official app, or
+force-quitting it. The feature only confirms that a launch was requested, not
+successful authentication. Account sign-in, expiry and refresh remain Claude's
+responsibility. Opening profiles does not provide quota data or auto-switching.
+
+**Known limitation:** the inspected Mac build disables local pairing with
+**Claude in Chrome** for relocated profiles. Browser tools using that connection
+can be unavailable. This is not evidence that all Code/Cowork features fail, but
+their signed-in behavior and Mac account persistence have not been verified.
+The completed official-app test used **Claude Desktop 2.7032.0 on Linux**, empty
+profiles and A → B → A restarts; it verified separate data and saved window settings,
+not real-account switching. Treat updates to Claude as requiring revalidation.
+
+Profile labels and IDs are stored in `claude-desktop/profiles.json` beneath Agent
+Switch's data directory; each `profiles/<id>/` contains private `desktop/` and
+`claude-code/` directories. Claude owns the session data it creates there, which
+can contain credentials and conversation data. Do not share or commit these
+directories. No delete or export action is provided. Launching Claude can also
+update its shared OS-integration metadata outside a named profile.
 
 ## Save and switch Codex accounts safely
 

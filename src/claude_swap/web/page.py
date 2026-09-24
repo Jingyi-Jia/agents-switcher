@@ -235,7 +235,7 @@ PAGE_HTML = r"""<!doctype html>
       <li><strong>Save the current login.</strong> Add existing login saves that provider's current CLI credentials for switching later. It doesn't start a new sign-in.</li>
       <li><strong>Add another account when you're ready.</strong> Sign in to a different account in the same CLI, then add that login here. Switch by hand, or try Dry run before enabling live auto-switch.</li>
     </ol>
-    <p class="guide-boundary">CLI credentials only. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
+    <p class="guide-boundary" id="guide-boundary">The Claude Code and Codex account controls manage CLI credentials only. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
     <p class="hint">Paid-credit accounts remain manual-only; auto-switch never chooses them. After switching, follow any provider restart notice shown below.</p>
     <p class="hint">Closing the app stops its automation. Pausing live updates only pauses this view.</p>
     <div class="guide-footer"><button type="button" id="guide-check" data-action>Check again</button><span class="hint" id="desktop-meta"></span></div>
@@ -247,6 +247,15 @@ PAGE_HTML = r"""<!doctype html>
   <section class="provider" aria-labelledby="claude-heading"><h2 id="claude-heading">Claude Code<span id="claude-count"></span></h2><p class="notice" id="claude-switch-notice">CLI only. Claude desktop, including the Code tab, has a separate sign-in and is not switched here.</p><div id="claude-actions" class="actions"></div><div id="claude"></div><div id="claude-auto" class="auto-panel"></div></section>
   <section class="provider" aria-labelledby="codex-heading"><h2 id="codex-heading">Codex<span id="codex-count"></span></h2><p class="notice" id="codex-switch-notice" hidden></p><div id="codex-actions" class="actions"></div><div id="codex"></div><div id="codex-auto" class="auto-panel"></div></section>
   </div>
+
+  <section class="provider" id="claude-desktop-panel" aria-labelledby="claude-desktop-heading" hidden>
+    <h2 id="claude-desktop-heading">Claude Desktop <span>Experimental profiles</span></h2>
+    <p class="notice" id="claude-desktop-notice"></p>
+    <p class="notice">Profiles are local app data, not verified accounts. Sign in to each profile in Claude once and confirm the selected account there. The Dock normally opens the usual default profile. No token import, cookie copying, deletion, or auto-switching is provided.</p>
+    <p class="notice" id="claude-desktop-status" role="status"></p>
+    <div class="actions" id="claude-desktop-actions"></div>
+    <div id="claude-desktop-profiles"></div>
+  </section>
 
   <div id="toast" role="status" aria-live="polite"></div>
 </div>
@@ -321,6 +330,9 @@ function renderHelp() {
   $("app-title").textContent = desktop ? "Agent Switch" : "agent-switch";
   document.title = desktop ? "Agent Switch" : "agent-switch";
   if (!desktop) return;
+  $("guide-boundary").textContent = state.claudeDesktop
+    ? "The Claude Code and Codex account controls manage CLI credentials only. Claude Desktop, including its Code tab, has a separate sign-in; the experimental profile launcher below opens separate app profiles without transferring CLI credentials. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies."
+    : "The Claude Code and Codex account controls manage CLI credentials only. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.";
   $("guide-label").textContent = managed ? "Help" : "Getting started";
   $("guide-title").textContent = managed ? "Account switching, step by step" : "Start with an existing CLI login";
   const platform = {darwin: "macOS", win32: "Windows", linux: "Linux"}[state.desktop.platform] || "Desktop";
@@ -537,6 +549,97 @@ function syncBusy() {
   $("dialog-form").setAttribute("aria-busy", String(busy));
 }
 
+const desktopProfileWarning = "Experimental, macOS/Linux only. Signed-in persistence on Mac and Code/Cowork are unverified. Relocated profiles disable local Claude-in-Chrome pairing. Sign in to each profile in Claude once. Fully QUIT Claude before opening another profile. Profile names are user labels, not verified identities; confirm the selected account in Claude.";
+const desktopProfileUI = {};
+
+function setupDesktopProfiles() {
+  const actions = $("claude-desktop-actions");
+  desktopProfileUI.create = actionButton("Create empty profile", () => createDesktopProfile(desktopProfileUI.create));
+  desktopProfileUI.default = actionButton("Open usual Claude (default)", () => openDesktopProfile("default", "usual Claude (default)", desktopProfileUI.default));
+  desktopProfileUI.refresh = actionButton("Check again", () => refreshUsage(desktopProfileUI.refresh));
+  actions.append(desktopProfileUI.create, desktopProfileUI.default, desktopProfileUI.refresh);
+}
+
+function renderDesktopProfiles(data) {
+  const panel = $("claude-desktop-panel");
+  panel.hidden = !data;
+  if (!data) return;
+  $("claude-desktop-notice").textContent = data.notice || "Experimental Claude Desktop profiles are separate from Claude Code accounts.";
+  const unavailable = !data.supported ? "Claude Desktop profiles are supported on macOS and Linux only."
+    : !data.installed ? "Claude Desktop is not installed."
+    : !data.available ? "Claude Desktop profiles are unavailable."
+    : "";
+  $("claude-desktop-status").textContent = [unavailable, data.error,
+    data.running === true ? "Claude is running. Fully quit it before opening another profile."
+      : data.running === null || data.running === undefined ? "Claude process status is unknown. Opening is blocked until a check confirms it is quit."
+      : "Claude is quit; you can open a profile."].filter(Boolean).join(" ");
+  block(desktopProfileUI.create, !data.available);
+  block(desktopProfileUI.default, !data.available || data.running !== false);
+  const host = $("claude-desktop-profiles");
+  host.replaceChildren();
+  const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+  if (!profiles.length) host.appendChild(el("div", "empty", "No named profiles yet. Creating one makes an empty profile; sign in through Claude after opening it."));
+  profiles.forEach((profile) => {
+    const card = el("div", "card");
+    const row = el("div", "top");
+    row.appendChild(el("span", "name", profile.name));
+    row.appendChild(el("span", "grow"));
+    const open = actionButton("Open", () => openDesktopProfile(profile.id, profile.name, open));
+    open.setAttribute("aria-label", `Open Claude Desktop profile ${profile.name}`);
+    block(open, !data.available || data.running !== false);
+    row.appendChild(open);
+    card.appendChild(row);
+    host.appendChild(card);
+  });
+}
+
+function desktopConsent(host) {
+  const check = el("label", "check");
+  const input = el("input");
+  input.type = "checkbox";
+  input.required = true;
+  input.dataset.lock = "";
+  check.append(input, el("span", null, "I understand these experimental limitations and will verify the account in Claude."));
+  host.appendChild(check);
+}
+
+function createDesktopProfile(opener) {
+  if (!state.claudeDesktop?.available) return;
+  let name;
+  confirmAction({
+    title: "Create an empty Claude Desktop profile?", description: desktopProfileWarning + " Creation does not launch Claude or sign you in.",
+    label: "Create empty profile", opener,
+    fields: (host) => {
+      const field = el("label", "field", "Profile label (up to 64 characters)");
+      name = el("input");
+      Object.assign(name, {type: "text", required: true, maxLength: 64, autocomplete: "off"});
+      name.dataset.lock = "";
+      field.appendChild(name);
+      host.append(field);
+      desktopConsent(host);
+    },
+    submit: (button) => {
+      const label = name.value.trim();
+      if (!label || label.length > 64 || !state.claudeDesktop?.available) return false;
+      return act("/api/claude-desktop/create", {name: label, confirm: true}, button, "creating…");
+    },
+  });
+}
+
+function openDesktopProfile(profileId, name, opener) {
+  if (!state.claudeDesktop?.available || state.claudeDesktop.running !== false) return;
+  confirmAction({
+    title: `Open ${name}?`, description: desktopProfileWarning + " This only requests a launch; it does not authenticate or switch an account. The Dock normally opens the usual default profile.",
+    label: "Request launch", opener, fields: desktopConsent,
+    submit: async (button) => {
+      if (!state.claudeDesktop?.available || state.claudeDesktop.running !== false) return false;
+      const result = await act("/api/claude-desktop/open", {profileId, confirm: true}, button, "requesting…");
+      dialogOpener = desktopProfileUI.refresh;
+      return result;
+    },
+  });
+}
+
 function setupProvider(id) {
   const ui = providerUI[id] = {mode: "stopped", dirty: false, buttons: {}};
   const host = $(id + "-actions");
@@ -678,6 +781,7 @@ async function load(force = false, silent = false) {
     renderHelp();
     $("kpis").replaceChildren(tile("Claude Code", body.claude || {}), tile("Codex", body.codex || {}));
     Object.keys(providers).forEach((id) => updateProvider(id, body[id] || {}, force));
+    renderDesktopProfiles(body.claudeDesktop);
     $("stamp").textContent = "updated " + new Date().toLocaleTimeString();
     return true;
   } catch {
@@ -714,6 +818,8 @@ async function act(path, payload, button, pending) {
     const success = ok && body.ok !== false && !body.error;
     const noSwitch = body.switched === false;
     let message = safeMessage(body.message || body.error || body.reason || (noSwitch ? "No account was switched." : success ? "Request completed." : "Request failed."), payload.token);
+    if (success && path === "/api/claude-desktop/open") message = "Launch requested only; confirm the selected account in Claude. Sign in there if this profile is new.";
+    if (success && path === "/api/claude-desktop/create") message = "Empty profile created; sign in through Claude after opening it.";
     if (path === "/api/auto" && success && payload.threshold !== undefined) providerUI[payload.provider].dirty = false;
     const refreshed = await load(true, true);
     if (!refreshed) message += isDesktop() ? " State could not be refreshed; try Refresh usage or reopen the app." : " State could not be refreshed; check the local dashboard server.";
@@ -867,6 +973,7 @@ $("help-close").onclick = () => {
 $("guide-check").onclick = () => refreshUsage($("guide-check"));
 Object.keys(providers).forEach(setupHelp);
 Object.keys(providers).forEach(setupProvider);
+setupDesktopProfiles();
 load();
 setInterval(() => { if ($("watch").checked && !busy && !$("action-dialog").open) load(); }, 20000);
 </script>
