@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import http.client
 import json
 import os
 import urllib.error
@@ -41,6 +42,12 @@ ISSUER = "https://auth.openai.com"
 #: valid cannot finish expired.
 EXPIRY_MARGIN_S = 300.0
 _TIMEOUT_S = 30
+_REAUTH_ERROR_CODES = frozenset({
+    "invalid_grant",
+    "refresh_token_expired",
+    "refresh_token_reused",
+    "refresh_token_invalidated",
+})
 
 
 class TokenRefreshError(Exception):
@@ -148,17 +155,30 @@ def refresh_tokens(tokens: dict, *, issuer: str = ISSUER) -> dict:
         with urllib.request.urlopen(request, timeout=_TIMEOUT_S) as response:
             payload = json.loads(response.read())
     except urllib.error.HTTPError as e:
-        detail = e.read()[:400].decode("utf-8", "replace")
-        if "invalid_grant" in detail:
+        try:
+            error_payload = json.loads(e.read())
+        except (ValueError, OSError, http.client.HTTPException):
+            error_payload = None
+        code = None
+        if isinstance(error_payload, dict):
+            error = error_payload.get("error")
+            code = error.get("code") if isinstance(error, dict) else error
+            if not isinstance(code, str) or not code.strip():
+                code = error_payload.get("code")
+        if isinstance(code, str) and code.lower() in _REAUTH_ERROR_CODES:
             raise TokenRefreshError(
-                "refresh token is no longer valid — this account needs "
-                f"'codex login' again ({e.code})"
-            ) from e
-        raise TokenRefreshError(f"refresh failed: HTTP {e.code} {detail}") from e
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise TokenRefreshError(f"refresh request failed: {e}") from e
-    except ValueError as e:
-        raise TokenRefreshError(f"refresh returned unreadable JSON: {e}") from e
+                "Codex needs a fresh login for this account. Run 'codex login' "
+                "as the affected account, then add the existing login again."
+            ) from None
+        raise TokenRefreshError(
+            f"refresh failed: HTTP {e.code}; try again later"
+        ) from None
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
+        raise TokenRefreshError(
+            "refresh request failed; check your connection and try again"
+        ) from None
+    except ValueError:
+        raise TokenRefreshError("refresh returned unreadable JSON") from None
 
     if not isinstance(payload, dict):
         raise TokenRefreshError("refresh returned a non-object response")

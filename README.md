@@ -76,8 +76,9 @@ with included quota and does not switch underneath running Codex processes.
 **Claude Code CLI credentials are not the Claude Desktop login.** Claude Desktop,
 including its Code tab, signs in separately. Switching here does not switch the
 desktop account, and restarting Desktop alone does not transfer the CLI login.
-To change that account, sign out and sign in inside Claude Desktop. This tool does
-not copy, modify, or export desktop session cookies.
+To change that account, use Claude Desktop's account menu, or sign out and sign in
+inside Desktop for a different login. This tool does not copy, modify, or export
+desktop session cookies.
 
 The CLI uses its credential file or the macOS Keychain; its existing sessions can
 pick up a switch after their credential cache refreshes. Codex processes keep their
@@ -104,7 +105,27 @@ agent-switch codex stats              # lifetime tokens, streaks, reset credits
 agent-switch codex auto --once        # switch if the active account is low
 ```
 
-**A Codex switch only affects processes started afterwards.** Codex reads `auth.json` once at startup and its 401-recovery reload refuses to cross account ids, so a running `codex` keeps serving the old account until it restarts. Every command that switches says so and names the processes still holding the previous account. This is a Codex design decision, not a limitation of this tool — no switcher can work around it.
+**Quit Codex before switching, then reopen it.** Codex caches its login, and its
+401-recovery reload refuses to cross account ids. Replacing `auth.json` while it
+is running does not switch that running session. The dashboard and TUI now refuse
+to change accounts until Codex's desktop app and terminal processes have exited;
+they do not force-close your work. The lower-level CLI switch command retains its
+restart warning, but quitting first is the safe order there too. Codex desktop
+sessions using the same file-based login pick up the saved account when reopened;
+separate homes or keyring-backed authentication are not switched by this file swap.
+
+Usage checks reconcile the matching live login before refreshing a saved token,
+and serialize refreshes so two Agent Switch processes cannot rotate the same
+saved login at once. A switch refreshes a saved access token with a known expiry
+when it is expired or expiring, before replacing the current login. If that
+refresh fails, the current login is left in place. An opaque token has no locally
+readable expiry and remains subject to Codex's own authentication checks.
+
+If a saved login has already been revoked or its rotating refresh token has been
+reused, it cannot be repaired by restoring the old file. Sign in to that account
+again through Codex (or `codex login`), then choose **Add existing login** in Agent
+Switch to update its saved slot. Do not share `auth.json` or tokens when reporting
+an authentication error.
 
 ### Paid credits are never auto-selected
 
