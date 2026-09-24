@@ -171,7 +171,7 @@ class ClaudeDesktopProfiles:
         supported = sys.platform in {"darwin", "linux"}
         installed = supported and installed_executable() is not None
         result = {
-            "supported": supported, "installed": installed, "available": False,
+            "supported": supported, "installed": installed, "available": False, "canCreate": False,
             "experimental": True, "notice": NOTICE, "error": None,
             "running": None, "profiles": [],
         }
@@ -180,8 +180,12 @@ class ClaudeDesktopProfiles:
             return result
         try:
             result["profiles"] = self._read()
+            result["canCreate"] = True
             if not installed:
-                result["error"] = "Install the official Claude Desktop app in its usual location, then refresh."
+                result["error"] = (
+                    "To open profiles, install official Claude Desktop in /Applications/Claude.app or "
+                    "~/Applications/Claude.app on macOS, or /usr/bin/claude-desktop on Linux, then check again."
+                )
                 return result
             result["running"] = running()
             result["available"] = True
@@ -191,15 +195,11 @@ class ClaudeDesktopProfiles:
             result["error"] = "Could not read the Claude Desktop profile registry. No profiles were changed."
         return result
 
-    def _allowed(self, confirm) -> Path:
+    def _allowed(self, confirm) -> None:
         if confirm is not True:
             raise ProviderActionError("Confirm the experimental Claude Desktop profile limitations first.")
         if sys.platform not in {"darwin", "linux"}:
             raise ProviderActionError("Experimental Claude Desktop profiles support macOS and Linux only.")
-        executable = installed_executable()
-        if executable is None:
-            raise ProviderActionError("Install the official Claude Desktop app in its usual location first.")
-        return executable
 
     def create(self, name, *, confirm=False) -> dict:
         self._allowed(confirm)
@@ -222,7 +222,10 @@ class ClaudeDesktopProfiles:
         return {"ok": True, "profile": profile, "message": "Empty profile created. Open it and sign in directly in Claude."}
 
     def open(self, profileId, *, confirm=False) -> dict:
-        executable = self._allowed(confirm)
+        self._allowed(confirm)
+        executable = installed_executable()
+        if executable is None:
+            raise ProviderActionError("Install the official Claude Desktop app in its usual location first.")
         if not isinstance(profileId, str) or (profileId != "default" and not _PROFILE_ID.fullmatch(profileId)):
             raise ProviderActionError("Select a saved Claude Desktop profile or the usual profile.")
         with self._locked():

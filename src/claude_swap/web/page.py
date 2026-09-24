@@ -85,6 +85,7 @@ PAGE_HTML = r"""<!doctype html>
 
   /* -- provider panels: a tonal step, not a divider ---------------------- */
   .provider { background: var(--panel); border-radius: 24px; padding: 20px; margin-bottom: 12px; }
+  #claude-group { min-width: 0; }
   .provider > h2 { font-size: 12px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--mid); margin: 0 0 12px 4px; }
   .provider > h2 span { color: var(--mid); font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: 8px; }
 
@@ -244,10 +245,9 @@ PAGE_HTML = r"""<!doctype html>
   <section class="kpis" id="kpis" aria-label="Active accounts"></section>
 
   <div class="providers">
-  <section class="provider" aria-labelledby="claude-heading"><h2 id="claude-heading">Claude Code<span id="claude-count"></span></h2><p class="notice" id="claude-switch-notice">CLI only. Claude desktop, including the Code tab, has a separate sign-in and is not switched here.</p><div id="claude-actions" class="actions"></div><div id="claude"></div><div id="claude-auto" class="auto-panel"></div></section>
   <section class="provider" aria-labelledby="codex-heading"><h2 id="codex-heading">Codex<span id="codex-count"></span></h2><p class="notice" id="codex-switch-notice" hidden></p><div id="codex-actions" class="actions"></div><div id="codex"></div><div id="codex-auto" class="auto-panel"></div></section>
-  </div>
-
+  <div id="claude-group" role="group" aria-label="Claude">
+  <section class="provider" aria-labelledby="claude-heading"><h2 id="claude-heading">Claude Code<span id="claude-count"></span></h2><p class="notice" id="claude-switch-notice">CLI only. Claude desktop, including the Code tab, has a separate sign-in and is not switched here.</p><div id="claude-actions" class="actions"></div><div id="claude"></div><div id="claude-auto" class="auto-panel"></div></section>
   <section class="provider" id="claude-desktop-panel" aria-labelledby="claude-desktop-heading" hidden>
     <h2 id="claude-desktop-heading">Claude Desktop <span>Experimental profiles</span></h2>
     <p class="notice" id="claude-desktop-notice"></p>
@@ -256,6 +256,8 @@ PAGE_HTML = r"""<!doctype html>
     <div class="actions" id="claude-desktop-actions"></div>
     <div id="claude-desktop-profiles"></div>
   </section>
+  </div>
+  </div>
 
   <div id="toast" role="status" aria-live="polite"></div>
 </div>
@@ -566,14 +568,15 @@ function renderDesktopProfiles(data) {
   if (!data) return;
   $("claude-desktop-notice").textContent = data.notice || "Experimental Claude Desktop profiles are separate from Claude Code accounts.";
   const unavailable = !data.supported ? "Claude Desktop profiles are supported on macOS and Linux only."
-    : !data.installed ? "Claude Desktop is not installed."
-    : !data.available ? "Claude Desktop profiles are unavailable."
+    : !data.installed ? "Claude Desktop is not installed in a supported location."
+    : !data.available ? "Opening Claude Desktop profiles is unavailable."
     : "";
   $("claude-desktop-status").textContent = [unavailable, data.error,
+    data.canCreate && !data.available ? "You can still create empty profiles; creating does not launch Claude." : "",
     data.running === true ? "Claude is running. Fully quit it before opening another profile."
       : data.running === null || data.running === undefined ? "Claude process status is unknown. Opening is blocked until a check confirms it is quit."
       : "Claude is quit; you can open a profile."].filter(Boolean).join(" ");
-  block(desktopProfileUI.create, !data.available);
+  block(desktopProfileUI.create, !(data.canCreate ?? data.available));
   block(desktopProfileUI.default, !data.available || data.running !== false);
   const host = $("claude-desktop-profiles");
   host.replaceChildren();
@@ -604,7 +607,7 @@ function desktopConsent(host) {
 }
 
 function createDesktopProfile(opener) {
-  if (!state.claudeDesktop?.available) return;
+  if (!(state.claudeDesktop?.canCreate ?? state.claudeDesktop?.available)) return;
   let name;
   confirmAction({
     title: "Create an empty Claude Desktop profile?", description: desktopProfileWarning + " Creation does not launch Claude or sign you in.",
@@ -620,7 +623,7 @@ function createDesktopProfile(opener) {
     },
     submit: (button) => {
       const label = name.value.trim();
-      if (!label || label.length > 64 || !state.claudeDesktop?.available) return false;
+      if (!label || label.length > 64 || !(state.claudeDesktop?.canCreate ?? state.claudeDesktop?.available)) return false;
       return act("/api/claude-desktop/create", {name: label, confirm: true}, button, "creating…");
     },
   });
@@ -779,7 +782,7 @@ async function load(force = false, silent = false) {
     }
     state = body;
     renderHelp();
-    $("kpis").replaceChildren(tile("Claude Code", body.claude || {}), tile("Codex", body.codex || {}));
+    $("kpis").replaceChildren(tile("Codex", body.codex || {}), tile("Claude Code", body.claude || {}));
     Object.keys(providers).forEach((id) => updateProvider(id, body[id] || {}, force));
     renderDesktopProfiles(body.claudeDesktop);
     $("stamp").textContent = "updated " + new Date().toLocaleTimeString();

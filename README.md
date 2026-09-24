@@ -114,7 +114,9 @@ not import a Desktop session.
    `~/Applications/Claude.app` on macOS, or its official Linux package at
    `/usr/bin/claude-desktop`. Custom install locations and Windows are not supported.
 2. Choose **Create empty profile**, give it a label such as “Work”, and acknowledge
-   the experimental limitations. This only creates empty private directories.
+   the experimental limitations. This only creates empty private directories;
+   it works even if Claude is not detected or its process status is unknown.
+   Those checks block opening profiles, not creating them.
 3. Fully **quit Claude Desktop**. Closing its window may leave it running. Choose
    **Check again**, then **Open** beside the profile and confirm the launch.
 4. Sign in directly inside Claude. Repeat with another empty profile for another
@@ -186,6 +188,15 @@ it is not the same recovery action as the UI button. Avoid deleting saved
 accounts or copying old `auth.json` files around to fix a revoked token. For a
 Claude Code re-login warning, sign in again through Claude Code and re-add that
 current login; signing in to Claude Desktop will not repair CLI credentials.
+
+### If usage fails with a certificate error
+
+`CERTIFICATE_VERIFY_FAILED` is a TLS trust failure, not evidence that a login was
+revoked. Update Agent Switch before deleting or re-adding accounts. The desktop
+backend and CLI both use the operating system's certificate trust store, with
+certificate and hostname verification enabled. If the error persists, check the
+system clock and any organization-managed HTTPS proxy with your administrator;
+do not disable certificate verification.
 
 ## Automatic switching: opt in, then keep it running
 

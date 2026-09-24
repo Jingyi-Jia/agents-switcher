@@ -71,11 +71,16 @@ UI surface, not a promised public SDK. The Electron stdin/stdout protocol in
 [backend.cjs](desktop/src/backend.cjs) is private; do not expose its token in logs,
 command-line arguments or screenshots.
 
+Both CLI and desktop startup initialize native TLS through
+[tls.py](src/claude_swap/tls.py) before provider clients or workers run. Preserve
+certificate and hostname verification, including when native trust is unavailable.
+
 The experimental Desktop panel reads `claudeDesktop` in `/api/state`. Its private
 POST routes are `/api/claude-desktop/create` (`name`, `confirm: true`) and
 `/api/claude-desktop/open` (`profileId`, `confirm: true`); `profileId: "default"`
-opens the usual Claude profile without a user-data override. Creation does not
-launch. Launch success never means authenticated or account-switched. There is
+opens the usual Claude profile without a user-data override. `canCreate` is
+independent of installation and process detection; creation does not launch.
+Launch success never means authenticated or account-switched. There is
 no Desktop-profile CLI/TUI command or automatic-switch policy.
 
 ## Setup, tests and builds

@@ -235,6 +235,43 @@ def test_missing_installation_is_actionable(profiles, monkeypatch):
     profiles.launch.assert_not_called()
 
 
+@pytest.mark.parametrize("detected", [True, False])
+def test_empty_profile_creation_is_independent_of_launch_readiness(profiles, monkeypatch, detected):
+    monkeypatch.setattr(cd, "installed_executable", lambda: profiles.executable if detected else None)
+    scan = Mock(side_effect=ProviderActionError("Unable to check whether Claude Desktop is running"))
+    monkeypatch.setattr(cd, "running", scan)
+    status = profiles.manager.status()
+    assert status["canCreate"] is True
+    assert status["available"] is False and status["running"] is None
+    scan.reset_mock()
+    entry = profiles.manager.create("Work", confirm=True)["profile"]
+    scan.assert_not_called()
+    assert profiles.manager.status()["profiles"] == [entry]
+    with pytest.raises(ProviderActionError, match="Unable to check|Install the official"):
+        profiles.manager.open(entry["id"], confirm=True)
+    profiles.launch.assert_not_called()
+
+
+def test_invalid_registry_does_not_advertise_profile_creation(profiles):
+    profiles.manager.root.mkdir()
+    (profiles.manager.root / "profiles.json").write_text("invalid")
+    assert profiles.manager.status()["canCreate"] is False
+
+
+def test_unsupported_platform_does_not_advertise_profile_creation(profiles, monkeypatch):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="win32"))
+    assert profiles.manager.status()["canCreate"] is False
+
+
+def test_http_create_works_without_an_installed_app_but_open_stays_blocked(web, profiles, monkeypatch):
+    monkeypatch.setattr(cd, "installed_executable", lambda: None)
+    web.state.claude_desktop = profiles.manager
+    code, result, _ = request(web, "/api/claude-desktop/create", {"name": "Work", "confirm": True})
+    assert code == 200 and result["ok"]
+    assert request(web, "/api/claude-desktop/open", {"profileId": result["profile"]["id"], "confirm": True})[0] == 400
+    profiles.launch.assert_not_called()
+
+
 def test_filesystem_errors_are_actionable_without_private_paths(profiles, monkeypatch):
     monkeypatch.setattr(profiles.manager, "_directory", Mock(side_effect=PermissionError("private-path")))
     with pytest.raises(ProviderActionError, match="folder permissions") as error:

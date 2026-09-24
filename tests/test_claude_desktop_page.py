@@ -3,6 +3,60 @@
 from tests.test_web_page_actions import node, run_page
 
 
+def test_codex_comes_first_and_claude_panels_stay_together(node):
+    run_page(node, r"""
+await load();
+assert.match($('kpis').children[0].textContent, /^Codex · active/);
+assert.match($('kpis').children[1].textContent, /^Claude Code · active/);
+const group = $('claude-group');
+const claudePanels = group.children.filter(node => node.tagName !== '#TEXT');
+const columns = group.parent.children.filter(node => node.tagName !== '#TEXT');
+assert.equal(claudePanels[0].attributes['aria-labelledby'], 'claude-heading');
+assert.equal(claudePanels[1].id, 'claude-desktop-panel');
+assert.equal(columns[0].attributes['aria-labelledby'], 'codex-heading');
+assert.equal(columns[1].id, 'claude-group');
+""")
+
+
+def test_creation_remains_available_when_launch_checks_fail(node):
+    run_page(node, r"""
+for (const installed of [false, true]) {
+  apiState.claudeDesktop = {available: false, canCreate: true, supported: true, installed,
+    running: null, profiles: [], error: installed ? 'Unable to check whether Claude is running' : 'Install official Claude in /Applications/Claude.app'};
+  await load();
+  const create = button('claude-desktop-actions', 'Create empty profile');
+  assert.equal(create.disabled, false);
+  assert.equal(button('claude-desktop-actions', 'Open usual Claude (default)').disabled, true);
+  assert.match($('claude-desktop-status').textContent, /You can still create empty profiles/);
+  create.click();
+  nodes('dialog-fields').find(node => node.type === 'text').value = 'Work';
+  nodes('dialog-fields').find(node => node.type === 'checkbox').checked = true;
+  await submitDialog();
+  assert.equal(posts().at(-1).path, '/api/claude-desktop/create');
+  assert.deepEqual(posts().at(-1).payload, {name: 'Work', confirm: true});
+  assert.equal($('action-dialog').open, false);
+}
+assert.equal(posts().length, 2);
+""")
+
+
+def test_explicit_creation_capability_is_rechecked_before_submission(node):
+    run_page(node, r"""
+apiState.claudeDesktop = {available: true, canCreate: true, supported: true, installed: true,
+  running: false, profiles: []};
+await load();
+button('claude-desktop-actions', 'Create empty profile').click();
+nodes('dialog-fields').find(node => node.type === 'text').value = 'Work';
+nodes('dialog-fields').find(node => node.type === 'checkbox').checked = true;
+apiState.claudeDesktop.canCreate = false;
+await load();
+assert.equal(button('claude-desktop-actions', 'Create empty profile').disabled, true);
+await submitDialog();
+assert.equal(posts().length, 0);
+assert.equal($('action-dialog').open, true);
+""")
+
+
 def test_older_state_hides_the_separate_panel(node):
     run_page(node, r"""
 assert.equal($('claude-desktop-panel').hidden, true);

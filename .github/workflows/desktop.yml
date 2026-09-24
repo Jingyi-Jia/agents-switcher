@@ -69,7 +69,7 @@ jobs:
       - name: Build frozen backend
         run: uv run --no-sync python desktop/scripts/build_backend.py
       - name: Smoke-test frozen backend in disposable account directories
-        run: uv run --no-sync python desktop/scripts/smoke_backend.py --disposable-runner
+        run: uv run --no-sync python desktop/scripts/smoke_backend.py --disposable-runner --check-tls
       - name: Build unsigned preview installers
         if: github.event_name != 'release' && matrix.platform != 'mac'
         working-directory: desktop
@@ -163,7 +163,7 @@ jobs:
             win) helper="desktop/release/win-unpacked/resources/backend/agent-switch-backend.exe" ;;
             linux) helper="desktop/release/linux-unpacked/resources/backend/agent-switch-backend" ;;
           esac
-          uv run --no-sync python desktop/scripts/smoke_backend.py --disposable-runner --executable "$helper"
+          uv run --no-sync python desktop/scripts/smoke_backend.py --disposable-runner --check-tls --executable "$helper"
       - name: Generate artifact checksums
         run: |
           uv run --no-sync python desktop/scripts/checksums.py

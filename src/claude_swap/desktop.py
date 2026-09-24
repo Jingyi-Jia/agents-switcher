@@ -15,6 +15,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
+from claude_swap.tls import use_native_tls
 from claude_swap.web.cli import _build_state
 from claude_swap.web.server import DashboardState, serve
 
@@ -108,6 +109,7 @@ def run(control: BinaryIO, status: TextIO) -> int:
             raise ValueError("invalid-start-message")
         with redirect_stdout(sys.stderr):
             _restore_external_library_paths()
+            use_native_tls()
             state = _build_state(state_class=DesktopState)
             server, _ = serve(state, host="127.0.0.1", port=0, token=initial["token"])
             thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
