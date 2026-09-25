@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import io
 import json
 import os
 import plistlib
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -15,19 +18,29 @@ import pytest
 from claude_swap.codex import desktop as cd
 
 _READ_MAC_ARGUMENTS = cd._read_mac_arguments
+_READ_MAC_EXECUTABLE = cd._read_mac_executable
 _READ_LINUX_ARGUMENTS = cd._read_linux_arguments
+_READ_LINUX_EXECUTABLE = cd._read_linux_executable
+_NATIVE_PLATFORM = sys.platform
+_NATIVE_GETUID = getattr(os, "getuid", None)
+_NATIVE_KILL = os.kill
+_NATIVE_RUN = subprocess.run
+_NATIVE_POPEN = subprocess.Popen
 
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(cd.os, "getuid", lambda: 501, raising=False)
+    monkeypatch.setattr(cd.os, "kill", Mock(side_effect=AssertionError("Unexpected process existence check")))
     monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.setattr(cd, "_gui_home", Path.home)
     monkeypatch.setattr(cd.subprocess, "run", Mock(side_effect=AssertionError("Unexpected subprocess")))
     monkeypatch.setattr(cd.subprocess, "Popen", Mock(side_effect=AssertionError("Unexpected launch")))
     monkeypatch.setattr(cd, "_read_mac_arguments", Mock(side_effect=AssertionError("Unexpected process metadata read")))
+    monkeypatch.setattr(cd, "_read_mac_executable", Mock(side_effect=AssertionError("Unexpected executable metadata read")))
     monkeypatch.setattr(cd, "_read_linux_arguments", Mock(side_effect=AssertionError("Unexpected process metadata read")))
+    monkeypatch.setattr(cd, "_read_linux_executable", Mock(side_effect=AssertionError("Unexpected executable metadata read")))
 
 
 @pytest.fixture
@@ -39,7 +52,9 @@ def scan(monkeypatch):
     monkeypatch.setattr(cd.subprocess, "run", run)
     monkeypatch.setattr(cd, "_installed_apps", lambda: [app])
     monkeypatch.setattr(cd, "_read_mac_arguments", lambda pid: source[pid])
+    monkeypatch.setattr(cd, "_read_mac_executable", lambda pid: "/usr/bin/python3" if pid == 50 else source[pid][0])
     monkeypatch.setattr(cd, "_read_linux_arguments", lambda pid: source[pid])
+    monkeypatch.setattr(cd, "_read_linux_executable", lambda pid: "/usr/bin/python3" if pid == 50 else source[pid][0])
 
     def add(pid, executable, *arguments, parent=1, owner=501, tty="??", state="S"):
         executable = str(executable)
@@ -193,6 +208,26 @@ def test_other_users_metadata_is_not_read(scan, monkeypatch):
     reader.assert_not_called()
 
 
+@pytest.mark.parametrize("uid", [0, 501])
+def test_macos_kernel_pid_zero_is_valid_and_never_a_codex_process(scan, monkeypatch, uid):
+    monkeypatch.setattr(cd.os, "getuid", lambda: uid)
+    scan.output[0] = f"50 1 {uid} S ?? /usr/bin/python3"
+    scan.output.insert(0, "0 0 0 R ?? kernel_task")
+    reader = Mock(side_effect=AssertionError("Must not inspect kernel PID zero"))
+    monkeypatch.setattr(cd, "_read_mac_arguments", reader)
+    status = scan.backend.status()
+    assert status["available"] is True
+    assert status["running"] is False
+    reader.assert_not_called()
+    cd.os.kill.assert_not_called()
+
+
+@pytest.mark.parametrize("row", ["0 1 0 R ?? kernel_task", "0 0 501 R ?? kernel_task"])
+def test_malformed_kernel_pid_zero_still_fails_closed(scan, row):
+    scan.output.insert(0, row)
+    assert scan.backend.status()["running"] is None
+
+
 @pytest.mark.parametrize("row", [
     "", "not a table", "100 1 501 S ??", "100 1 501 S ??   ",
     "100 1 -2147483649 S ?? codex", "100 1 4294967296 S ?? codex",
@@ -248,7 +283,53 @@ def test_nonzero_scan_exit_cannot_report_stopped(scan):
 def test_process_metadata_race_is_unknown_not_stopped(scan, monkeypatch):
     scan.add(100, "/opt/bin/codex")
     monkeypatch.setattr(cd, "_read_mac_arguments", Mock(side_effect=ProcessLookupError("private process")))
+    exists = Mock()
+    monkeypatch.setattr(cd.os, "kill", exists)
     assert scan.backend.status()["running"] is None
+    exists.assert_called_once_with(100, 0)
+
+
+@pytest.mark.parametrize("failure", [
+    FileNotFoundError(errno.ENOENT, "private process"),
+    OSError("private native metadata"), ValueError("private truncated metadata"),
+])
+def test_process_metadata_failure_is_skipped_only_after_confirmed_esrch(scan, monkeypatch, failure):
+    scan.add(100, "/opt/bin/codex")
+    monkeypatch.setattr(cd, "_read_mac_arguments", Mock(side_effect=failure))
+    exists = Mock(side_effect=ProcessLookupError(errno.ESRCH, "Process exited"))
+    monkeypatch.setattr(cd.os, "kill", exists)
+    status = scan.backend.status()
+    assert status["available"] is True
+    assert status["running"] is False
+    exists.assert_called_once_with(100, 0)
+
+
+@pytest.mark.parametrize("failure", [
+    PermissionError(errno.EPERM, "private ownership"),
+    OSError(errno.EIO, "private process check"),
+    ProcessLookupError("Lookup without an ESRCH result"),
+])
+def test_uncertain_existence_check_preserves_unknown_state(scan, monkeypatch, failure):
+    scan.add(100, "/opt/bin/codex")
+    monkeypatch.setattr(cd, "_read_mac_arguments", Mock(side_effect=ProcessLookupError(errno.ESRCH, "old scan")))
+    exists = Mock(side_effect=failure)
+    monkeypatch.setattr(cd.os, "kill", exists)
+    status = scan.backend.status()
+    assert status["available"] is False
+    assert status["running"] is None
+    assert "private" not in status["message"]
+    exists.assert_called_once_with(100, 0)
+
+
+def test_exited_process_does_not_hide_other_live_blockers(scan, monkeypatch):
+    scan.add(100, "/opt/bin/codex")
+    scan.add(101, "/opt/bin/codex", tty="ttys003")
+    monkeypatch.setattr(cd, "_read_mac_arguments", Mock(side_effect=[FileNotFoundError(), scan.source[101]]))
+    monkeypatch.setattr(cd.os, "kill", Mock(side_effect=ProcessLookupError(errno.ESRCH, "Process exited")))
+    status = scan.backend.status()
+    assert status["available"] is True
+    assert status["running"] is True
+    assert status["terminalCount"] == 1
 
 
 @pytest.mark.parametrize("value", [False, None, 0, 1, "true", "yes", {}, [], object()])
@@ -422,6 +503,33 @@ def test_linux_supports_manual_check_but_never_assistance(scan, monkeypatch, run
     cd.subprocess.Popen.assert_not_called()
 
 
+@pytest.mark.parametrize("executable,arguments", [
+    ("/usr/bin/node", ("/opt/codex/bin/codex.js",)),
+    ("/opt/bin/codex", ()),
+])
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_posix_uses_executable_metadata_instead_of_mutable_process_titles(scan, monkeypatch, executable, arguments, platform):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform=platform))
+    scan.add(100, executable, *arguments)
+    scan.output[-1] = "100 1 501 S ?? MainThread"
+    assert scan.backend.status()["running"] is True
+
+
+@pytest.mark.parametrize("failure,expected", [
+    (ProcessLookupError(errno.ESRCH, "Process exited"), False),
+    (PermissionError(errno.EPERM, "private permission"), None),
+    (None, None),
+])
+def test_linux_unreadable_executable_requires_a_fresh_esrch_result(scan, monkeypatch, failure, expected):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="linux"))
+    scan.add(100, "/opt/bin/codex")
+    monkeypatch.setattr(cd, "_read_linux_executable", Mock(side_effect=["/usr/bin/python3", FileNotFoundError()]))
+    exists = Mock(side_effect=failure)
+    monkeypatch.setattr(cd.os, "kill", exists)
+    assert scan.backend.status()["running"] is expected
+    exists.assert_called_once_with(100, 0)
+
+
 def test_unsupported_platform_cannot_authorize_switching(scan, monkeypatch):
     monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="freebsd"))
     status = scan.backend.status()
@@ -533,7 +641,31 @@ def test_mac_native_metadata_permission_failure_is_not_an_empty_command(monkeypa
         _READ_MAC_ARGUMENTS(123)
 
 
+def test_mac_native_executable_uses_fixed_kernel_process_path_lookup(monkeypatch):
+    def proc_pidpath(pid, buffer, size):
+        assert pid == 123
+        assert size == 4096
+        executable = b"/path with spaces/node\0"
+        ctypes.memmove(buffer, executable, len(executable))
+        return len(executable) - 1
+
+    library = SimpleNamespace(proc_pidpath=Mock(side_effect=proc_pidpath))
+    loader = Mock(return_value=library)
+    monkeypatch.setattr(cd.ctypes, "CDLL", loader)
+    assert _READ_MAC_EXECUTABLE(123) == "/path with spaces/node"
+    loader.assert_called_once_with("/usr/lib/libproc.dylib", use_errno=True)
+
+
+@pytest.mark.parametrize("result", [0, -1])
+def test_mac_native_executable_failures_are_not_empty_executables(monkeypatch, result):
+    library = SimpleNamespace(proc_pidpath=Mock(return_value=result))
+    monkeypatch.setattr(cd.ctypes, "CDLL", Mock(return_value=library))
+    with pytest.raises(OSError, match="unavailable"):
+        _READ_MAC_EXECUTABLE(123)
+
+
 def test_linux_native_metadata_preserves_spaces_and_deleted_executables(monkeypatch):
+    monkeypatch.setattr(cd, "_read_linux_executable", _READ_LINUX_EXECUTABLE)
     link = Mock(return_value="/private path/codex (deleted)")
     monkeypatch.setattr(cd.os, "readlink", link)
     opened = []
@@ -550,10 +682,49 @@ def test_linux_native_metadata_preserves_spaces_and_deleted_executables(monkeypa
 
 @pytest.mark.parametrize("raw", [b"", b"codex", b"\0", b"x" * (cd._MAX_ARGUMENT_BYTES + 1) + b"\0"])
 def test_linux_native_metadata_rejects_missing_or_truncated_arguments(monkeypatch, raw):
+    monkeypatch.setattr(cd, "_read_linux_executable", _READ_LINUX_EXECUTABLE)
     monkeypatch.setattr(cd.os, "readlink", lambda path: "/bin/codex")
     monkeypatch.setattr(Path, "open", lambda *args: io.BytesIO(raw))
     with pytest.raises(ValueError):
         _READ_LINUX_ARGUMENTS(123)
+
+
+@pytest.mark.skipif(_NATIVE_PLATFORM not in {"darwin", "linux"}, reason="Exercises native POSIX process metadata")
+def test_native_posix_status_reads_harmless_node_arguments(monkeypatch):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for the native argument-reader smoke test")
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform=_NATIVE_PLATFORM))
+    monkeypatch.setattr(cd.os, "getuid", _NATIVE_GETUID)
+    monkeypatch.setattr(cd.os, "kill", _NATIVE_KILL)
+    monkeypatch.setattr(cd.subprocess, "run", _NATIVE_RUN)
+    monkeypatch.setattr(cd.subprocess, "Popen", _NATIVE_POPEN)
+    monkeypatch.setattr(cd, "_installed_apps", lambda: [])
+    monkeypatch.setattr(cd, "_read_mac_executable", _READ_MAC_EXECUTABLE)
+    monkeypatch.setattr(cd, "_read_linux_executable", _READ_LINUX_EXECUTABLE)
+    reader = Mock(wraps=_READ_MAC_ARGUMENTS if _NATIVE_PLATFORM == "darwin" else _READ_LINUX_ARGUMENTS)
+    name = "_read_mac_arguments" if _NATIVE_PLATFORM == "darwin" else "_read_linux_arguments"
+    monkeypatch.setattr(cd, name, reader)
+    with subprocess.Popen(
+        [node, "-e", "process.stdin.resume()"], env=cd._child_environment(),
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ) as process:
+        try:
+            assert process.poll() is None
+            status = cd.CodexDesktop().status()
+            assert status["available"] is True, status["message"]
+            assert any(call.args == (process.pid,) for call in reader.call_args_list)
+        finally:
+            process.stdin.close()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
 
 
 def create_app(home, metadata=None):
