@@ -68,7 +68,8 @@ From the repository root:
 ```bash
 uv sync --locked --python 3.12 --group desktop-build
 npm ci --prefix desktop
-uv run --no-sync pytest -o faulthandler_timeout=600
+uv run --no-sync pytest -m "not native_process" -o faulthandler_timeout=600
+uv run --no-sync pytest -n 0 -m native_process -o faulthandler_timeout=600
 npm test --prefix desktop
 uv run --no-sync python desktop/scripts/build_backend.py
 ```
