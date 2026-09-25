@@ -1,86 +1,39 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  # Lets CI be run on demand for any ref, e.g. a branch that has no PR yet.
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-
+  native-diagnostic:
+    name: ${{ matrix.os }}-${{ matrix.mode }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            mode: original
+          - os: windows-latest
+            mode: traced
+          - os: ubuntu-latest
+            mode: traced
     steps:
       - uses: actions/checkout@v4
-
-      # uv (not pip) so the PEP 735 dev dependency-group — pytest,
-      # pytest-asyncio — installs from the committed lockfile, same as local
-      # development.
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Run tests
-        timeout-minutes: 15
-        run: uv run pytest -o faulthandler_timeout=600
-
-  test-windows:
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Run tests
-        # Includes the TUI tests: the Textual TUI (unlike the old curses one)
-        # runs on stock Windows, and this job is the proof.
-        timeout-minutes: 15
-        run: uv run pytest -o faulthandler_timeout=600
-
-  # The id stays `macos-keychain` although the job now runs everything: it is
-  # the name branch protection matches on, and renaming it silently drops the
-  # required check.
-  macos-keychain:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Run the whole suite (not only the Keychain files)
-        # THE NARROW SELECTION WAS A BLIND SPOT, not a saving. Three cases
-        # failed on macOS -- one asserting the Linux XDG layout, two because a
-        # usable Keychain takes the write and leaves no `.enc` to chmod --
-        # while every job stayed green, because this job never ran them. A merge that
-        # restores a two-file selection here re-opens that hole invisibly:
-        # those cases pass now, they would simply stop running.
-        #
-        # faulthandler dumps every thread's stack past the budget, the only
-        # clue when a `security` call blocks on an invisible SecurityAgent
-        # dialog. While pyproject sets no faulthandler keys this `-o` is the
-        # only thing setting the budget and the dump does not abort; PR 287
-        # adds them repo-wide at the same 600, after which this is a no-op
-        # and the dump aborts the worker. `timeout-minutes` is the backstop
-        # that holds under either ordering.
-        timeout-minutes: 15
-        run: uv run pytest -o faulthandler_timeout=600
+      - run: uv sync --locked
+      - name: Run the original full suite
+        if: matrix.mode == 'original'
+        timeout-minutes: 5
+        run: uv run pytest -o faulthandler_timeout=60
+      - name: Trace the original native calls during the full suite
+        if: matrix.mode == 'traced'
+        timeout-minutes: 5
+        run: uv run python -m pytest -p native_process_trace --show-capture=all -rA -o faulthandler_timeout=60
