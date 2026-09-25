@@ -256,6 +256,73 @@ def test_confirmed_zombies_can_be_ignored(scan, row):
     assert scan.backend.status()["running"] is False
 
 
+@pytest.mark.parametrize("state", ["?", "?s", "?E", "?<XEVLs+", "?N"])
+@pytest.mark.parametrize("executable,arguments,expected", [
+    ("/opt/bin/codex", (), True),
+    ("/opt/bin/node", ("/opt/bin/codex.js",), True),
+    ("/bin/sh", (), False),
+])
+def test_macos_unknown_scheduling_state_still_classifies_native_identity(scan, monkeypatch, state, executable, arguments, expected):
+    scan.add(100, executable, *arguments, state=state, tty="ttys003")
+    read_executable = Mock(wraps=cd._read_mac_executable)
+    monkeypatch.setattr(cd, "_read_mac_executable", read_executable)
+    status = scan.backend.status()
+    assert status["available"] is True
+    assert status["running"] is expected
+    assert status["terminalCount"] == int(expected)
+    assert status["canOpen"] is not expected
+    read_executable.assert_any_call(100)
+    cd.os.kill.assert_not_called()
+
+
+@pytest.mark.parametrize("owner", [-2, 0, 502])
+def test_macos_unknown_scheduling_state_does_not_inspect_other_users(scan, monkeypatch, owner):
+    scan.add(100, "/opt/bin/codex", owner=owner, state="?E")
+    reader = Mock(wraps=cd._read_mac_executable)
+    monkeypatch.setattr(cd, "_read_mac_executable", reader)
+    status = scan.backend.status()
+    assert status["available"] is True
+    assert status["running"] is False
+    reader.assert_called_once_with(50)
+
+
+@pytest.mark.parametrize("state", ["?", "?s", "?E"])
+def test_macos_unknown_scheduling_state_with_unreadable_live_identity_stays_blocked(scan, monkeypatch, state):
+    scan.add(100, "/opt/bin/codex", state=state)
+    reader = Mock(side_effect=[cd._read_mac_executable(50), PermissionError("private metadata")])
+    monkeypatch.setattr(cd, "_read_mac_executable", reader)
+    monkeypatch.setattr(cd.os, "kill", Mock())
+    status = scan.backend.status()
+    assert status["available"] is False
+    assert status["running"] is None
+    assert status["canOpen"] is status["canAssist"] is False
+    reader.assert_any_call(100)
+    cd.os.kill.assert_called_once_with(100, 0)
+    assert "private metadata" not in json.dumps(status)
+
+
+@pytest.mark.parametrize("state", ["?", "?s", "?E"])
+def test_macos_unknown_scheduling_state_is_not_a_zombie_without_a_command(scan, state):
+    scan.output.append(f"100 1 501 {state} ??")
+    status = scan.backend.status()
+    assert status["available"] is False
+    assert status["running"] is None
+    assert status["canOpen"] is status["canAssist"] is False
+
+
+@pytest.mark.parametrize("state", ["?broken", "??", "S?", "?Z", "?R", "?<=", "?s???"])
+def test_malformed_unknown_scheduling_flags_still_block(scan, state):
+    scan.add(100, "/bin/sh", state=state)
+    assert scan.backend.status()["running"] is None
+
+
+@pytest.mark.parametrize("state", ["?", "?s", "?E"])
+def test_unknown_scheduling_state_exception_is_macos_only(scan, monkeypatch, state):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="linux"))
+    scan.add(100, "/bin/sh", state=state)
+    assert scan.backend.status()["running"] is None
+
+
 @pytest.mark.parametrize("failure", [
     PermissionError("private scan details"),
     subprocess.TimeoutExpired("private command", 5, stderr="private output"),

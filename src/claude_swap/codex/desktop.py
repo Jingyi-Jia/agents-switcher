@@ -207,10 +207,13 @@ def _posix_processes() -> list[_Process]:
         if len(parts) < 5:
             raise ValueError
         pid_text, parent_text, owner_text, state, tty = parts[:5]
+        valid_state = re.fullmatch(r"[A-Z][A-Za-z0-9+<>=-]*", state)
+        if not valid_state and sys.platform == "darwin":
+            valid_state = re.fullmatch(r"\?[<NXEVLs+]*", state)
         if (re.fullmatch(r"[0-9]+", pid_text) is None
                 or re.fullmatch(r"[0-9]+", parent_text) is None
                 or re.fullmatch(r"-?[0-9]+", owner_text) is None
-                or re.fullmatch(r"[A-Z][A-Za-z0-9+<>=-]*", state) is None):
+                or not valid_state):
             raise ValueError
         pid, parent, owner = int(pid_text), int(parent_text), int(owner_text)
         if sys.platform == "darwin" and -(2**31) <= owner < 0:
