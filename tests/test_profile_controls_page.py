@@ -202,7 +202,7 @@ assert.doesNotMatch($('codex-auto').textContent, /Apply threshold|Dry run|Start 
 ui.threshold.value = '94'; ui.threshold.oninput();
 ui.modes.live.click();
 assert.equal(posts().length, 0);
-assert.match($('dialog-description').textContent, /change the active CLI account automatically.*94%/);
+assert.match($('dialog-description').textContent, /change the active Codex account automatically.*94%/);
 $('dialog-cancel').click(); await settle();
 ui.modes['dry-run'].click(); await settle();
 assert.deepEqual(posts().at(-1).payload, {provider: 'codex', mode: 'dry-run', threshold: 94});

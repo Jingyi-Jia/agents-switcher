@@ -932,7 +932,7 @@ function setAuto(id, mode, opener, stop = false) {
   if (mode === "live") {
     payload.confirm = true;
     const updating = ui.mode === "live";
-    confirmAction({title: updating ? `Update the ${providers[id]} switching threshold?` : `Start automatic switching for ${providers[id]}?`, description: `This can change the active CLI account automatically, using a ${payload.threshold}% used-quota threshold. ${automationLifecycle()}`, label: updating ? "Save threshold" : "Start auto-switch", opener, submit});
+    confirmAction({title: updating ? `Update the ${providers[id]} switching threshold?` : `Start automatic switching for ${providers[id]}?`, description: `This can change the active ${providers[id]} account automatically, using a ${payload.threshold}% used-quota threshold. ${automationLifecycle()}`, label: updating ? "Save threshold" : "Start auto-switch", opener, submit});
   } else {
     submit(opener);
   }
