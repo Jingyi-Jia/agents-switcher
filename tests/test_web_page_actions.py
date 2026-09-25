@@ -53,7 +53,10 @@ class Element {
   }
   get textContent() { return this._text + this.children.map(n => n.textContent).join(''); }
   set textContent(text) { this.replaceChildren(); this._text = String(text); }
-  appendChild(child) { child.parent = this; this.children.push(child); return child; }
+  appendChild(child) {
+    if (child.parent) child.parent.children = child.parent.children.filter(node => node !== child);
+    child.parent = this; this.children.push(child); return child;
+  }
   append(...children) { children.forEach(child => this.appendChild(child)); }
   replaceChildren(...children) {
     this.children.forEach(child => {child.parent = null;});
@@ -73,8 +76,12 @@ class Element {
     return walk(this).slice(1).filter(node => key in node.dataset);
   }
   addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); }
-  dispatch(name) { (this.listeners[name] || []).forEach(callback => callback({preventDefault(){}})); }
-  focus() { document.activeElement = this; }
+  dispatch(name) {
+    const event = {defaultPrevented: false, preventDefault(){this.defaultPrevented = true;}};
+    (this.listeners[name] || []).forEach(callback => callback(event));
+    if (name === 'cancel' && !event.defaultPrevented) this.close();
+  }
+  focus() { document.activeElement = this; if (this.onfocus) this.onfocus(); }
   click() { if (!this.disabled && this.onclick) return this.onclick(); }
   showModal() { this.open = true; }
   close() { this.open = false; queueMicrotask(() => this.dispatch('close')); }
@@ -105,13 +112,19 @@ const document = {
   documentElement: walk(root).find(node => node.tagName === 'HTML'),
   activeElement: null,
 };
-const location = {search: '?token=dashboard-test-secret'};
+const location = {search: '?token=dashboard-test-secret', hash: ''};
+const window = {listeners: {}, addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); }};
 const stored = {};
 const localStorage = {getItem: key => stored[key], setItem: (key, value) => {stored[key] = value;}};
 const intervals = [];
 const setInterval = (callback, ms) => {intervals.push({callback, ms});};
-const setTimeout = () => 1;
-const clearTimeout = () => {};
+const timeouts = new Map(); let timerSequence = 0;
+const setTimeout = (callback, ms) => { const id = ++timerSequence; timeouts.set(id, {callback, ms}); return id; };
+const clearTimeout = id => timeouts.delete(id);
+const runTimers = async ms => {
+  const due = [...timeouts].filter(([id, timer]) => timer.ms === ms);
+  for (const [id, timer] of due) { timeouts.delete(id); await timer.callback(); }
+};
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const common = ['switch', 'add', 'remove', 'disable', 'switch-best', 'auto'];
 const fixture = () => ({
@@ -126,9 +139,10 @@ const fixture = () => ({
     auto: {mode: 'stopped', threshold: 90, events: []}},
 });
 let apiState = fixture(), response = {ok: true, message: 'Saved.'};
+let codexStatus = {available: true, running: false, desktopRunning: false, terminalCount: 0, backgroundCount: 0, canAssist: false, canOpen: true, message: null};
 const calls = [];
 let fetchHandler = async (path, options) => ({
-  ok: true, json: async () => JSON.parse(JSON.stringify(path.startsWith('/api/state') ? apiState : response)),
+  ok: true, json: async () => JSON.parse(JSON.stringify(path.startsWith('/api/state') ? apiState : path === '/api/codex/status' ? codexStatus : response)),
 });
 const fetch = async (path, options) => {
   calls.push({path, options, payload: options.body ? JSON.parse(options.body) : null});
@@ -149,11 +163,11 @@ def node():
     return executable
 
 
-def run_page(node, scenario):
+def run_page(node, scenario, setup=""):
     tree = PageTree()
     tree.feed(PAGE_HTML)
     source = (
-        "const PAGE_TREE = " + json.dumps(tree.root) + ";\n" + DOM + SCRIPT
+        "const PAGE_TREE = " + json.dumps(tree.root) + ";\n" + DOM + setup + "\n" + SCRIPT
         + "\n(async () => { await settle();\n" + scenario
         + "\n})().catch(error => {console.error(error); process.exitCode = 1;});"
     )
@@ -185,10 +199,10 @@ for (const provider of ['claude', 'codex']) {
   for (const label of ['Add current', 'Switch best', 'Refresh usage']) {
     assert.equal(button(provider + '-actions', label).disabled, false, provider + ': ' + label);
   }
-  assert.equal(button(provider, 'Disable').disabled, false);
+  assert.equal(button(provider, 'Exclude from auto-switch').disabled, false);
   assert.equal(button(provider, 'Remove').disabled, false);
-  assert.equal(button(provider, 'switch').disabled, false);
-  assert.equal(button(provider, 'active').disabled, true);
+  assert.equal(button(provider, 'Switch').disabled, false);
+  assert.equal(button(provider, 'Current').disabled, true);
   await button(provider + '-actions', 'Add current').click();
   assert.equal(posts().at(-1).path, '/api/add');
   assert.deepEqual(posts().at(-1).payload, {provider});
@@ -227,13 +241,13 @@ assert.deepEqual(posts().at(-1).payload, {provider: 'codex', number: '1', confir
 assert.equal(posts().at(-1).path, '/api/remove');
 await settle();
 apiState.codex.accounts[0].disabled = true;
-const disable = button('codex', 'Disable');
+const disable = button('codex', 'Exclude from auto-switch');
 disable.focus();
 await disable.click();
 assert.deepEqual(posts().at(-1).payload, {provider: 'codex', number: '1', disabled: true});
 assert.equal(posts().at(-1).path, '/api/disabled');
-assert.equal(document.activeElement, button('codex', 'Enable'));
-await button('codex', 'Enable').click();
+assert.equal(document.activeElement, button('codex', 'Include in auto-switch'));
+await button('codex', 'Include in auto-switch').click();
 assert.equal(posts().at(-1).payload.disabled, false);
 """)
 
@@ -245,11 +259,12 @@ await button('claude-actions', 'Switch best').click();
 assert.equal(posts().at(-1).path, '/api/switch-best');
 assert.equal($('toast').textContent, response.reason);
 response = {ok: true, message: 'Switched. Restart Codex.', restartRequired: true};
-await button('codex', 'switch').click();
+await button('codex', 'Switch').click();
+await $('codex-continue').click();
 assert.deepEqual(posts().at(-1).payload, {provider: 'codex', number: '2'});
 assert.equal(posts().at(-1).path, '/api/switch');
 assert.match($('toast').textContent, /Restart Codex/);
-assert.match($('toast').className, /ember/);
+assert.doesNotMatch($('toast').className, /ember/);
 """)
 
 
@@ -323,10 +338,10 @@ await load();
 assert.equal(providerUI.codex.threshold, threshold);
 assert.equal(threshold.value, '93');
 assert.equal(document.activeElement, threshold);
-const switchButton = button('codex', 'switch');
+const switchButton = button('codex', 'Switch');
 switchButton.focus();
 await load();
-assert.equal(button('codex', 'switch'), switchButton);
+assert.equal(button('codex', 'Switch'), switchButton);
 assert.equal(document.activeElement, switchButton);
 assert.equal(intervals[0].ms, 20000);
 $('watch').checked = false; $('watch').onchange();

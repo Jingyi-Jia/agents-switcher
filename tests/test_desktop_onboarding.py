@@ -42,7 +42,7 @@ apiState = {claude: {available: true, accounts: []}, codex: {available: true, ac
 await load();
 assert.equal($('help-toggle').hidden, true);
 assert.equal($('desktop-guide').hidden, true);
-assert.equal($('app-title').textContent, 'agent-switch');
+assert.equal($('app-title').textContent, 'Agent Switch');
 assert.match($('claude').textContent, /agent-switch add/);
 assert.match($('codex').textContent, /agent-switch codex add/);
 for (const id of ['claude', 'codex']) {
@@ -86,7 +86,7 @@ for (const id of ['claude', 'codex']) apiState.desktop.providers[id].installed =
 await load();
 for (const id of ['claude', 'codex']) {
   assert.equal(helpUI[id].installed.textContent, 'CLI not detected');
-  assert.match(helpUI[id].login.textContent, /No CLI login detected/);
+  assert.match(helpUI[id].login.textContent, id === 'claude' ? /No CLI login detected/ : /No file-backed login detected/);
   assert.match(helpUI[id].next.textContent, /official setup guide/);
   assert.equal(helpUI[id].add.disabled, true);
   helpUI[id].add.click();
@@ -94,11 +94,12 @@ for (const id of ['claude', 'codex']) {
 const links = nodes('desktop-guide').filter(node => node.tagName === 'A');
 assert.deepEqual(links.map(node => node.href), [
   'https://code.claude.com/docs/en/setup',
-  'https://developers.openai.com/codex/cli',
+  'https://developers.openai.com/codex/app',
 ]);
 assert(links.every(node => node.target === '_blank' && node.rel === 'noopener noreferrer'));
 assert.match($('desktop-guide').textContent, /includes its own runtime/);
-assert.match($('desktop-guide').textContent, /provider CLIs and their sign-ins are separate prerequisites/);
+assert.match($('desktop-guide').textContent, /Claude Code needs its CLI and sign-in/);
+assert.match($('desktop-guide').textContent, /Codex CLI is not required for a Desktop login/);
 assert.match($('desktop-guide').textContent, /Claude Desktop, including its Code tab, has a separate sign-in/);
 assert.match($('desktop-guide').textContent, /doesn't install provider CLIs, start sign-in flows, or change Desktop cookies/);
 assert.match($('desktop-guide').textContent, /doesn't start a new sign-in/);
@@ -112,7 +113,7 @@ apiState = desktopFixture();
 await load();
 for (const id of ['claude', 'codex']) {
   assert.equal(helpUI[id].installed.textContent, 'CLI detected');
-  assert.match(helpUI[id].next.textContent, /Sign in through this provider's CLI/);
+  assert.match(helpUI[id].next.textContent, id === 'claude' ? /Sign in through this provider's CLI/ : /Sign in through Codex Desktop or CLI/);
   assert.equal(helpUI[id].add.disabled, true);
 }
 assert.equal(posts().length, 0);
@@ -302,12 +303,14 @@ apiState.codex.accounts = [{number: '3', email: 'credits@example.com', active: f
 await load();
 assert.match($('codex').textContent, /paid credits/);
 assert.match($('codex').textContent, /Auto-switch will never choose this account/);
-assert.equal(button('codex', 'switch').disabled, false);
-assert.equal(button('codex', 'Disable').disabled, false);
+assert.equal(button('codex', 'Switch').disabled, false);
+assert.equal(button('codex', 'Exclude from auto-switch').disabled, false);
 assert.equal(button('codex', 'Remove').disabled, false);
 $('help-toggle').click();
 assert.match($('desktop-guide').textContent, /Paid-credit accounts remain manual-only/);
-await button('codex', 'switch').click();
+await button('codex', 'Switch').click();
+assert.equal(posts().length, 0);
+await $('codex-continue').click();
 assert.deepEqual(posts().at(-1).payload, {provider: 'codex', number: '3'});
 await button('claude-actions', 'Add existing login').click();
 assert.deepEqual(posts().at(-1).payload, {provider: 'claude'});
