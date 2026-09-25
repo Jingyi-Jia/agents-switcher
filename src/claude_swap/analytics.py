@@ -3,9 +3,12 @@
 Codex reports account-wide totals from its profile endpoint. Claude reports only
 this device's stats cache, never the selected account's history. Claude daily
 tokens are the cache's explicit ``dailyModelTokens`` buckets, without filling
-missing days. Its lifetime total sums complete model input/output components;
-cache-read and cache-write components are exposed separately, never added again
-to either token series. Its peak is the maximum reported daily token bucket.
+missing days or adding cache tokens to those already reported buckets. Its
+lifetime total sums all four independently reported model components: input,
+output, cache-read, and cache-write. If any component is missing or invalid,
+including in a legacy cache, the lifetime total is unknown, not a partial sum.
+Its peak is the maximum reported daily token bucket. Cache versions 1 through 5
+are supported; legacy daily buckets retain their original reporting semantics.
 
 ``fetchedAt`` is a Unix timestamp for the read, not the reporting date.
 ``dataThrough`` is the provider/cache's explicit date, never today's date by
@@ -267,7 +270,7 @@ def _read_claude_cache():
 def _claude_entry(payload, stamp):
     if not isinstance(payload, dict):
         raise _AnalyticsError("Claude statistics cache has an unsupported format.")
-    if type(payload.get("version")) is not int or payload["version"] not in (1, 2):
+    if type(payload.get("version")) is not int or not 1 <= payload["version"] <= 5:
         raise _AnalyticsError("Claude statistics cache has an unsupported version.")
     for field, expected in (("dailyActivity", list), ("dailyModelTokens", list), ("modelUsage", dict)):
         if field in payload and not isinstance(payload[field], expected):
@@ -291,7 +294,9 @@ def _claude_entry(payload, stamp):
             "cacheWriteTokens": _number(row.get("cacheCreationInputTokens")),
         })
     entry["summary"]["lifetimeTokens"] = _sum([
-        _sum([row["inputTokens"], row["outputTokens"]]) for row in entry["models"]
+        _sum([
+            row["inputTokens"], row["outputTokens"], row["cacheReadTokens"], row["cacheWriteTokens"],
+        ]) for row in entry["models"]
     ]) if len(entry["models"]) == len(models) else None
     activity = _dated_rows(payload.get("dailyActivity"), through)
     tokens = _dated_rows(payload.get("dailyModelTokens"), through)
@@ -340,6 +345,7 @@ class UsageAnalytics:
     identity/added-date cache has a five-minute TTL. Roster reads bracket every
     batch so removed or replaced slots cannot receive an old identity's data.
     Claude has a separate lock and rereads its bounded local file on each call.
+    A missing Codex switcher means unconfigured; no default store is inspected.
     """
 
     def __init__(self, codex_switcher=None):
@@ -360,7 +366,9 @@ class UsageAnalytics:
             "accounts": [],
             "error": None,
         }
-        if provider == "codex":
+        if provider == "codex" and self._codex is None:
+            result["error"] = "Codex analytics is not configured."
+        elif provider == "codex":
             requested_at = time.monotonic()
             with self._codex_lock:
                 try:
@@ -391,10 +399,6 @@ class UsageAnalytics:
         return account.number, account.account_id, account.added
 
     def _codex_accounts(self, *, force):
-        if self._codex is None:
-            from claude_swap.codex.switcher import CodexSwitcher
-
-            self._codex = CodexSwitcher()
         accounts = self._codex.list_accounts()
         keys = {self._key(account) for account in accounts}
         self._cache = {key: row for key, row in self._cache.items() if key in keys}
