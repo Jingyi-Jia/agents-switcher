@@ -102,7 +102,8 @@ def test_corrupt_registry_is_not_an_empty_store_and_is_never_overwritten(profile
 
 
 def test_unicode_labels_at_capacity_remain_readable(profiles):
-    entries = [{"id": f"{n:032x}", "name": f"{n:03}" + "🌿" * 61} for n in range(100)]
+    entries = [{"id": f"{n:032x}", "name": f"{n:03}" + "🌿" * 61, "emailLabel": "🌿" * 159 + "@" + "界" * 160}
+               for n in range(100)]
     profiles.manager.root.mkdir()
     profiles.manager._write(entries)
     assert profiles.manager._read() == entries
