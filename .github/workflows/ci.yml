@@ -1,11 +1,10 @@
-name: CI
+name: Diagnostic only - Node runtime comparison
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  # Lets CI be run on demand for any ref, e.g. a branch that has no PR yet.
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -22,6 +21,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Node for dashboard runtime tests
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+
       - name: Install dependencies
         run: uv sync --locked
 
@@ -34,7 +39,13 @@ jobs:
         run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
 
   test-windows:
+    name: Windows (${{ matrix.runtime }}, replica ${{ matrix.replica }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [runner-default, setup-node-24.18.0]
+        replica: [1, 2]
 
     steps:
       - uses: actions/checkout@v4
@@ -44,18 +55,43 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Node for dashboard runtime tests
+        if: matrix.runtime == 'setup-node-24.18.0'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+
       - name: Install dependencies
         run: uv sync --locked
 
       - name: Run tests
+        id: main-tests
         # Includes the TUI tests: the Textual TUI (unlike the old curses one)
         # runs on stock Windows, and this job is the proof.
         timeout-minutes: 15
-        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600
+        run: |
+          uv run python -c "import shutil; print('NODE_EXECUTABLE=' + str(shutil.which('node')))"
+          uv run pytest -m "not native_process" -o faulthandler_timeout=600 --durations=20 --junitxml=main-tests.xml
 
       - name: Run native process probes without competing test workers
+        if: ${{ !cancelled() && (steps.main-tests.outcome == 'success' || steps.main-tests.outcome == 'failure') }}
         timeout-minutes: 15
-        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
+        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600 --junitxml=native-tests.xml
+
+      - name: Report runtime after tests without priming control startup
+        if: ${{ !cancelled() && (steps.main-tests.outcome == 'success' || steps.main-tests.outcome == 'failure') }}
+        run: |
+          node -p "JSON.stringify({version: process.version, executable: process.execPath})"
+
+      - name: Upload diagnostic-only assertion results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: node-runtime-${{ matrix.runtime }}-${{ matrix.replica }}
+          path: '*-tests.xml'
+          if-no-files-found: warn
+          retention-days: 7
 
   # The id stays `macos-keychain` although the job now runs everything: it is
   # the name branch protection matches on, and renaming it silently drops the
@@ -70,6 +106,12 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
+
+      - name: Install Node for dashboard runtime tests
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
 
       - name: Install dependencies
         run: uv sync --locked
