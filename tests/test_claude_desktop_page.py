@@ -9,15 +9,15 @@ apiState.claudeDesktop = {available: true, canCreate: true, supported: true, ins
   running: true, profiles: [{id: 'a'.repeat(32), name: 'Work'}]};
 await load();
 assert.match($('claude-desktop-status').className, /launch-blocked/);
-for (const open of [button('claude-desktop-profiles', 'Open'), button('claude-desktop-actions', 'Open usual Claude (default)')]) {
+for (const open of [button('claude-desktop-profiles', 'Open'), button('claude-desktop-actions', 'Open Claude')]) {
   assert.equal(open.disabled, true);
-  assert.match(open.title, /Fully quit Claude Desktop.*⌘Q.*Check again.*Closing its window is not enough/);
+  assert.match(open.title, /Fully quit Claude Desktop.*⌘Q.*Refresh.*Closing its window is not enough/);
   assert.equal(open.attributes['aria-describedby'], 'claude-desktop-status');
 }
 apiState.claudeDesktop.running = false;
-await button('claude-desktop-actions', 'Check again').click();
+await button('claude-desktop-actions', 'Refresh').click();
 assert.equal($('claude-desktop-status').className, 'notice');
-for (const open of [button('claude-desktop-profiles', 'Open'), button('claude-desktop-actions', 'Open usual Claude (default)')]) {
+for (const open of [button('claude-desktop-profiles', 'Open'), button('claude-desktop-actions', 'Open Claude')]) {
   assert.equal(open.disabled, false);
   assert.equal(open.title, '');
 }
@@ -34,7 +34,7 @@ assert.match($('claude-desktop-status').textContent, /not installed.*Application
 assert.doesNotMatch($('claude-desktop-status').textContent, /process status is unknown|Fully quit/);
 assert.match(button('claude-desktop-profiles', 'Open').title, /Applications\/Claude.app/);
 assert.equal(button('claude-desktop-profiles', 'Open').disabled, true);
-assert.equal(button('claude-desktop-actions', 'New profile').disabled, false);
+assert.equal(button('claude-desktop-profiles', 'New profile').disabled, false);
 """)
 
 
@@ -59,9 +59,9 @@ for (const installed of [false, true]) {
   apiState.claudeDesktop = {available: false, canCreate: true, supported: true, installed,
     running: null, profiles: [], error: installed ? 'Unable to check whether Claude is running' : 'Install official Claude in /Applications/Claude.app'};
   await load();
-  const create = button('claude-desktop-actions', 'New profile');
+  const create = button('claude-desktop-profiles', 'New profile');
   assert.equal(create.disabled, false);
-  assert.equal(button('claude-desktop-actions', 'Open usual Claude (default)').disabled, true);
+  assert.equal(button('claude-desktop-actions', 'Open Claude').disabled, true);
   assert.match($('claude-desktop-status').textContent, /You can still create empty profiles/);
   create.click();
   nodes('dialog-fields').find(node => node.type === 'text').value = 'Work';
@@ -83,12 +83,12 @@ def test_explicit_creation_capability_is_rechecked_before_submission(node):
 apiState.claudeDesktop = {available: true, canCreate: true, supported: true, installed: true,
   running: false, profiles: []};
 await load();
-button('claude-desktop-actions', 'New profile').click();
+button('claude-desktop-profiles', 'New profile').click();
 nodes('dialog-fields').find(node => node.type === 'text').value = 'Work';
 nodes('dialog-fields').find(node => node.type === 'checkbox').checked = true;
 apiState.claudeDesktop.canCreate = false;
 await load();
-assert.equal(button('claude-desktop-actions', 'New profile').disabled, true);
+assert.equal(button('claude-desktop-profiles', 'New profile').disabled, true);
 await submitDialog();
 assert.equal(posts().length, 0);
 assert.equal($('action-dialog').open, true);
@@ -111,11 +111,11 @@ apiState.claudeDesktop = {available: true, supported: true, installed: true, exp
   notice: 'Experimental local profiles', error: null, running: true, profiles: []};
 await load();
 assert.equal($('claude-desktop-panel').hidden, false);
-assert.equal(button('claude-desktop-actions', 'New profile').disabled, false);
-assert.equal(button('claude-desktop-actions', 'Open usual Claude (default)').disabled, true);
+assert.equal(button('claude-desktop-profiles', 'New profile').disabled, false);
+assert.equal(button('claude-desktop-actions', 'Open Claude').disabled, true);
 assert.match($('claude-desktop-profiles').textContent, /No named profiles/);
 assert.match($('claude-desktop-notice').textContent, /Experimental local profiles/);
-button('claude-desktop-actions', 'New profile').click();
+button('claude-desktop-profiles', 'New profile').click();
 assert.equal(posts().length, 0);
 assert.match($('dialog-description').textContent, /macOS\/Linux only.*Signed-in persistence on Mac.*Code\/Cowork.*Claude-in-Chrome pairing.*Sign in to each.*Fully QUIT Claude.*not verified identities.*confirm the selected account/);
 const name = nodes('dialog-fields').find(node => node.tagName === 'INPUT' && node.type === 'text');
@@ -158,8 +158,8 @@ await submitDialog();
 assert.equal(posts().at(-1).path, '/api/claude-desktop/open');
 assert.deepEqual(posts().at(-1).payload, {profileId: id, confirm: true});
 assert.match($('toast').textContent, /Launch requested only; confirm the selected account in Claude/);
-assert.equal(document.activeElement, button('claude-desktop-actions', 'Check again'));
-button('claude-desktop-actions', 'Open usual Claude (default)').click();
+assert.equal(document.activeElement, button('claude-desktop-actions', 'Refresh'));
+button('claude-desktop-actions', 'Open Claude').click();
 assert.equal(posts().length, 2);
 assert.equal(posts()[0].path, '/api/preferences');
 assert.deepEqual(posts()[0].payload, {profileNoticeVersion: 1, confirm: true});
@@ -175,18 +175,18 @@ def test_running_unknown_unavailable_and_error_states(node):
 apiState.claudeDesktop = {available: true, supported: true, installed: true, experimental: true,
   notice: 'Experimental', error: null, running: null, profiles: [{id: 'a'.repeat(32), name: 'Work'}]};
 await load();
-const create = button('claude-desktop-actions', 'New profile');
-const usual = button('claude-desktop-actions', 'Open usual Claude (default)');
+const create = button('claude-desktop-profiles', 'New profile');
+const usual = button('claude-desktop-actions', 'Open Claude');
 assert.equal(create.disabled, false);
 assert.equal(usual.disabled, true);
 assert.equal(button('claude-desktop-profiles', 'Open').disabled, true);
 assert.match($('claude-desktop-status').textContent, /status is unknown/);
 apiState.claudeDesktop.running = true;
-await button('claude-desktop-actions', 'Check again').click();
+await button('claude-desktop-actions', 'Refresh').click();
 assert.match($('claude-desktop-status').textContent, /Fully quit/);
 assert.equal(button('claude-desktop-profiles', 'Open').disabled, true);
 apiState.claudeDesktop.running = false;
-await button('claude-desktop-actions', 'Check again').click();
+await button('claude-desktop-actions', 'Refresh').click();
 assert.equal(button('claude-desktop-profiles', 'Open').disabled, false);
 apiState.claudeDesktop = {available: false, supported: false, installed: false, experimental: true,
   notice: 'Unavailable', error: 'Detection failed', running: null, profiles: []};
@@ -222,7 +222,7 @@ def test_launch_rechecks_process_state_and_busy_create_blocks_duplicates(node):
 apiState.claudeDesktop = {available: true, supported: true, installed: true, experimental: true,
   notice: 'Experimental', error: null, running: false, profiles: []};
 await load();
-button('claude-desktop-actions', 'Open usual Claude (default)').click();
+button('claude-desktop-actions', 'Open Claude').click();
 nodes('dialog-fields').find(node => node.type === 'checkbox').checked = true;
 apiState.claudeDesktop.running = true;
 await load();
@@ -230,7 +230,7 @@ await submitDialog();
 assert.equal(posts().length, 0);
 assert.equal($('action-dialog').open, true);
 $('dialog-cancel').click(); await settle();
-button('claude-desktop-actions', 'New profile').click();
+button('claude-desktop-profiles', 'New profile').click();
 nodes('dialog-fields').find(node => node.type === 'text').value = 'Lab';
 nodes('dialog-fields').find(node => node.type === 'checkbox').checked = true;
 let release;
@@ -243,11 +243,11 @@ assert.equal(posts().length, 2);
 assert.deepEqual(posts().map(call => call.path), ['/api/preferences', '/api/claude-desktop/create']);
 assert.equal($('dialog-submit').disabled, true);
 assert.equal($('dialog-cancel').disabled, true);
-assert.equal(button('claude-desktop-actions', 'New profile').disabled, true);
+assert.equal(button('claude-desktop-profiles', 'New profile').disabled, true);
 await submitDialog();
 assert.equal(posts().length, 2);
 release({ok: true, json: async () => ({ok: true, message: 'Created', profile: {id: 'c'.repeat(32), name: 'Lab'}})});
 await pending;
 assert.equal($('action-dialog').open, false);
-assert.equal(button('claude-desktop-actions', 'New profile').disabled, false);
+assert.equal(button('claude-desktop-profiles', 'New profile').disabled, false);
 """)

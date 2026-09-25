@@ -54,7 +54,28 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 MAX_BODY_BYTES = 32768
 
 
-def _claude_windows(last_good: dict | None) -> list[dict]:
+def _quota_window(label, percent, window_seconds, reset_at, reset_after, observed_at) -> dict:
+    def timestamp(value):
+        return value if type(value) in (int, float) and 0 < value < 8_640_000_000_000 else None
+
+    observed = timestamp(observed_at)
+    seconds = timestamp(window_seconds)
+    reset = timestamp(reset_at)
+    remaining = reset_after if type(reset_after) in (int, float) and 0 <= reset_after < 8_640_000_000_000 else None
+    if reset_at is None and observed is not None and remaining is not None:
+        reset = timestamp(observed + remaining)
+    if reset is not None and observed is not None and seconds is not None and reset - observed > seconds:
+        reset = remaining = None
+    if reset is not None:
+        remaining = max(0, int(reset - time.time()))
+    return {
+        "label": label, "usedPercent": percent,
+        "windowSeconds": seconds, "resetAt": reset,
+        "resetAfterSeconds": remaining, "observedAt": observed,
+    }
+
+
+def _claude_windows(last_good: dict | None, observed_at: float | None = None) -> list[dict]:
     """Claude's windows in the same shape the Codex ones use.
 
     One shape for both providers so the page has a single way to draw a limit;
@@ -68,28 +89,22 @@ def _claude_windows(last_good: dict | None) -> list[dict]:
 
     if not isinstance(last_good, dict):
         return []
-    now = time.time()
     windows = []
-    for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
+    for key, label, seconds in (("five_hour", "5h", 18000), ("seven_day", "7d", 604800)):
         percent = window_pct(last_good, key)
         if percent is None:
             continue
-        remaining = None
+        stamp = None
         block = last_good.get(key)
         resets_at = block.get("resets_at") if isinstance(block, dict) else None
-        if resets_at:
+        if isinstance(resets_at, str) and resets_at:
             try:
-                stamp = datetime.fromisoformat(
-                    str(resets_at).replace("Z", "+00:00")
-                ).timestamp()
-                remaining = max(0, int(stamp - now))
-            except ValueError:
-                remaining = None
-        windows.append({
-            "label": label,
-            "usedPercent": round(percent),
-            "resetAfterSeconds": remaining,
-        })
+                parsed = datetime.fromisoformat(resets_at.replace("Z", "+00:00"))
+                if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+                    stamp = parsed.timestamp()
+            except (ValueError, OSError, OverflowError):
+                pass
+        windows.append(_quota_window(label, round(percent), seconds, stamp, None, observed_at))
     return windows
 
 
@@ -167,7 +182,7 @@ class DashboardState:
                 usage = account.usage
                 percent = binding_pct(usage.last_good) if usage else None
                 accounts.append({
-                    "windows": _claude_windows(usage.last_good if usage else None),
+                    "windows": _claude_windows(usage.last_good if usage else None, usage.fetched_at if usage else None),
                     "number": account.number,
                     "email": account.email,
                     "alias": account.alias,
@@ -229,11 +244,8 @@ class DashboardState:
                 elif result is not None:
                     entry.update({
                         "windows": [
-                            {
-                                "label": w.label,
-                                "usedPercent": w.used_percent,
-                                "resetAfterSeconds": w.reset_after_seconds,
-                            }
+                            _quota_window(w.label, w.used_percent, w.window_seconds,
+                                          w.reset_at, w.reset_after_seconds, result.fetched_at)
                             for w in result.windows
                         ],
                         "percent": result.binding_percent,
@@ -506,8 +518,10 @@ def _make_handler(state: DashboardState, token: str):
                 "/api/preferences": (state.preferences.update, set(), {"theme", "profileNoticeVersion", "confirm"}),
                 "/api/codex/quit": (state.quit_codex, {"confirm"}, set()),
                 "/api/codex/open": (state.open_codex, {"confirm"}, set()),
-                "/api/claude-desktop/create": (state.claude_desktop.create, {"name", "confirm"}, set()),
+                "/api/claude-desktop/create": (state.claude_desktop.create, {"name", "confirm"}, {"emailLabel"}),
                 "/api/claude-desktop/open": (state.claude_desktop.open, {"profileId", "confirm"}, set()),
+                "/api/claude-desktop/update": (state.claude_desktop.update, {"profileId", "name", "emailLabel", "confirm"}, set()),
+                "/api/claude-desktop/delete": (state.claude_desktop.delete, {"profileId", "confirm"}, set()),
                 "/api/switch": (state.switch, {"provider", "number"}, set()),
                 "/api/add": (state.add_current, {"provider"}, set()),
                 "/api/remove": (state.remove, {"provider", "number", "confirm"}, set()),

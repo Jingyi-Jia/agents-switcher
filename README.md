@@ -116,6 +116,20 @@ a menu-bar/system-tray readout when the optional platform dependency is installe
 management and automatic-switch settings remain separate from the primary switch
 action. An unavailable measurement is not zero remaining quota.
 
+Each quota window shows its reported reset date, time, and local timezone.
+Relative resets stay anchored to the original usage report, not the time you
+refresh the page. Missing or inconsistent timing stays unavailable; an elapsed
+reset asks for fresh usage rather than assuming that quota has returned.
+The subtle even-pace hint compares quota used with the share of the window
+elapsed at the last report. It needs a report from the last five minutes and is
+only a guide, never a forecast or an automatic-switching input.
+
+Open **Auto-switch**, enter a used-quota threshold for the most-used quota window,
+and choose **Start**. Starting requires confirmation; **Stop** stops
+that app/server session's automation. **Preview without switching** is optional:
+it shows selection decisions without switching accounts, but usage checks can
+still refresh credentials. Closing a browser tab does not stop its server.
+
 **Usage** shows reporting data, not a second automatic-switch policy:
 
 - **Codex:** account-specific statistics reported by OpenAI, including daily
@@ -179,8 +193,9 @@ not import a Desktop session.
 1. Install official Claude Desktop in `/Applications/Claude.app` or
    `~/Applications/Claude.app` on macOS, or its official Linux package at
    `/usr/bin/claude-desktop`. Custom install locations and Windows are not supported.
-2. Choose **New profile**, give it a label such as “Work”, and acknowledge
-   the profile limitations. This only creates empty private directories;
+2. Choose **+ New profile** at the end of the list, give it a name such as “Work”
+   and an optional email label, and acknowledge the profile limitations.
+   These are your labels, not a verified sign-in. This only creates empty private directories;
    it works even if Claude is not detected or its process status is unknown.
    Those checks block opening profiles, not creating them.
 3. Fully **quit Claude Desktop**. Closing its window may leave it running. Once
@@ -191,15 +206,22 @@ not import a Desktop session.
    account. To return to a saved profile, quit Claude first and open that profile
    from Agent Switch. **Verify the selected account inside Claude before working**;
    labels are yours, not identities checked by Agent Switch.
-5. To use your original profile again, quit Claude and choose **Open usual Claude
-   (default)**. Launching Claude normally from the Dock also uses its usual profile,
+5. To use your original profile again, quit Claude and choose **Open Claude**
+   at the top of the panel. Launching Claude normally from the Dock also uses its usual profile,
    not the last named profile chosen here.
 
 If **Open** is disabled, read the status box above it. A running Claude app must
 be fully quit with **⌘Q** on Mac. If Claude is not
 detected, move the official app into one of the supported installation locations
-above. A failed process check or unreadable profile registry also blocks launch;
+above, then choose **Refresh**. A failed process check or unreadable profile registry also blocks launch;
 creating a profile does not bypass those checks.
+
+Click a profile's name to edit its name or optional email label. **Delete profile**
+has a separate destructive confirmation and requires Claude to be fully quit.
+It removes that named profile's local sign-in and session data, not your Claude
+account, cloud data, usual default profile, or saved CLI accounts. The usual
+profile cannot be renamed or deleted here. If cleanup is incomplete, the app
+reports that private staged data may remain; it does not claim a complete deletion.
 
 This uses Claude's `--user-data-dir` launch flag without copying session cookies,
 importing tokens, changing CLI credentials, modifying the official app, or
@@ -219,7 +241,7 @@ Profile labels and IDs are stored in `claude-desktop/profiles.json` beneath Agen
 Switch's data directory; each `profiles/<id>/` contains private `desktop/` and
 `claude-code/` directories. Claude owns the session data it creates there, which
 can contain credentials and conversation data. Do not share or commit these
-directories. No delete or export action is provided. Launching Claude can also
+directories. No export action is provided. Launching Claude can also
 update its shared OS-integration metadata outside a named profile.
 
 ### Save and switch Codex accounts safely

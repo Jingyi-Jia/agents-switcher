@@ -241,7 +241,7 @@ def test_failed_profile_acknowledgement_never_creates_or_launches(node):
     run_page(node, r"""
 apiState.claudeDesktop = {available: true, canCreate: true, supported: true, installed: true, running: false, profiles: []};
 await load();
-button('claude-desktop-actions', 'New profile').click();
+button('claude-desktop-profiles', 'New profile').click();
 nodes('dialog-fields').find(n => n.type === 'text').value = 'Work';
 nodes('dialog-fields').find(n => n.type === 'checkbox').checked = true;
 fetchHandler = async () => ({ok: false, json: async () => ({ok: false, error: 'Cannot save preferences'})});
@@ -471,9 +471,11 @@ assert.equal($('codex-auto').tagName, 'DETAILS');
 
 def test_quota_summary_reset_belongs_to_the_limiting_window(node):
     run_page(node, r"""
+const now = Date.now() / 1000;
+Date.now = () => now * 1000;
 const summary = tile('Codex', {available: true, accounts: [{active: true, email: 'sample@example.test', windows: [
-  {label: '5h', usedPercent: 18, resetAfterSeconds: 3600},
-  {label: '7d', usedPercent: 41, resetAfterSeconds: 259200},
+  {label: '5h', usedPercent: 18, resetAt: now + 3600, windowSeconds: 18000, observedAt: now},
+  {label: '7d', usedPercent: 41, resetAt: now + 259200, windowSeconds: 604800, observedAt: now},
 ]}]});
 assert.match(summary.textContent, /59%left/);
 assert.match(summary.textContent, /7d limit resets in 3d 0h/);

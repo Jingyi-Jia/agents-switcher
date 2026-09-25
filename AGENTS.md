@@ -78,12 +78,32 @@ Both CLI and desktop startup initialize native TLS through
 certificate and hostname verification, including when native trust is unavailable.
 
 The experimental Desktop panel reads `claudeDesktop` in `/api/state`. Its private
-POST routes are `/api/claude-desktop/create` (`name`, `confirm: true`) and
-`/api/claude-desktop/open` (`profileId`, `confirm: true`); `profileId: "default"`
-opens the usual Claude profile without a user-data override. `canCreate` is
+POST routes are `/api/claude-desktop/create` (`name`, optional `emailLabel`,
+`confirm: true`), `/api/claude-desktop/open` (`profileId`, `confirm: true`),
+`/api/claude-desktop/update` (`profileId`, `name`, `emailLabel`, `confirm: true`),
+and `/api/claude-desktop/delete` (`profileId`, `confirm: true`). `profileId: "default"`
+only opens the usual Claude profile without a user-data override; it cannot be
+renamed or deleted. `canCreate` is
 independent of installation and process detection; creation does not launch.
 Launch success never means authenticated or account-switched. There is
 no Desktop-profile CLI/TUI command or automatic-switch policy.
+
+Profile email labels are user-entered, optional, limited to 320 characters, and
+never verified against Claude data. Strict v1 registries remain read-only on
+reads; mutations write v2 labels. Deletion uses the shared profile lock, confirmed
+process exit, no-follow directory descriptors and private staging before the
+registry update. Registry failure rolls back the move. A cleanup failure returns
+`ok: false, warning: true` even after list removal; retain the visible warning and
+refresh the state. Never delete the usual profile or follow linked directories.
+
+Dashboard quota windows expose `windowSeconds`, `resetAt`, `resetAfterSeconds`
+and `observedAt`. Anchor relative resets to the provider measurement timestamp,
+not render time, and require timezone-aware Claude timestamps. Missing, invalid
+or out-of-window timing must not produce a guessed date. The even-pace display
+uses the report's elapsed-window fraction, only for samples at most five minutes
+old and not failed or credit-backed; within five percentage points is near even
+pace. This is a display-only comparison, never a forecast or an input to account
+selection, token refresh, or polling policy.
 
 The private analytics surface is `GET /api/analytics?provider=codex|claude`, with
 optional `force=0|1`. It requires the header token, never query-token auth. Codex
@@ -240,7 +260,9 @@ are in [desktop/README.md](desktop/README.md) and
 - Desktop profile coverage: [test_claude_desktop.py](tests/test_claude_desktop.py)
   mocks every app launch and checks registry, process, environment and HTTP
   boundaries; [test_claude_desktop_page.py](tests/test_claude_desktop_page.py)
-  checks consent and rendering. Do not run native sign-ins as an unattended test.
+  checks consent and rendering. [test_claude_desktop_management.py](tests/test_claude_desktop_management.py)
+  covers metadata and deletion safety; [test_profile_controls_page.py](tests/test_profile_controls_page.py)
+  covers management dialogs, busy states and destructive confirmation. Do not run native sign-ins as an unattended test.
   [test_claude_desktop_processes.py](tests/test_claude_desktop_processes.py) also
   covers macOS's `<defunct>` zombie marker and signed 32-bit UID formatting
   (`nobody` appears as `-2`). It creates a short-lived nobody-owned process only
