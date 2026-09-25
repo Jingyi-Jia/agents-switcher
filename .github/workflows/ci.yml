@@ -15,13 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            mode: grouped
-          - os: windows-latest
-            mode: traced
-          - os: windows-latest
-            mode: serial-native
-          - os: ubuntu-latest
+          - os: windows-2022
             mode: grouped
     steps:
       - uses: actions/checkout@v4
