@@ -37,6 +37,8 @@ def pytest_runtest_call(item):
 
         def traced_run(*args, **kwargs):
             start = time.monotonic()
+            kwargs["timeout"] = 45
+            print("TRACE diagnostic-only deadline 45s; production remains 10s", flush=True)
             try:
                 result = original_run(*args, **kwargs)
             except subprocess.SubprocessError as error:
@@ -63,6 +65,26 @@ def pytest_runtest_call(item):
 
     if item.name.startswith("test_native_posix_status_reads_harmless_node_arguments") and os.name == "posix":
         original_command = cd._read_linux_command
+        original_executable = item.module._READ_LINUX_EXECUTABLE
+        original_popen = item.module._NATIVE_POPEN
+
+        def traced_popen(*args, **kwargs):
+            process = original_popen(*args, **kwargs)
+            if "node" in Path(args[0][0]).name.lower():
+                print("TRACE fixture-node-pid", process.pid, flush=True)
+            return process
+
+        def traced_executable(pid):
+            try:
+                return original_executable(pid)
+            except (OSError, ValueError) as error:
+                print("TRACE linux-executable-failure", pid, type(error).__name__, flush=True)
+                try:
+                    state = (Path("/proc") / str(pid) / "stat").read_bytes().rsplit(b") ", 1)[1].split()[0].decode()
+                    print("TRACE linux-executable-state", pid, state, flush=True)
+                except (OSError, ValueError, IndexError) as observation:
+                    print("TRACE linux-executable-observation", pid, type(observation).__name__, flush=True)
+                raise
 
         def traced_command(pid):
             try:
@@ -81,6 +103,8 @@ def pytest_runtest_call(item):
 
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(cd, "_read_linux_command", traced_command)
+            patch.setattr(item.module, "_READ_LINUX_EXECUTABLE", traced_executable)
+            patch.setattr(item.module, "_NATIVE_POPEN", traced_popen)
             yield
         return
 
