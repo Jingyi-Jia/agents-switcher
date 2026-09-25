@@ -62,7 +62,10 @@ jobs:
           uv sync --locked --group desktop-build
           npm ci --prefix desktop
       - name: Test Python backend
-        run: uv run --no-sync pytest -o faulthandler_timeout=600
+        run: uv run --no-sync pytest -m "not native_process" -o faulthandler_timeout=600
+        timeout-minutes: 15
+      - name: Test native process probes without competing test workers
+        run: uv run --no-sync pytest -n 0 -m native_process -o faulthandler_timeout=600
         timeout-minutes: 15
       - name: Test Electron shell
         run: npm test --prefix desktop

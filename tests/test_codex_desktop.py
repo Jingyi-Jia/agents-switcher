@@ -568,6 +568,7 @@ def test_linux_protected_relevant_or_inconsistent_commands_remain_unknown(scan, 
 
 
 @pytest.mark.skipif(_NATIVE_PLATFORM != "linux", reason="Exercises Linux non-dumpable process metadata")
+@pytest.mark.native_process
 @pytest.mark.xdist_group("native-codex-processes")
 def test_native_linux_protected_background_process_does_not_hide_codex(monkeypatch):
     monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="linux"))
@@ -673,6 +674,7 @@ def test_windows_other_users_missing_command_is_ignored(scan, monkeypatch):
 
 
 @pytest.mark.skipif(_NATIVE_PLATFORM != "win32", reason="Exercises native Windows process metadata")
+@pytest.mark.native_process
 @pytest.mark.xdist_group("native-codex-processes")
 def test_native_windows_status_reads_harmless_node_arguments(monkeypatch):
     node = shutil.which("node")
@@ -816,6 +818,7 @@ def test_linux_native_metadata_rejects_missing_or_truncated_arguments(monkeypatc
 
 
 @pytest.mark.skipif(_NATIVE_PLATFORM not in {"darwin", "linux"}, reason="Exercises native POSIX process metadata")
+@pytest.mark.native_process
 @pytest.mark.xdist_group("native-codex-processes")
 def test_native_posix_status_reads_harmless_node_arguments(monkeypatch):
     node = shutil.which("node")
