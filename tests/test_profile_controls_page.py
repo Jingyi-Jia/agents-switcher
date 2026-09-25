@@ -113,9 +113,17 @@ assert.equal($('dialog-feedback').hidden, false);
 assert.match($('dialog-feedback').textContent, mode === 'removed' ? /no longer in the saved list/ : /Confirm Claude is quit/);
 await submitDialog();
 assert.equal(posts().length, 0);
+if (mode !== 'removed') {
+  apiState.claudeDesktop.running = false;
+  apiState.claudeDesktop.canDelete = true;
+  await load();
+  assert.equal($('dialog-submit').disabled, false);
+  assert.equal($('dialog-feedback').hidden, true);
+}
 $('dialog-cancel').click(); await settle();
 button('claude-desktop-profiles', 'New profile').click();
 assert.equal($('dialog-submit').disabled, false);
+assert.equal($('dialog-submit').title, '');
 assert.doesNotMatch($('dialog-submit').className, /danger/);
 """)
 
@@ -136,6 +144,8 @@ assert.equal($('dialog-feedback').hidden, false);
 assert.match($('dialog-feedback').textContent, /not a complete deletion/);
 assert.match($('toast').className, /ember/);
 assert.match($('toast').textContent, /local profile data may remain/);
+await load();
+assert.match($('dialog-feedback').textContent, /not a complete deletion/);
 await submitDialog();
 assert.equal(posts().length, 1);
 $('dialog-cancel').click(); await settle();

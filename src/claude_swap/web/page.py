@@ -495,11 +495,12 @@ function renderDesktopProfiles(data) {
   document.querySelectorAll("[data-action]").forEach((button) => {
     if (button.dataset.profileDelete === undefined) return;
     const exists = (data.profiles || []).some((profile) => profile.id === button.dataset.profileDelete);
+    const previousReason = button.title;
     block(button, !data.canDelete || !exists);
     button.title = !exists ? "This profile is no longer in the saved list." : !data.canDelete ? data.deleteError || "Fully quit Claude Desktop, then Refresh before deleting a profile." : "";
-    if (button === $("dialog-submit") && button.disabled && !busy) {
+    if (button === $("dialog-submit") && !busy && ($("dialog-feedback").hidden || $("dialog-feedback").textContent === previousReason)) {
       $("dialog-feedback").textContent = button.title;
-      $("dialog-feedback").hidden = false;
+      $("dialog-feedback").hidden = !button.disabled;
     }
   });
   const host = $("claude-desktop-profiles");
@@ -907,6 +908,7 @@ function confirmAction({title, description, label, opener, submit, fields, kind 
   $("dialog-description").textContent = description;
   $("dialog-submit").textContent = label;
   $("dialog-submit").className = danger ? "primary danger" : "primary";
+  $("dialog-submit").title = "";
   delete $("dialog-submit").dataset.profileDelete;
   block($("dialog-submit"), false);
   $("dialog-feedback").hidden = true;
