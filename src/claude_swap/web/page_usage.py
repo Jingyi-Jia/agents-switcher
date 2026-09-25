@@ -208,16 +208,18 @@ function renderModels(host, accounts, days) {
   }));
   const panel = el("section", "comparison");
   panel.appendChild(usageHeading("Token components", "All reported history · not filtered by date"));
-  panel.appendChild(el("p", "hint", "Input, output, cache reads, and cache writes are kept separate as reported. They are not added into a second, potentially double-counted total. Missing values are not zero. Only available reports are included; coverage can differ by model and account."));
+  panel.appendChild(el("p", "hint", "Input, output, cache read, and cache write components are shown separately as reported. " + (analyticsProvider === "claude" ? "When complete, these four components sum to Claude Code's lifetime token total. Daily token buckets already aggregate them. " : "Daily model totals are used as reported, without adding components again. ") + "Missing values are not zero. Only available reports are included; coverage can differ by model and account."));
   if (components.size) panel.appendChild(usageTable(["Model", "Input", "Output", "Cache read", "Cache write"], [...components].map(([name, rows]) => [name, ...["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"].map((key) => {
     const total = sumKnown(rows.map((r) => r[key]));
     return numberText(total) + (knownNumber(total) && rows.some((r) => !knownNumber(r[key])) ? " · partial" : "");
   })]), "Model token components"));
   else panel.appendChild(el("p", "hint", "Token components are not reported by this source."));
   host.appendChild(panel);
-  if (analyticsProvider === "claude") accounts.forEach((a) => {
-    const insights = a.insights || {}, details = el("section", "comparison");
-    details.appendChild(usageHeading("How you work", "This device · all reported history"));
+  if (analyticsProvider === "codex") accounts.forEach((a) => {
+    const insights = a.insights || {};
+    if (!knownNumber(insights.fastModePercent) && !insights.topReasoningEffort && !(insights.topInvocations || []).length) return;
+    const details = el("section", "comparison");
+    details.appendChild(usageHeading("How you work · " + (a.label || "Account " + a.number), "All reported history"));
     details.append(el("p", "hint", `Fast mode: ${knownNumber(insights.fastModePercent) ? insights.fastModePercent + "%" : "Not reported"} · Top reasoning effort: ${insights.topReasoningEffort || "Not reported"}`));
     if ((insights.topInvocations || []).length) details.appendChild(usageTable(["Kind", "Invocation", "Uses"], insights.topInvocations.map((i) => [i.kind || "Not reported", i.name, numberText(i.usageCount)]), "Top local invocations"));
     host.appendChild(details);
