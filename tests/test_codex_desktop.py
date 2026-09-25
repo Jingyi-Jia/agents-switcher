@@ -45,7 +45,7 @@ def isolated(monkeypatch, tmp_path):
 
 @pytest.fixture
 def scan(monkeypatch):
-    app = Path("/Applications/Codex.app")
+    app = Path("/Applications/Codex.app").absolute()
     source = {}
     output = ["50 1 501 S ?? /usr/bin/python3"]
     run = Mock(side_effect=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "\n".join(output), ""))
@@ -757,7 +757,8 @@ def test_linux_native_metadata_preserves_spaces_and_deleted_executables(monkeypa
     assert opened == [(Path("/proc/123/cmdline"), "rb")]
 
 
-@pytest.mark.parametrize("raw", [b"", b"codex", b"\0", b"x" * (cd._MAX_ARGUMENT_BYTES + 1) + b"\0"])
+@pytest.mark.parametrize("raw", [b"", b"codex", b"\0", b"x" * (cd._MAX_ARGUMENT_BYTES + 1) + b"\0"],
+                         ids=["empty", "unterminated", "empty-argument", "oversized"])
 def test_linux_native_metadata_rejects_missing_or_truncated_arguments(monkeypatch, raw):
     monkeypatch.setattr(cd, "_read_linux_executable", _READ_LINUX_EXECUTABLE)
     monkeypatch.setattr(cd.os, "readlink", lambda path: "/bin/codex")
@@ -841,7 +842,8 @@ def test_invalid_bundle_metadata_never_becomes_a_launch_target(monkeypatch, meta
     assert app not in cd._installed_apps()
 
 
-@pytest.mark.parametrize("raw", [b"invalid", b"x" * 262145, b'<?xml version="1.0"?><plist><dict>'])
+@pytest.mark.parametrize("raw", [b"invalid", b"x" * 262145, b'<?xml version="1.0"?><plist><dict>'],
+                         ids=["invalid", "oversized", "incomplete-xml"])
 def test_invalid_or_oversized_plist_is_unavailable(raw):
     app = create_app(Path.home())
     (app / "Contents/Info.plist").write_bytes(raw)

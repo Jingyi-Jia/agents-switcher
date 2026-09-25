@@ -4,13 +4,38 @@ A local account manager for **Claude Code and Codex**. Save existing logins,
 see quota and activity, and choose which account to use from a desktop window, browser
 dashboard, or terminal. Automatic switching is optional.
 
-The app and browser dashboard also offer **experimental Claude Desktop profiles**
-on macOS and Linux. These are separate from Claude Code accounts and automation.
+**Start here:** [For humans](#for-humans) · [For agents](#for-agents)
 
 The executable is **`agent-switch`**; the Python package is `agents-switcher`.
-This fork does not install or replace upstream's `cswap` command.
 
-## What it switches
+## For humans
+
+### What Agent Switch adds
+
+Work developed in this repository includes:
+
+- **A standalone desktop app** with native menus, keyboard shortcuts, tray icons,
+  and macOS, Windows, and Linux packaging. Its bundled runtime needs no separate
+  Python or Node.js installation.
+- **A shared account workspace** across the desktop app, browser dashboard, and
+  terminal UI, with manual account management and opt-in automatic switching.
+- **Codex account support** with rotation-safe credential handling, quota and
+  activity reports, live-login detection, and quit-first switching. Eligible Mac
+  installs offer a guided normal quit, switch, and reopen sequence.
+- **A pixel-neon dashboard** with light/dark themes, readable usage charts,
+  activity heatmaps, Codex account reports, and local Claude Code Overview and
+  Models views. Unknown data stays unknown rather than appearing as zero.
+- **Experimental Claude Desktop profiles** for separate local workspaces on
+  macOS/Linux, with consent and process checks. These remain separate from CLI
+  account switching; signed-in persistence and Code/Cowork behavior are unverified.
+- **Shared safety infrastructure**, including cross-node-safe locking, serialized
+  credential actions, native TLS trust, and packaged-backend checks.
+
+To get started, [get the desktop app or a preview](#get-the-app), or
+[install the CLI from source](#install-the-cli-from-source). Sign in through your
+provider first, then choose **Add existing login** in Agent Switch.
+
+### What it switches
 
 | Provider | Supported today | Boundary |
 | --- | --- | --- |
@@ -18,14 +43,16 @@ This fork does not install or replace upstream's `cswap` command.
 | Codex | File-backed ChatGPT/OAuth accounts, quota, activity stats and automatic selection | Supports Codex CLI and Desktop when they use the same `auth.json`, not keyring-only or API-key logins. Quit both before switching; running processes keep their old account until restarted. |
 | Claude Desktop profiles | Experimental, manual launcher for separate local profiles on macOS/Linux | Sign in inside each profile. Mac account persistence and Code/Cowork behavior are unverified; custom profiles disable local Claude-in-Chrome pairing. No quota-based switching or Windows support. |
 
-Agent Switch does not install the provider CLIs or sign you in. Install
-[Claude Code](https://code.claude.com/docs/en/setup) or
-[Codex CLI](https://developers.openai.com/codex/cli), then sign in through that
-provider. **Add existing login** in Agent Switch saves the current provider login;
+Agent Switch does not install provider apps or sign you in. For Claude Code,
+install its [CLI](https://code.claude.com/docs/en/setup). For Codex, use the
+Desktop app or
+[CLI](https://developers.openai.com/codex/cli) with a file-backed login; the Codex
+CLI is not required for a supported Desktop login. **Add existing login** saves
+the current provider login;
 it is not a login button. Claude API-key accounts have no subscription quota
 readout and can incur per-token charges.
 
-## Get the app
+### Get the app
 
 **There is no published installer release yet.** The repository currently has
 only a draft `v1.0.0` release with no assets. The
@@ -43,14 +70,15 @@ a preview run. See the [desktop guide](desktop/README.md) for preview handling,
 platform requirements and native build instructions.
 
 The standalone app bundles Electron and its Python backend: end users do not
-need Python, uv, Node.js or npm, but still need their provider CLI and login.
+need Python, uv, Node.js or npm. You still need the provider app or CLI and a
+supported login, as described above.
 The experimental Claude Desktop panel needs the official Claude Desktop app
 instead of a CLI installation.
 Public macOS/Windows release builds require signing credentials, and macOS also
 requires notarization. The workflow exists; a trusted signed release still needs
 successful builds and clean-machine installation checks. There is no auto-updater.
 
-## Install the CLI from source
+### Install the CLI from source
 
 Use Python 3.12+ and [uv](https://docs.astral.sh/uv/):
 
@@ -81,7 +109,7 @@ it is **not** the standalone Electron app and still needs the CLI installation.
 a menu-bar/system-tray readout when the optional platform dependency is installed
 (`uv tool install '.[tray-macos]'` on macOS, `uv tool install '.[tray]'` elsewhere).
 
-## Accounts, Usage, and Settings
+### Accounts, Usage, and Settings
 
 **Accounts** is the everyday switching view. It keeps the selected login, current
 5-hour/weekly capacity, reset times, and switching controls together. Account
@@ -119,7 +147,7 @@ automatic-switching session; the menu-bar icon does not imply background mode.
 The native **View** menu and menu-bar menu open Accounts, Usage, and Settings.
 Keyboard shortcuts are **⌘/Ctrl+1**, **⌘/Ctrl+2**, and **⌘/Ctrl+,** respectively.
 
-## Save and switch Claude Code accounts
+### Save and switch Claude Code accounts
 
 Sign in to Claude Code, then save that login. Repeat after signing in to each
 additional account through Claude Code.
@@ -142,7 +170,7 @@ prompt rather than putting a secret in shell history. Experimental
 terminal profile; it does not support API-key accounts and is not Desktop
 profile switching. See `agent-switch run --help` for isolation and sharing options.
 
-## Try Claude Desktop profiles (Beta)
+### Try Claude Desktop profiles (Beta)
 
 Use the **Claude Desktop — Profiles · Beta** panel in the app or browser
 dashboard. It is not the Claude Code account list, and **Add existing login** does
@@ -194,7 +222,7 @@ can contain credentials and conversation data. Do not share or commit these
 directories. No delete or export action is provided. Launching Claude can also
 update its shared OS-integration metadata outside a named profile.
 
-## Save and switch Codex accounts safely
+### Save and switch Codex accounts safely
 
 Sign in with `codex login`, then save the login:
 
@@ -233,7 +261,7 @@ switch and print a restart warning. Follow the quit-first sequence even when a
 CLI switch succeeds. Do not use `--force` as a repair tool: it permits discarding
 an unmanaged current login.
 
-### If a login is already revoked
+#### If a login is already revoked
 
 A revoked, expired or reused refresh token cannot be repaired by switching back
 and forth. Stop auto-switching and quit Codex, then:
@@ -249,7 +277,7 @@ accounts or copying old `auth.json` files around to fix a revoked token. For a
 Claude Code re-login warning, sign in again through Claude Code and re-add that
 current login; signing in to Claude Desktop will not repair CLI credentials.
 
-### If usage fails with a certificate error
+#### If usage fails with a certificate error
 
 `CERTIFICATE_VERIFY_FAILED` is a TLS trust failure, not evidence that a login was
 revoked. Update Agent Switch before deleting or re-adding accounts. The desktop
@@ -258,7 +286,7 @@ certificate and hostname verification enabled. If the error persists, check the
 system clock and any organization-managed HTTPS proxy with your administrator;
 do not disable certificate verification.
 
-## Automatic switching: opt in, then keep it running
+### Automatic switching: opt in, then keep it running
 
 Start by observing decisions:
 
@@ -288,7 +316,7 @@ default; the explicit `--include-api-key-accounts` option permits a metered fall
 Quota failures and exhausted accounts can block selection; auto-switching is not
 a guarantee of uninterrupted work or a way around provider limits.
 
-## JSON output for scripting
+### JSON output for scripting
 
 ```bash
 agent-switch claude list --json
@@ -305,7 +333,7 @@ decisions. For `auto --once`, exit codes are 0 for a switch decision (including
 dry-run), 1 for an error, 2 for no change, and 3 for blocked/no viable target
 (including Codex waiting for a restart). See [AGENTS.md](AGENTS.md) for source refs.
 
-## Local data and privacy
+### Local data and privacy
 
 Saved accounts use `~/.local/share/claude-swap` on Linux/WSL (or
 `$XDG_DATA_HOME/claude-swap`), and `~/.claude-swap-backup` on macOS/Windows.
@@ -321,14 +349,37 @@ The browser dashboard binds to loopback by default and uses a per-run access
 token. Keep its URL private and use SSH forwarding for remote access instead of
 exposing the server publicly. Quota and stats requests still contact providers.
 
-## Development and credit
+## For agents
 
-[AGENTS.md](AGENTS.md) covers the repository map, safe tests and contribution
-checks; [desktop/README.md](desktop/README.md) covers packaging and signing.
-Report this fork's bugs in [its issue tracker](https://github.com/jingyi-jia/agents-switcher/issues).
+Read **[AGENTS.md](AGENTS.md) before changing code**. It is the contributor guide
+for coding agents and developers: repository map, supported commands, credential
+safety rules, and validation requirements. Read
+[desktop/README.md](desktop/README.md) for native packaging and signing.
 
-Agent Switch is a fork of [claude-swap](https://github.com/realiti4/claude-swap)
-by **Onur Cetinkol (@realiti4)**. The inherited Claude Code switching is his work.
-This repo focuses on shared Claude Code/Codex account management and a standalone
-desktop app. Original history and attribution are retained.
-Licensed under [MIT](LICENSE).
+1. **Use the right names.** The command is `agent-switch`, the distribution is
+   `agents-switcher`, and the import package is `claude_swap`. Do not restore
+   upstream's `cswap` entry point or rename persisted account directories.
+2. **Keep provider boundaries explicit.** Claude Code logins, Codex accounts, and
+   Claude Desktop profiles are distinct. Analytics do not authorize switching;
+   a profile label does not verify an account identity.
+3. **Test with isolated, synthetic accounts.** Never use real sign-ins, account
+   switches, token refreshes, cookies, or credential stores to verify a change.
+   Use the existing test fixtures and the platform-specific smoke-test guidance.
+4. **Verify what you change.** Run the relevant Python/Electron tests and builds
+   described in [AGENTS.md](AGENTS.md). Inspect UI changes in the running app.
+   A configured workflow is not evidence of a working downloadable release.
+
+For a Python checkout, start with `uv sync --locked`. For desktop work, use
+`uv sync --locked --group desktop-build` and `npm ci --prefix desktop`.
+Report bugs in the [issue tracker](https://github.com/jingyi-jia/agents-switcher/issues).
+
+## Credits and license
+
+Agent Switch began as a fork of [claude-swap](https://github.com/realiti4/claude-swap)
+by **Onur Cetinkol ([@realiti4](https://github.com/realiti4))**. Thank you for the
+original project and its Claude Code foundation. Agent Switch's additions and
+product development are described above; the original Git history and author
+attribution are preserved.
+
+Licensed under [MIT](LICENSE), with copyright notices for the original project
+and Jingyi Jia's Agent Switch additions retained in `LICENSE`.
