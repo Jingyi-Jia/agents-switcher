@@ -149,6 +149,23 @@ def claude_cache(tmp_path, monkeypatch):
     return SimpleNamespace(root=root, path=path, payload=payload, write=write)
 
 
+@pytest.fixture
+def current_claude_cache(claude_cache):
+    claude_cache.payload.update({
+        "version": 5,
+        "dailyModelTokensVersion": 5,
+        "dailyModelTokens": [
+            {"date": "2026-09-23", "tokensByModel": {"claude-sonnet": 700, "claude-haiku": 100}},
+            {"date": "2026-09-24", "tokensByModel": {"claude-sonnet": 470, "claude-haiku": 118}},
+        ],
+    })
+    claude_cache.payload["modelUsage"]["claude-haiku"].update({
+        "cacheReadInputTokens": 200, "cacheCreationInputTokens": 3,
+    })
+    claude_cache.write()
+    return claude_cache
+
+
 def assert_contract(result):
     assert set(result) == {"provider", "scope", "source", "fetchedAt", "accounts", "error"}
     for entry in result["accounts"]:
@@ -445,12 +462,26 @@ def test_codex_bad_roster_is_not_reported_as_empty_success(codex):
     assert "private" not in json.dumps(result)
 
 
-def test_default_codex_with_no_accounts_does_not_create_store(tmp_path, monkeypatch):
-    root = tmp_path / "not-created"
-    monkeypatch.setattr(switcher_mod, "CodexAccountStore", lambda: CodexAccountStore(root=root))
-    result = UsageAnalytics().get("codex")
+@pytest.mark.parametrize("force", [False, True])
+def test_unconfigured_codex_does_not_construct_default_switcher_or_inspect_stores(monkeypatch, force):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unconfigured Codex analytics tried to inspect a default store")
+
+    monkeypatch.setattr(switcher_mod, "CodexSwitcher", forbidden)
+    monkeypatch.setattr(switcher_mod, "CodexAccountStore", forbidden)
+    monkeypatch.setattr(analytics, "_read_claude_cache", forbidden)
+    result = UsageAnalytics().get("codex", force=force)
+    assert_contract(result)
+    assert result["accounts"] == []
+    assert result["error"] == "Codex analytics is not configured."
+
+
+def test_configured_codex_with_no_accounts_is_an_empty_success(codex):
+    codex.store.remove("1")
+    codex.store.remove("2")
+    result = UsageAnalytics(codex.switcher).get("codex")
     assert result["accounts"] == [] and result["error"] is None
-    assert not root.exists()
+    assert codex.calls == []
 
 
 @pytest.mark.parametrize("auth_failure", [False, True])
@@ -518,7 +549,10 @@ def test_codex_concurrent_requests_share_one_bounded_batch(codex, claude_cache, 
     assert codex.calls == ["1", "2"]
 
 
-def test_claude_contract_has_local_totals_and_explicit_token_buckets(claude_cache):
+@pytest.mark.parametrize("version", [1, 2])
+def test_claude_legacy_contract_preserves_incomplete_totals_and_explicit_token_buckets(claude_cache, version):
+    claude_cache.payload["version"] = version
+    claude_cache.write()
     result = UsageAnalytics().get("claude")
     assert_contract(result)
     assert result["scope"] == "local" and result["source"] == "claude-stats-cache"
@@ -529,7 +563,7 @@ def test_claude_contract_has_local_totals_and_explicit_token_buckets(claude_cach
     assert entry["available"] and not entry["stale"]
     assert entry["dataThrough"] == THROUGH
     assert entry["summary"] == {
-        "lifetimeTokens": 165, "peakDailyTokens": 15, "currentStreakDays": None,
+        "lifetimeTokens": None, "peakDailyTokens": 15, "currentStreakDays": None,
         "longestStreakDays": None, "totalSessions": 3, "totalMessages": 12, "totalThreads": None,
     }
     assert entry["daily"] == [
@@ -546,6 +580,65 @@ def test_claude_contract_has_local_totals_and_explicit_token_buckets(claude_cach
         {"date": "2026-09-24", "tokensByModel": {"claude-sonnet": 0}},
     ]
     assert "private" not in json.dumps(result)
+
+
+def test_claude_v5_matches_all_four_lifetime_components_without_double_counting_daily_cache(current_claude_cache):
+    result = UsageAnalytics().get("claude")
+    assert_contract(result)
+    entry = result["accounts"][0]
+    assert entry["available"] and not entry["stale"]
+    assert entry["summary"] == {
+        "lifetimeTokens": 1388, "peakDailyTokens": 800, "currentStreakDays": None,
+        "longestStreakDays": None, "totalSessions": 3, "totalMessages": 12, "totalThreads": None,
+    }
+    assert entry["models"] == [
+        {"name": "claude-haiku", "inputTokens": 10, "outputTokens": 5, "cacheReadTokens": 200, "cacheWriteTokens": 3},
+        {"name": "claude-sonnet", "inputTokens": 100, "outputTokens": 50, "cacheReadTokens": 1000, "cacheWriteTokens": 20},
+    ]
+    assert entry["daily"] == [
+        {"date": "2026-09-22", "tokens": None, "messages": 1, "sessions": None},
+        {"date": "2026-09-23", "tokens": 800, "messages": 8, "sessions": 2},
+        {"date": "2026-09-24", "tokens": 588, "messages": 3, "sessions": 1},
+    ]
+    assert entry["dailyModels"] == current_claude_cache.payload["dailyModelTokens"]
+
+
+@pytest.mark.parametrize("version", [1, 2, 3, 4, 5])
+def test_claude_known_versions_preserve_complete_reported_components(current_claude_cache, version):
+    current_claude_cache.payload["version"] = version
+    current_claude_cache.payload["dailyModelTokensVersion"] = version
+    current_claude_cache.write()
+    entry = UsageAnalytics().get("claude")["accounts"][0]
+    assert entry["available"]
+    assert entry["summary"]["lifetimeTokens"] == 1388
+    assert [row["tokens"] for row in entry["daily"]] == [None, 800, 588]
+
+
+@pytest.mark.parametrize("version", [1, 2, 5])
+@pytest.mark.parametrize("missing", ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"])
+def test_claude_incomplete_lifetime_components_are_unknown_even_with_complete_daily_buckets(
+    current_claude_cache, version, missing,
+):
+    current_claude_cache.payload["version"] = version
+    current_claude_cache.payload["modelUsage"]["claude-haiku"].pop(missing)
+    current_claude_cache.write()
+    entry = UsageAnalytics().get("claude")["accounts"][0]
+    assert entry["available"]
+    assert entry["summary"]["lifetimeTokens"] is None
+    assert [row["tokens"] for row in entry["daily"]] == [None, 800, 588]
+
+
+def test_claude_explicit_zero_cache_components_preserve_zero_lifetime_tokens(claude_cache):
+    claude_cache.write({
+        "version": 5, "lastComputedDate": THROUGH,
+        "modelUsage": {"claude-sonnet": {
+            "inputTokens": 0, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+        }},
+    })
+    entry = UsageAnalytics().get("claude")["accounts"][0]
+    assert entry["available"]
+    assert entry["summary"]["lifetimeTokens"] == 0
+    assert entry["summary"]["peakDailyTokens"] is None
 
 
 def test_claude_reads_only_stats_cache_and_never_attributes_history_to_an_account(claude_cache, monkeypatch):
@@ -627,7 +720,7 @@ def test_claude_malformed_json_is_unavailable_and_redacted(claude_cache, content
 
 
 @pytest.mark.parametrize("change", [
-    {"version": True}, {"version": 0}, {"version": 999}, {"version": None},
+    {"version": True}, {"version": 0}, {"version": 6}, {"version": 999}, {"version": None},
     {"dailyActivity": {}}, {"dailyModelTokens": "private-content"}, {"modelUsage": []},
 ])
 def test_claude_unsupported_schema_is_unavailable(claude_cache, change):
@@ -734,7 +827,9 @@ def test_claude_overflowing_derived_totals_are_null(claude_cache):
     large = 2**1023
     claude_cache.write({
         "version": 2, "lastComputedDate": THROUGH,
-        "modelUsage": {"claude-sonnet": {"inputTokens": large, "outputTokens": large}},
+        "modelUsage": {"claude-sonnet": {
+            "inputTokens": large, "outputTokens": large, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+        }},
         "dailyModelTokens": [{"date": THROUGH, "tokensByModel": {"claude-sonnet": large, "claude-haiku": large}}],
     })
     result = UsageAnalytics().get("claude")
