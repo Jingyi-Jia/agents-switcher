@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import os
 import plistlib
@@ -106,6 +107,16 @@ def _child_environment() -> dict[str, str]:
     return result
 
 
+def _read_mac_executable(pid: int) -> str:
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    buffer = ctypes.create_string_buffer(4096)
+    library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    library.proc_pidpath.restype = ctypes.c_int
+    if library.proc_pidpath(pid, buffer, len(buffer)) <= 0 or not buffer.value:
+        raise OSError("Process executable unavailable")
+    return os.fsdecode(buffer.value)
+
+
 def _read_mac_arguments(pid: int) -> tuple[str, tuple[str, ...]]:
     library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     mib = (ctypes.c_int * 3)(1, 49, pid)
@@ -142,9 +153,13 @@ def _parse_mac_arguments(raw: bytes) -> tuple[str, tuple[str, ...]]:
     return os.fsdecode(executable), tuple(arguments)
 
 
+def _read_linux_executable(pid: int) -> str:
+    return os.readlink(Path("/proc") / str(pid) / "exe").removesuffix(" (deleted)")
+
+
 def _read_linux_arguments(pid: int) -> tuple[str, tuple[str, ...]]:
     root = Path("/proc") / str(pid)
-    executable = os.readlink(root / "exe").removesuffix(" (deleted)")
+    executable = _read_linux_executable(pid)
     with (root / "cmdline").open("rb") as stream:
         raw = stream.read(_MAX_ARGUMENT_BYTES + 1)
     if not raw or not raw.endswith(b"\0") or len(raw) > _MAX_ARGUMENT_BYTES:
@@ -179,14 +194,16 @@ def _posix_processes() -> list[_Process]:
         pid, parent, owner = int(pid_text), int(parent_text), int(owner_text)
         if sys.platform == "darwin" and -(2**31) <= owner < 0:
             owner += 2**32
-        if not (0 < pid < 2**31 and 0 <= parent < 2**31 and 0 <= owner < 2**32) or pid in seen:
+        if not (0 <= pid < 2**31 and 0 <= parent < 2**31 and 0 <= owner < 2**32) or pid in seen:
+            raise ValueError
+        if pid == 0 and (sys.platform != "darwin" or parent != 0 or owner != 0):
             raise ValueError
         seen.add(pid)
         if state.startswith("Z"):
             continue
         if len(parts) != 6 or not parts[5].strip():
             raise ValueError
-        if owner != uid:
+        if pid == 0 or owner != uid:
             continue
         executable = parts[5].strip()
         processes.append(_Process(pid, parent, executable, (), tty not in {"?", "??", "-"}))
@@ -196,11 +213,21 @@ def _posix_processes() -> list[_Process]:
     for process in processes:
         executable = process.executable
         arguments = ()
-        name = _basename(executable).lower()
-        if (name.startswith("codex") or name in _INTERPRETERS
-                or "/Codex.app/Contents/" in executable):
-            reader = _read_mac_arguments if sys.platform == "darwin" else _read_linux_arguments
-            executable, arguments = reader(process.pid)
+        try:
+            read_executable = _read_mac_executable if sys.platform == "darwin" else _read_linux_executable
+            executable = read_executable(process.pid)
+            name = _basename(executable).lower()
+            if (name.startswith("codex") or name in _INTERPRETERS
+                    or "/Codex.app/Contents/" in executable):
+                reader = _read_mac_arguments if sys.platform == "darwin" else _read_linux_arguments
+                executable, arguments = reader(process.pid)
+        except (OSError, ValueError):
+            try:
+                os.kill(process.pid, 0)
+            except OSError as error:
+                if error.errno == errno.ESRCH:
+                    continue
+            raise
         found.append(_Process(process.pid, process.parent, executable, arguments, process.terminal))
     return found
 
