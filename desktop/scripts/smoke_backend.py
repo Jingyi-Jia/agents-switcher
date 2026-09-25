@@ -88,6 +88,22 @@ def exercise(executable: Path, shutdown: str) -> None:
                     for provider in ("claude", "codex"):
                         if state[provider].get("accounts") != [] or not state[provider].get("available"):
                             raise RuntimeError("Frozen provider failed or smoke test account isolation failed")
+                        connection.request("GET", f"/api/analytics?provider={provider}", headers={"X-Auth-Token": token})
+                        response = connection.getresponse()
+                        analytics = json.loads(response.read())
+                        if response.status != 200 or analytics.get("provider") != provider:
+                            raise RuntimeError("Frozen analytics request failed")
+                        expected_scope = "account" if provider == "codex" else "local"
+                        if analytics.get("scope") != expected_scope:
+                            raise RuntimeError("Frozen analytics returned an invalid scope")
+                        if provider == "codex" and analytics.get("accounts") != []:
+                            raise RuntimeError("Frozen Codex analytics account isolation failed")
+                        if provider == "claude" and (
+                            len(analytics.get("accounts", [])) != 1
+                            or analytics["accounts"][0].get("available") is not False
+                            or analytics["accounts"][0].get("number") is not None
+                        ):
+                            raise RuntimeError("Frozen Claude analytics device isolation failed")
                 finally:
                     connection.close()
                 if shutdown == "message":
@@ -158,7 +174,7 @@ def main() -> None:
     parser.add_argument("--executable", type=Path)
     parser.add_argument("--disposable-runner", action="store_true", help="Allow native credential-store access on a disposable macOS/Windows runner only")
     parser.add_argument("--check-tls", action="store_true", help="Also verify native TLS against fixed provider HTTPS hosts without credentials")
-    parser.add_argument("--check-processes", action="store_true", help="Also verify the native Claude Desktop process check on macOS/Linux without launching Claude")
+    parser.add_argument("--check-processes", action="store_true", help="Also verify native Codex and supported Claude Desktop process checks without launching either app")
     args = parser.parse_args()
     if sys.platform in {"darwin", "win32"} and not args.disposable_runner:
         parser.error("HOME isolation cannot isolate the system credential store; use a disposable VM with --disposable-runner")
@@ -171,7 +187,7 @@ def main() -> None:
     executable = executable.resolve(strict=True)
     if args.check_tls:
         check_tls(executable)
-    if args.check_processes and sys.platform in {"darwin", "linux"}:
+    if args.check_processes and sys.platform in {"darwin", "linux", "win32"}:
         check_processes(executable)
     for shutdown in ("message", "eof"):
         exercise(executable, shutdown)

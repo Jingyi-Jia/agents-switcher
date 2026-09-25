@@ -35,6 +35,8 @@ Read the implementation and nearby tests before changing a provider's behavior.
 | Shared UI actions | [providers.py](src/claude_swap/providers.py): provider capabilities, serialized actions and session-owned automation. |
 | Terminal UI | [tui/](src/claude_swap/tui/): Textual provider chooser, account dashboards and modals. |
 | Browser and tray | [web/server.py](src/claude_swap/web/server.py), [web/page.py](src/claude_swap/web/page.py), [web/cli.py](src/claude_swap/web/cli.py), [web/tray.py](src/claude_swap/web/tray.py), [web/launcher.py](src/claude_swap/web/launcher.py). |
+| Usage analytics and preferences | [analytics.py](src/claude_swap/analytics.py): account-specific Codex reports and local Claude stats-cache projection; [web/preferences.py](src/claude_swap/web/preferences.py): private appearance and versioned profile-notice acknowledgement. |
+| Codex app assistance | [codex/desktop.py](src/claude_swap/codex/desktop.py): strict process readiness and explicitly requested macOS normal quit/reopen. Never writes credentials or kills terminal processes. |
 | Standalone app | [desktop.py](src/claude_swap/desktop.py): private backend protocol; [desktop/src/](desktop/src/): Electron lifecycle and security; [desktop/scripts/](desktop/scripts/): freezing and smoke tests. |
 | Claude Desktop profiles | [claude_desktop.py](src/claude_swap/claude_desktop.py): experimental macOS/Linux launcher, private label registry, process interlock and profile directories. Separate from provider accounts and automatic switching. |
 | Tests and CI | [tests/](tests/), [desktop/test/](desktop/test/), [.github/workflows/](.github/workflows/). |
@@ -82,6 +84,31 @@ opens the usual Claude profile without a user-data override. `canCreate` is
 independent of installation and process detection; creation does not launch.
 Launch success never means authenticated or account-switched. There is
 no Desktop-profile CLI/TUI command or automatic-switch policy.
+
+The private analytics surface is `GET /api/analytics?provider=codex|claude`, with
+optional `force=0|1`. It requires the header token, never query-token auth. Codex
+analytics use stable saved-account identities, cached provider reports and
+`allow_refresh=False`; reading charts must not rotate OAuth tokens. Claude
+analytics read only the configured `stats-cache.json`, never transcripts,
+credentials or another profile's cookies. Local history must not be assigned to
+the current saved login. Missing buckets and unsupported fields remain unknown,
+and reporting data never participates in automatic account selection.
+
+`GET /api/codex/status` is a strict process-readiness check, independent of quota.
+The `quit` and `open` POSTs under `/api/codex/` require exact `confirm: true` and
+accept no supplied path, executable or PID. The frontend's assisted sequence must
+remain cancellable before switching, check for confirmed exit, and reopen only
+after the account action succeeds. Never kill a terminal session or force-close
+Codex. Unknown process state blocks manual UI switch, switch-best, and the
+dashboard's automatic-switch ticks. App quit/open requests share the credential
+action lock; analytics use their own lock and never enter that action sequence.
+
+`GET /api/preferences` is a fast header-authenticated read independent of provider
+collection. `POST /api/preferences` persists only supported appearance and notice
+fields; acknowledging notice version 1 additionally requires `confirm: true`.
+Corrupt/unreadable preferences never imply consent. A remembered notice may remove
+the repeated checkbox, but never the user's deliberate profile launch action,
+server consent boolean, process check, or known Chrome-pairing limitation.
 
 ## Setup, tests and builds
 
@@ -217,7 +244,9 @@ are in [desktop/README.md](desktop/README.md) and
   Mac UIDs before comparing ownership. Skip only confirmed zombies; missing
   commands on live rows must still block launch.
   Packaging CI runs `--check-processes` on the frozen and bundled helper even
-  when Claude is not installed, so installation detection cannot hide a scan failure.
+  when provider apps are not installed, so installation detection cannot hide a
+  scan failure. It checks strict Codex readiness on all three platforms and
+  Claude Desktop scanning on macOS/Linux.
 - Keep the human [README](README.md), this guide, CLI help and visible notices
   aligned with implemented behavior. Do not advertise Claude Desktop profile
   switching before it exists and has safety tests.

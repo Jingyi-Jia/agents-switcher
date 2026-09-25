@@ -14,6 +14,7 @@ from tests.test_provider_actions import Codex
 
 def test_tray_quit_waits_for_owned_auto_tick_and_closes_server(tmp_path, monkeypatch):
     state = DashboardState(codex_switcher=Codex(tmp_path / "codex"))
+    state.codex_desktop.status = Mock(return_value={"available": True, "running": False})
     entered, release, closed = threading.Event(), threading.Event(), threading.Event()
     clear = Mock()
     servers = []

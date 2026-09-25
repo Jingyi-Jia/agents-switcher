@@ -13,12 +13,21 @@ let backend = null;
 let quitting = false;
 let recovering = false;
 let starting = false;
+let dashboardAddress = null;
 
 function showWindow() {
   if (!window || window.isDestroyed() || recovering || quitting) return;
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
+}
+
+function showView(view) {
+  if (!['accounts', 'usage', 'settings'].includes(view) || !dashboardAddress
+    || !window || window.isDestroyed() || recovering || quitting) return;
+  const target = new URL(dashboardAddress);
+  target.hash = view;
+  void window.loadURL(target.href).then(showWindow).catch(() => recover(new BackendError('backend_error')));
 }
 
 function openHelp(url) {
@@ -41,7 +50,13 @@ function installMenu() {
       { label: 'Quit Agent Switch', accelerator: process.platform === 'darwin' ? undefined : 'Alt+F4', click: () => app.quit() },
     ] },
     { role: 'editMenu' },
-    { label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
+    { label: 'View', submenu: [
+      { label: 'Accounts', accelerator: 'CommandOrControl+1', click: () => showView('accounts') },
+      { label: 'Usage', accelerator: 'CommandOrControl+2', click: () => showView('usage') },
+      { label: 'Settings', accelerator: 'CommandOrControl+,', click: () => showView('settings') },
+      { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+      { type: 'separator' }, { role: 'togglefullscreen' },
+    ] },
     { label: 'Help', submenu: [
       { label: 'Claude Code setup', click: () => openHelp(HELP_LINKS.claude) },
       { label: 'Codex setup', click: () => openHelp(HELP_LINKS.codex) },
@@ -59,7 +74,9 @@ function installTray() {
   tray = new Tray(icon);
   tray.setToolTip('Agent Switch — close the window to quit');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show app', click: showWindow },
+    { label: 'Accounts', click: () => showView('accounts') },
+    { label: 'Usage dashboard', click: () => showView('usage') },
+    { label: 'Settings', click: () => showView('settings') },
     { type: 'separator' },
     { label: 'Quit Agent Switch', click: () => app.quit() },
   ]));
@@ -69,6 +86,7 @@ function installTray() {
 async function recover(error) {
   if (quitting || recovering) return;
   recovering = true;
+  dashboardAddress = null;
   if (window && !window.isDestroyed()) {
     window.destroy();
     window = null;
@@ -107,11 +125,12 @@ async function startDashboard() {
   try {
     const url = await backend.start();
     if (quitting || recovering || backend.state !== 'running') return;
+    dashboardAddress = url;
     const origin = new URL(url).origin;
     const isolatedSession = session.fromPartition(`agent-switch-${randomUUID()}`, { cache: false });
     secureSession(isolatedSession, origin);
     window = new BrowserWindow({
-      width: 1040, height: 820, minWidth: 520, minHeight: 480,
+      width: 1180, height: 860, minWidth: 520, minHeight: 480,
       title: 'Agent Switch', show: false, backgroundColor: '#f5f5f5',
       icon: path.join(__dirname, '..', 'assets', 'icon.png'),
       webPreferences: {

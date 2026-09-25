@@ -2,9 +2,11 @@
 
 Agent Switch bundles an Electron window and a PyInstaller-frozen Python backend.
 The installer contains the app runtime: users do **not** need Python, uv, Node.js,
-or npm. Claude Code and Codex themselves are not bundled. Install the provider
-CLI you use and sign in there first; the dashboard can then add that current
-login. Claude Code CLI credentials are separate from Claude Desktop's login.
+or npm. Claude Code and Codex themselves are not bundled. Sign in through Claude
+Code's CLI, or through Codex Desktop or CLI with a file-backed login; the dashboard
+can then add that current login. The Codex CLI is not required for a supported
+Desktop login. Claude Code CLI credentials are separate from Claude Desktop's
+login.
 
 ## Downloads and installation
 

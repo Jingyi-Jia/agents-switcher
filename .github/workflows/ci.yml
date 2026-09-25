@@ -27,7 +27,8 @@ jobs:
         run: uv sync --locked
 
       - name: Run tests
-        run: uv run pytest
+        timeout-minutes: 15
+        run: uv run pytest -o faulthandler_timeout=600
 
   test-windows:
     runs-on: windows-latest
@@ -46,7 +47,8 @@ jobs:
       - name: Run tests
         # Includes the TUI tests: the Textual TUI (unlike the old curses one)
         # runs on stock Windows, and this job is the proof.
-        run: uv run pytest
+        timeout-minutes: 15
+        run: uv run pytest -o faulthandler_timeout=600
 
   # The id stays `macos-keychain` although the job now runs everything: it is
   # the name branch protection matches on, and renaming it silently drops the

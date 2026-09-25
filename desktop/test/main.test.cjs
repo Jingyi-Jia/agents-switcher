@@ -50,7 +50,7 @@ function harness({ singleInstance = true, startError } = {}) {
       this.webContents.setWindowOpenHandler = () => {};
       state.windows.push(this);
     }
-    async loadURL() {}
+    async loadURL(url) { this.loadedURL = url; }
     isDestroyed() { return this.destroyed; }
     isMinimized() { return false; }
     show() { this.shown = true; }
@@ -161,4 +161,31 @@ test('a second instance creates no window or backend', async () => {
   await settle();
   assert.equal(state.windows.length, 0);
   assert.equal(state.backends.length, 0);
+});
+
+test('tray and application menus navigate only within the owned dashboard', async () => {
+  const { state, app } = harness();
+  await settle();
+  const window = state.windows[0];
+  for (const [label, hash] of [['Accounts', '#accounts'], ['Usage dashboard', '#usage'], ['Settings', '#settings']]) {
+    state.trayMenu.find(item => item.label === label).click();
+    await settle();
+    const url = new URL(window.loadedURL);
+    assert.equal(url.origin, 'http://127.0.0.1:12345');
+    assert.equal(url.pathname, '/');
+    assert.equal(url.hash, hash);
+    assert.equal(url.searchParams.get('token'), 'a'.repeat(64));
+  }
+  const view = state.menu.find(item => item.label === 'View');
+  for (const label of ['Accounts', 'Usage', 'Settings']) {
+    const action = view.submenu.find(item => item.label === label);
+    assert.ok(action.accelerator);
+    action.click();
+    await settle();
+    assert.equal(new URL(window.loadedURL).hash, '#' + label.toLowerCase());
+  }
+  assert.equal(state.external.length, 0);
+  assert.equal(state.backends.length, 1);
+  app.quit();
+  await settle();
 });

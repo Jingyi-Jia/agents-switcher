@@ -18,6 +18,14 @@ class ProviderActionError(ValueError):
     """A safe, user-facing action refusal."""
 
 
+class ActionRequired(ProviderActionError):
+    """An expected prerequisite, not an account-operation failure."""
+
+    def __init__(self, message: str, *, code: str):
+        super().__init__(message)
+        self.code = code
+
+
 @dataclass(frozen=True)
 class ProviderSpec:
     capabilities: tuple[str, ...]
@@ -86,8 +94,9 @@ class ProviderActions:
     they can join an in-flight worker safely.
     """
 
-    def __init__(self, claude=None, codex=None):
+    def __init__(self, claude=None, codex=None, *, codex_preflight=None):
         self._switchers = {"claude": claude, "codex": codex}
+        self._codex_preflight = codex_preflight
         self.lock = threading.RLock()
         self.revision = 0
         self._closed = False
@@ -118,11 +127,18 @@ class ProviderActions:
     def _claude_result(self, result) -> dict:
         if not isinstance(result, dict) or not isinstance(result.get("switched"), bool):
             raise ProviderActionError("Claude did not report a switch outcome")
+        followup = None
+        if result["switched"]:
+            if getattr(self._switchers["claude"], "_last_active_credentials_backend", None) == "keychain":
+                followup = "Existing Claude Code sessions can take about 30 seconds to pick up the new login. Restart Claude Code to apply it immediately."
+            else:
+                followup = "Claude Code will use the updated CLI login when it reloads credentials. Claude Desktop has a separate sign-in."
         return {
             **result,
             "ok": result["switched"] or result.get("reason") in ("already-active", "activated"),
             "restartRequired": False,
             "switchNotice": self.switch_notice("claude"),
+            "followUp": followup,
         }
 
     def switch(self, provider: str, number) -> dict:
@@ -133,10 +149,10 @@ class ProviderActions:
                 if provider == "claude":
                     return self._claude_result(switcher.switch_to(number, json_output=True))
                 if running_codex_processes():
-                    raise ProviderActionError(
+                    raise ActionRequired(
                         "Quit Codex completely before switching, including its desktop app "
                         "and terminal sessions. Then switch here and reopen Codex; "
-                        "your current login has not been changed."
+                        "your current login has not been changed.", code="codex-running",
                     )
                 result = switcher.switch_to(number)
                 message = f"Switched to {result.account.display_label}."
@@ -347,6 +363,12 @@ class AutoController:
                         )
 
                         def tick():
+                            if self._actions._codex_preflight is not None:
+                                try:
+                                    self._actions._codex_preflight()
+                                except ActionRequired as error:
+                                    self._event(provider, safe_error(error), "blocked")
+                                    return settings.interval_seconds
                             decision = run_once(
                                 switcher, settings=codex_settings, dry_run=mode == "dry-run"
                             )

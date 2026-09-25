@@ -1,31 +1,10 @@
-"""The dashboard's single page.
-
-One string, no build step, no framework, no CDN: the page has to render on a
-cluster login node reached through an SSH tunnel, where fetching anything from
-the internet -- a web font included -- is exactly what will not work. The face
-is ``Geist`` when the machine has it and the platform sans otherwise; the
-identity is carried by geometry, not by a download.
-
-THE SYSTEM IS MONOCHROME, AND THAT IS A DATA DECISION. Quota is a single ratio
-against a limit, so each window is a METER: an ink fill on a hairline track, the
-track a lighter step of the same ramp so the bar reads as one object at any
-level. Severity is not a hue. It is carried by the number's weight and by a
-label -- bold at 20% left, and at zero the word "limit reached" beside a glyph,
-in the one red the system allows. Red means exactly one thing on this page, so
-it is never spent on decoration.
-
-THE FRAMING IS HEADROOM. Every figure reads "x% left" and every meter drains.
-The question this page answers is "where should I work next", and the answer is
-the account with the most room, so the quantity on screen is the one being
-compared, not its complement.
-
-The one rule that is policy rather than taste: an account billing paid credits
-gets a solid ink pill and a sentence, never the healthy treatment. It works, so
-it stays switchable by hand -- but it is not spare capacity, and it must not
-look like any.
-"""
+"""The offline, single-document Agent Switch dashboard."""
 
 from __future__ import annotations
+
+from .page_style import PAGE_STYLE
+from .page_switch import SWITCH_SCRIPT
+from .page_usage import USAGE_SCRIPT
 
 PAGE_HTML = r"""<!doctype html>
 <html lang="en">
@@ -33,234 +12,95 @@ PAGE_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>agent-switch</title>
-<style>
-  :root {
-    color-scheme: light;
-    --canvas:#f5f5f5; --panel:#fafafa; --paper:#ffffff;
-    --ink:#0a0a0a; --ink-soft:#171717; --mid:#737373; --hairline:#e5e5e5;
-    --track:#e5e5e5; --ember:#e7000b; --on-ink:#ffffff;
-    --shadow:0 1px 1px rgba(0,0,0,.025), 0 2px 2px rgba(0,0,0,.02);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      color-scheme: dark;
-      --canvas:#0a0a0a; --panel:#111111; --paper:#171717;
-      --ink:#fafafa; --ink-soft:#e5e5e5; --mid:#a3a3a3; --hairline:#262626;
-      --track:#2a2a2a; --ember:#ff6b6b; --on-ink:#0a0a0a;
-      --shadow:none;
-    }
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --canvas:#0a0a0a; --panel:#111111; --paper:#171717;
-    --ink:#fafafa; --ink-soft:#e5e5e5; --mid:#a3a3a3; --hairline:#262626;
-    --track:#2a2a2a; --ember:#ff6b6b; --on-ink:#0a0a0a;
-    --shadow:none;
-  }
-
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--canvas); color: var(--ink);
-    font: 14px/1.5 "Geist", "Geist Variable", -apple-system, "Segoe UI", system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  .wrap { max-width: 760px; margin: 0 auto; padding-block: 32px 64px; padding-inline: 20px; }
-
-  /* -- masthead -------------------------------------------------------- */
-  header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
-  h1 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
-  .stamp { margin-left: auto; font-size: 12px; color: var(--mid); font-variant-numeric: tabular-nums; }
-
-  /* -- KPI row: one tile per provider, its ACTIVE account's headroom ---- */
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .tile {
-    background: var(--paper); border: 1px solid var(--hairline); border-radius: 24px;
-    box-shadow: var(--shadow); padding: 20px; display: flex; flex-direction: column; gap: 6px;
-  }
-  .label { font-size: 12px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--mid); }
-  .value { font-size: 30px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; color: var(--ink); }
-  .value small { font-size: 14px; font-weight: 400; letter-spacing: 0; color: var(--mid); margin-left: 6px; }
-  .value.ember { color: var(--ember); }
-  .sub { font-size: 13px; color: var(--mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  /* -- provider panels: a tonal step, not a divider ---------------------- */
-  .provider { background: var(--panel); border-radius: 24px; padding: 20px; margin-bottom: 12px; }
-  #claude-group { min-width: 0; }
-  #claude-desktop-status.launch-blocked { background: var(--paper); border: 1px solid var(--hairline); border-radius: 12px; padding: 12px; color: var(--ink); }
-  .provider > h2 { font-size: 12px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--mid); margin: 0 0 12px 4px; }
-  .provider > h2 span { color: var(--mid); font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: 8px; }
-
-  /* -- account card ------------------------------------------------------ */
-  .card {
-    background: var(--paper); border: 1px solid var(--hairline); border-radius: 24px;
-    box-shadow: var(--shadow); padding: 20px; margin-bottom: 8px;
-  }
-  .card:last-child { margin-bottom: 0; }
-  .top { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .slot { font-size: 13px; color: var(--mid); font-variant-numeric: tabular-nums; flex: none; }
-  .name { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .grow { flex: 1; }
-
-  /* pills: 18px is the only interactive radius in this system */
-  .pill {
-    display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 18px;
-    font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; flex: none;
-    border: 1px solid var(--hairline); color: var(--mid); background: transparent;
-  }
-  .pill.solid { background: var(--ink-soft); border-color: var(--ink-soft); color: var(--on-ink); }
-  .pill.soft  { background: var(--canvas); border-color: transparent; color: var(--ink); }
-
-  button {
-    font: inherit; font-size: 13px; font-weight: 500; height: 32px; padding: 0 14px;
-    border-radius: 18px; border: 1px solid var(--hairline); background: transparent; color: var(--ink);
-    cursor: pointer; flex: none; white-space: nowrap;
-  }
-  button.primary { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
-  button.ghost { background: var(--canvas); border-color: transparent; color: var(--mid); cursor: default; }
-  button:hover:not(:disabled):not(.ghost) { border-color: var(--ink); }
-  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  button:disabled { opacity: .6; }
-  input, select { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--hairline); border-radius: 10px; min-height: 36px; padding: 6px 10px; max-width: 100%; }
-  input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  input[type="checkbox"] { min-height: auto; accent-color: var(--ink); }
-  .preferences, .actions, .auto-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-  .preferences { margin-bottom: 20px; gap: 12px; color: var(--mid); font-size: 12px; }
-  .preferences label { display: inline-flex; align-items: center; gap: 6px; }
-  .actions { margin-block: 12px; }
-  .actions button { min-height: 36px; height: auto; padding-block: 6px; }
-  .notice, .hint { color: var(--mid); font-size: 12px; margin: 8px 0; overflow-wrap: anywhere; }
-  .notice { padding-inline: 4px; }
-  .auto-panel { border-top: 1px solid var(--hairline); padding-top: 14px; margin-top: 16px; }
-  .auto-heading h3 { font-size: 13px; font-weight: 500; margin: 0; }
-  .threshold-field { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-  .threshold-field input { width: 90px; }
-  .events { max-height: 160px; overflow-y: auto; padding-left: 22px; color: var(--mid); font-size: 12px; overflow-wrap: anywhere; }
-  .events li { padding-block: 4px; }
-  .auto-error { color: var(--ember); font-size: 12px; overflow-wrap: anywhere; }
-  summary { cursor: pointer; font-size: 12px; color: var(--mid); }
-  dialog { width: min(460px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; padding: 24px; border: 1px solid var(--hairline); border-radius: 24px; background: var(--paper); color: var(--ink); box-shadow: var(--shadow); }
-  dialog::backdrop { background: rgba(0,0,0,.4); }
-  dialog h2 { margin: 0 0 12px; font-size: 18px; font-weight: 500; }
-  dialog p { font-size: 13px; overflow-wrap: anywhere; }
-  .field { display: grid; gap: 6px; margin-block: 14px; font-size: 13px; }
-  .check { display: flex; align-items: start; gap: 8px; font-size: 13px; margin-block: 14px; }
-  .check input { flex: none; margin-top: 4px; }
-  .dialog-actions { justify-content: flex-end; margin-bottom: 0; }
-  #dialog-feedback { color: var(--ember); }
-  .guide { background: var(--paper); border: 1px solid var(--hairline); border-radius: 24px; padding: 24px; margin-bottom: 20px; box-shadow: var(--shadow); }
-  .guide-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-  .guide h2 { margin: 4px 0 0; font-size: 22px; font-weight: 500; letter-spacing: -.03em; }
-  .guide h3 { margin: 0; font-size: 14px; font-weight: 500; }
-  .guide p, .guide li { font-size: 13px; overflow-wrap: anywhere; }
-  .guide-intro { color: var(--mid); max-width: 72ch; }
-  .guide-providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; margin-top: 20px; }
-  .guide-provider { background: var(--panel); border-radius: 18px; padding: 16px; min-width: 0; }
-  .guide-provider .pill { margin-top: 10px; }
-  .guide-provider .actions { margin-bottom: 0; }
-  .guide a { color: var(--ink); text-underline-offset: 3px; font-size: 12px; }
-  .guide a:focus-visible, .guide h2:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
-  .guide-steps { padding-left: 22px; margin-block: 18px; }
-  .guide-steps li { padding: 3px 0 3px 4px; }
-  .guide-boundary { border-top: 1px solid var(--hairline); padding-top: 14px; }
-  .guide-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
-  [hidden] { display: none !important; }
-
-  /* -- meters: one per window, ink on a lighter step of the same ramp ---- */
-  .meters { margin-top: 14px; display: grid; gap: 10px; }
-  .meter { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline; }
-  .meter .label { font-size: 11.5px; }
-  .meter .num { font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
-  .meter .num.low { font-weight: 600; }
-  .meter .num.out { font-weight: 600; color: var(--ember); }
-  .meter .num span { color: var(--mid); font-weight: 400; }
-  .meter .track { grid-column: 1 / -1; height: 6px; border-radius: 6px; background: var(--track); overflow: hidden; }
-  .meter .fill { height: 100%; border-radius: 6px; background: var(--ink); }
-  .meter .fill.out { background: var(--ember); }
-
-  /* -- state line under the meters --------------------------------------- */
-  .state { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--mid); }
-  .state.out { color: var(--ember); }
-  .state .glyph { font-size: 10px; }
-
-  /* -- the signed-in-but-unmanaged row ----------------------------------- */
-  .adopt { background: var(--paper); border: 1px solid var(--hairline); border-radius: 24px; box-shadow: var(--shadow); padding: 16px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .adopt .t { font-size: 13px; color: var(--mid); min-width: 0; }
-  .adopt .t b { font-weight: 500; color: var(--ink); }
-  .empty { font-size: 13px; color: var(--mid); padding: 4px; }
-  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--ink); background: var(--canvas); padding: 1px 6px; border-radius: 6px; }
-
-  #toast {
-    position: sticky; bottom: 16px; margin-top: 20px; padding: 12px 16px; border-radius: 18px;
-    background: var(--ink); color: var(--on-ink); font-size: 13px; display: none; box-shadow: var(--shadow);
-  }
-  #toast.show { display: block; }
-  #toast.ember { background: var(--ember); color: #fff; }
-
-  @media (max-width: 480px) {
-    .wrap { padding-inline: 16px; }
-    .tile, .card, .provider, .guide { border-radius: 18px; padding: 16px; }
-    .value { font-size: 26px; }
-    .top { flex-wrap: wrap; }
-  }
-  @media (min-width: 1200px) {
-    .wrap { max-width: 1440px; }
-    .providers { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 16px; }
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .meter .fill { transition: width .35s ease; }
-  }
-</style>
+<style>__PAGE_STYLE__</style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1 id="app-title">agent-switch</h1>
-    <span class="stamp" id="stamp">loading…</span>
-    <button type="button" id="help-toggle" aria-controls="desktop-guide" aria-expanded="false" hidden>Help</button>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 16 16" fill="none" shape-rendering="crispEdges" aria-hidden="true"><path fill="#78dce8" d="M10 3h1v1H10zM3 4h9v1H3zM2 5h11v1H2zM2 6h2v1H2zM10 6h2v1H10zM2 7h2v1H2zM10 7h1v1H10z"/><path fill="#b49bf4" d="M5 12h1v1H5zM4 11h9v1H4zM3 10h11v1H3zM12 9h2v1H12zM4 9h2v1H4zM12 8h2v1H12zM5 8h1v1H5z"/></svg>
+      <div><h1 id="app-title">Agent Switch</h1><small>A little more headroom</small></div>
+    </div>
+    <nav class="nav" aria-label="Main navigation">
+      <button type="button" id="nav-accounts" aria-controls="view-accounts" aria-current="page"><span class="nav-symbol" aria-hidden="true">▦</span>Accounts</button>
+      <button type="button" id="nav-usage" aria-controls="view-usage"><span class="nav-symbol" aria-hidden="true">▥</span>Usage</button>
+      <button type="button" id="nav-settings" aria-controls="view-settings"><span class="nav-symbol" aria-hidden="true">⚙</span>Settings</button>
+    </nav>
+    <div class="sidebar-foot"><span class="local-dot" aria-hidden="true"></span>Local by design<br>Your accounts. Your device.</div>
+  </aside>
+<main class="wrap">
+  <section id="view-accounts" aria-labelledby="accounts-title">
+  <header class="page-heading">
+    <div><div class="eyebrow">Your workspace, ready</div><h2 id="accounts-title" tabindex="-1">Accounts</h2><p>Find your next bit of breathing room.</p></div>
+    <span class="stamp" id="stamp">Connecting to your local service…</span>
   </header>
-
-  <div class="preferences">
-    <label for="theme">Theme <select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-    <label for="watch"><input id="watch" type="checkbox" checked> Live updates</label>
-    <span id="watch-status">Every 20 seconds · auto-switch runs independently</span>
-  </div>
-
+  <div id="state-error" class="load-error" role="status" hidden></div>
+  <div id="guide-slot">
   <section class="guide" id="desktop-guide" aria-labelledby="guide-title" hidden>
     <div class="guide-heading">
-      <div><div class="label" id="guide-label">Getting started</div><h2 id="guide-title" tabindex="-1">Start with an existing CLI login</h2></div>
+      <div><div class="label" id="guide-label">Getting started</div><h2 id="guide-title" tabindex="-1">Start with an existing login</h2></div>
       <button type="button" id="help-close">Hide help</button>
     </div>
-    <p class="guide-intro">Keep your Claude Code and Codex CLI accounts in one place. This app includes its own runtime; you don't need to install Python or Node to run it. The provider CLIs and their sign-ins are separate prerequisites.</p>
+    <p class="guide-intro">Keep your Claude Code and Codex accounts in one place. This app includes its own runtime; you don't need to install Python or Node to run it. Claude Code needs its CLI and sign-in. Codex can use an existing file-backed sign-in from its Desktop app or CLI; the Codex CLI is not required for a Desktop login.</p>
     <div class="guide-providers" id="guide-providers"></div>
     <ol class="guide-steps">
-      <li><strong>Set up a provider CLI.</strong> Install it and sign in through that CLI, using its official setup guide. Then return here and choose Check again.</li>
-      <li><strong>Save the current login.</strong> Add existing login saves that provider's current CLI credentials for switching later. It doesn't start a new sign-in.</li>
-      <li><strong>Add another account when you're ready.</strong> Sign in to a different account in the same CLI, then add that login here. Switch by hand, or try Dry run before enabling live auto-switch.</li>
+      <li><strong>Set up a provider.</strong> Sign in through Claude Code's CLI or Codex's Desktop app or CLI, using its official setup guide. Then return here and choose Check again.</li>
+      <li><strong>Save the current login.</strong> Add existing login saves that provider's current local credentials for switching later. It doesn't start a new sign-in. Codex keyring-only and API-key logins aren't supported.</li>
+      <li><strong>Add another account when you're ready.</strong> Sign in to a different account in that provider, then add that login here. Switch by hand, or try Dry run before enabling live auto-switch.</li>
     </ol>
-    <p class="guide-boundary" id="guide-boundary">The Claude Code and Codex account controls manage CLI credentials only. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
+    <p class="guide-boundary" id="guide-boundary">The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
     <p class="hint">Paid-credit accounts remain manual-only; auto-switch never chooses them. After switching, follow any provider restart notice shown below.</p>
     <p class="hint">Closing the app stops its automation. Pausing live updates only pauses this view.</p>
     <div class="guide-footer"><button type="button" id="guide-check" data-action>Check again</button><span class="hint" id="desktop-meta"></span></div>
   </section>
-
+  </div>
   <section class="kpis" id="kpis" aria-label="Active accounts"></section>
 
   <div class="providers">
-  <section class="provider" aria-labelledby="codex-heading"><h2 id="codex-heading">Codex<span id="codex-count"></span></h2><p class="notice" id="codex-switch-notice" hidden></p><div id="codex-actions" class="actions"></div><div id="codex"></div><div id="codex-auto" class="auto-panel"></div></section>
+  <section class="provider" aria-labelledby="codex-heading"><h2 id="codex-heading">Codex<span id="codex-count"></span></h2><p class="notice" id="codex-switch-notice" hidden></p><div id="codex-actions" class="actions"></div><div id="codex"></div><details id="codex-auto" class="auto-panel"></details></section>
   <div id="claude-group" role="group" aria-label="Claude">
-  <section class="provider" aria-labelledby="claude-heading"><h2 id="claude-heading">Claude Code<span id="claude-count"></span></h2><p class="notice" id="claude-switch-notice">CLI only. Claude desktop, including the Code tab, has a separate sign-in and is not switched here.</p><div id="claude-actions" class="actions"></div><div id="claude"></div><div id="claude-auto" class="auto-panel"></div></section>
+  <section class="provider" aria-labelledby="claude-heading"><h2 id="claude-heading">Claude Code<span id="claude-count"></span></h2><p class="notice" id="claude-switch-notice">CLI only. Claude desktop, including the Code tab, has a separate sign-in and is not switched here.</p><div id="claude-actions" class="actions"></div><div id="claude"></div><details id="claude-auto" class="auto-panel"></details></section>
   <section class="provider" id="claude-desktop-panel" aria-labelledby="claude-desktop-heading" hidden>
-    <h2 id="claude-desktop-heading">Claude Desktop <span>Experimental profiles</span></h2>
-    <p class="notice" id="claude-desktop-notice"></p>
-    <p class="notice">Profiles are local app data, not verified accounts. Sign in to each profile in Claude once and confirm the selected account there. The Dock normally opens the usual default profile. No token import, cookie copying, deletion, or auto-switching is provided.</p>
+    <h2 id="claude-desktop-heading">Profiles <span>Beta · Claude Desktop</span></h2>
+    <p class="notice">Separate local spaces for Claude Desktop. Open one, then sign in there.</p>
+    <details class="profile-about"><summary>About profiles</summary>
+      <p id="claude-desktop-notice"></p>
+      <p>Profiles are local app data, not verified accounts. Names are your labels; last opened does not verify an active identity. Confirm the selected account in Claude. Signed-in persistence on Mac and Code/Cowork are not fully verified. Relocated profiles disable local Claude-in-Chrome pairing.</p>
+      <p>Fully quit Claude before opening another profile. The Dock normally opens the usual default profile. No CLI token import, cookie copying, forced quit, deletion, or auto-switching is provided.</p>
+    </details>
     <p class="notice" id="claude-desktop-status" role="status"></p>
     <div class="actions" id="claude-desktop-actions"></div>
     <div id="claude-desktop-profiles"></div>
   </section>
   </div>
   </div>
-
+  </section>
+  <section id="view-usage" aria-labelledby="usage-title" hidden>
+    <header class="page-heading"><div><div class="eyebrow">A rhythm of your own</div><h2 id="usage-title" tabindex="-1">Usage</h2><p id="usage-subtitle">Token activity, with the details that matter.</p></div></header>
+    <div class="usage-toolbar">
+      <label for="usage-provider">Provider<select id="usage-provider"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
+      <label id="usage-account-field" for="usage-account">Account<select id="usage-account"><option value="all">All accounts</option></select></label>
+      <label for="usage-range">Date range<select id="usage-range"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="all">All reported</option></select></label>
+      <button type="button" id="usage-refresh" class="push">Refresh activity</button>
+    </div>
+    <div class="segmented" aria-label="Usage view"><button type="button" id="usage-overview" aria-pressed="true">Overview</button><button type="button" id="usage-models" aria-pressed="false">Models</button></div>
+    <p id="usage-context" class="usage-context" role="status" aria-live="polite"></p>
+    <div id="usage-content" aria-busy="false"></div>
+  </section>
+  <section id="view-settings" aria-labelledby="settings-title" hidden>
+    <header class="page-heading"><div><div class="eyebrow">Make yourself at home</div><h2 id="settings-title" tabindex="-1">Settings</h2><p>A quieter workspace, your way.</p></div></header>
+    <div class="settings-panel">
+      <h3>Appearance &amp; updates</h3>
+      <div class="setting-row"><div><label for="theme">Appearance</label><p class="hint">Follow your device, or set the mood.</p></div><select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+      <div class="setting-row"><div><label for="watch">Live updates</label><p class="hint" id="watch-status">Every 20 seconds · auto-switch runs independently</p></div><input id="watch" type="checkbox" checked></div>
+      <p id="settings-lifecycle">Closing the app stops its automation. Pausing live updates only pauses this view. Use Stop in an account's auto-switch controls to stop automation.</p>
+      <p class="hint">Usage history refreshes when you open Usage or choose Refresh activity, not on every live update. Profile readiness is checked while Profiles is visible.</p>
+    </div>
+    <div class="settings-panel"><h3>Here to help</h3><p>Save existing provider logins, switch deliberately, and keep automatic selection under your control.</p><button type="button" id="help-toggle" aria-controls="desktop-guide" aria-expanded="false" hidden>Account setup &amp; help</button><p>Claude Code accounts and Claude Desktop profiles are separate. Paid-credit accounts stay manual-only; auto-switch never chooses them.</p></div>
+    <div id="settings-guide-slot"></div>
+  </section>
   <div id="toast" role="status" aria-live="polite"></div>
+</main>
 </div>
 <dialog id="action-dialog" aria-labelledby="dialog-title" aria-describedby="dialog-description">
   <form id="dialog-form">
@@ -270,6 +110,14 @@ PAGE_HTML = r"""<!doctype html>
     <p id="dialog-feedback" role="alert" hidden></p>
     <div class="actions dialog-actions"><button type="button" id="dialog-cancel">Cancel</button><button type="submit" class="primary" id="dialog-submit" data-action>Confirm</button></div>
   </form>
+</dialog>
+<dialog id="codex-dialog" aria-labelledby="codex-dialog-title" aria-describedby="codex-dialog-description">
+  <div class="eyebrow">A clean handoff</div><h2 id="codex-dialog-title">Switch Codex account</h2>
+  <p id="codex-dialog-description"></p>
+  <div class="switch-steps" aria-hidden="true"><span id="codex-step-quit">01 · Quit</span><span id="codex-step-switch">02 · Switch</span><span id="codex-step-open">03 · Reopen</span></div>
+  <div id="codex-dialog-status" class="switch-status" role="status" aria-live="polite"></div>
+  <p>We never stop terminal sessions. A running process's signed-in identity isn't verified here.</p>
+  <div class="actions dialog-actions"><button type="button" id="codex-cancel">Cancel</button><button type="button" id="codex-check">Check again</button><button type="button" id="codex-continue" class="primary" disabled>Continue &amp; switch</button><button type="button" id="codex-assist" class="primary" hidden>Quit, switch &amp; reopen</button></div>
 </dialog>
 <script>
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
@@ -283,10 +131,12 @@ const el = (tag, cls, text) => {
 const providers = {claude: "Claude Code", codex: "Codex"};
 const providerUI = {};
 const helpUI = {};
-const setupLinks = {claude: "https://code.claude.com/docs/en/setup", codex: "https://developers.openai.com/codex/cli"};
+const setupLinks = {claude: "https://code.claude.com/docs/en/setup", codex: "https://developers.openai.com/codex/app"};
 let state = {}, busy = false, requestVersion = 0, loadingVersion = 0, toastTimer;
-let dialogAction = null, dialogOpener = null;
+let dialogAction = null, dialogOpener = null, dialogKind = null;
 let helpRequested = false, helpDismissed = false;
+let activeView = "accounts", preferenceVersion = 0, preferences = {theme: "system", profileNoticeVersion: 0};
+let profileConsentSaved = false;
 
 function isDesktop() {
   return !!state.desktop;
@@ -302,20 +152,20 @@ function setupHelp(id) {
   const ui = helpUI[id] = {};
   const host = el("article", "guide-provider");
   host.id = id + "-setup";
-  const title = el("h3", null, providers[id] + " CLI");
+  const title = el("h3", null, providers[id] + (id === "claude" ? " CLI" : " Desktop or CLI"));
   title.id = id + "-setup-title";
   host.setAttribute("aria-labelledby", title.id);
   ui.installed = el("span", "pill");
   ui.login = el("p");
   ui.next = el("p", "hint");
   ui.add = actionButton("Add existing login", () => act("/api/add", {provider: id}, ui.add, "adding…"));
-  ui.add.title = "Save or refresh this provider's current CLI login. This does not sign in.";
+  ui.add.title = "Save or refresh this provider's current local login. This does not sign in.";
   block(ui.add, true);
   const link = el("a", null, "Official setup guide ↗");
   link.href = setupLinks[id];
   link.target = "_blank";
   link.rel = "noopener noreferrer";
-  link.setAttribute("aria-label", providers[id] + " CLI official setup guide (opens in browser)");
+  link.setAttribute("aria-label", providers[id] + (id === "claude" ? " CLI" : " Desktop") + " official setup guide (opens in browser)");
   const actions = el("div", "actions");
   actions.append(ui.add, link);
   host.append(title, ui.installed, ui.login, ui.next, actions);
@@ -327,17 +177,17 @@ function renderHelp() {
   const managed = Object.keys(providers).some((id) => (state[id]?.accounts || []).length);
   const guide = $("desktop-guide");
   $("help-toggle").hidden = !desktop;
-  guide.hidden = !desktop || !(helpRequested || (!managed && !helpDismissed));
+  guide.hidden = !desktop || !(helpRequested || (activeView === "accounts" && !managed && !helpDismissed));
   $("help-toggle").setAttribute("aria-expanded", String(!guide.hidden));
   if (guide.hidden && guide.contains(document.activeElement)) $("help-toggle").focus();
-  $("app-title").textContent = desktop ? "Agent Switch" : "agent-switch";
-  document.title = desktop ? "Agent Switch" : "agent-switch";
+  $("app-title").textContent = "Agent Switch";
+  document.title = "Agent Switch";
   if (!desktop) return;
   $("guide-boundary").textContent = state.claudeDesktop
-    ? "The Claude Code and Codex account controls manage CLI credentials only. Claude Desktop, including its Code tab, has a separate sign-in; the experimental profile launcher below opens separate app profiles without transferring CLI credentials. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies."
-    : "The Claude Code and Codex account controls manage CLI credentials only. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.";
+    ? "The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in; the experimental profile launcher in Accounts opens separate app profiles without transferring CLI credentials. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies."
+    : "The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.";
   $("guide-label").textContent = managed ? "Help" : "Getting started";
-  $("guide-title").textContent = managed ? "Account switching, step by step" : "Start with an existing CLI login";
+  $("guide-title").textContent = managed ? "Account switching, step by step" : "Start with an existing login";
   const platform = {darwin: "macOS", win32: "Windows", linux: "Linux"}[state.desktop.platform] || "Desktop";
   $("desktop-meta").textContent = `Agent Switch ${state.desktop.version || ""} · ${platform}`;
   for (const id of Object.keys(providers)) {
@@ -346,15 +196,17 @@ function renderHelp() {
     const live = data.liveLogin;
     const count = (data.accounts || []).length;
     ui.installed.textContent = installed === true ? "CLI detected" : installed === false ? "CLI not detected" : "CLI detection unavailable";
+    const source = id === "codex" ? "file-backed" : "CLI";
     ui.login.textContent = live
-      ? `Signed in as ${live.email || "an existing CLI account"}${live.managed ? " · already managed" : " · not managed yet"}.`
-      : count ? `${count} managed ${count === 1 ? "account" : "accounts"}. No current CLI login detected.` : data.available ? "No CLI login detected yet." : "Current CLI login could not be checked.";
+      ? `Signed in as ${live.email || "an existing account"}${live.managed ? " · already managed" : " · not managed yet"}.`
+      : count ? `${count} managed ${count === 1 ? "account" : "accounts"}. No current ${source} login detected.` : data.available ? `No ${source} login detected yet.` : `Current ${source} login could not be checked.`;
     ui.next.textContent = !data.available
       ? "Account access is unavailable. Check the provider's status below, then try Check again."
       : live
         ? live.managed ? "This login is saved. Add existing login can refresh its saved credentials." : "Add existing login saves this account without signing you in again."
-        : "Sign in through this provider's CLI, then choose Check again.";
-    if (installed === false) ui.next.textContent += " If the CLI isn't installed, use the official setup guide. If you just installed it, reopen this app if detection hasn't updated.";
+        : id === "codex" ? "Sign in through Codex Desktop or CLI using a file-backed login, then choose Check again." : "Sign in through this provider's CLI, then choose Check again.";
+    if (id === "codex") ui.next.textContent += " A file-backed Desktop login works without the Codex CLI. Use the official setup guide if needed.";
+    else if (installed === false) ui.next.textContent += " If the CLI isn't installed, use the official setup guide. If you just installed it, reopen this app if detection hasn't updated.";
     block(ui.add, !live || !supports(data, "add"));
   }
 }
@@ -377,7 +229,11 @@ function safeMessage(message, secret) {
 function toast(message, ember, persistent = false) {
   const n = $("toast");
   clearTimeout(toastTimer);
-  n.textContent = safeMessage(message);
+  const dismiss = el("button", "dismiss-toast");
+  dismiss.type = "button";
+  dismiss.setAttribute("aria-label", "Dismiss notification");
+  dismiss.onclick = () => { n.className = ""; };
+  n.replaceChildren(el("span", null, safeMessage(message)), dismiss);
   n.className = "show" + (ember ? " ember" : "");
   if (!ember && !persistent) toastTimer = setTimeout(() => { n.className = ""; }, 5000);
 }
@@ -390,22 +246,18 @@ function duration(seconds) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
-// Headroom on the account's WORST window: that is what limits it.
 function headroom(a) {
-  const ws = (a.windows || []).filter((w) => typeof w.usedPercent === "number");
+  const ws = (a.windows || []).filter((w) => typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent));
   if (ws.length) return Math.max(0, Math.min(...ws.map((w) => 100 - w.usedPercent)));
-  return (typeof a.percent === "number") ? Math.max(0, 100 - a.percent) : null;
+  return (typeof a.percent === "number" && Number.isFinite(a.percent)) ? Math.max(0, Math.min(100, 100 - a.percent)) : null;
 }
-function soonestReset(a) {
-  const ws = (a.windows || []).filter((w) => w.resetAfterSeconds > 0);
-  return ws.length ? Math.min(...ws.map((w) => w.resetAfterSeconds)) : null;
-}
-
-// -- KPI tile: one per provider, its active account --------------------------
 function tile(name, data) {
   const t = el("div", "tile");
   t.appendChild(el("div", "label", name + " · active"));
   const active = (data.accounts || []).find((a) => a.active);
+  const identity = el("div", "identity", active?.alias || active?.email || "No managed login");
+  identity.title = active?.email || identity.textContent;
+  t.appendChild(identity);
   const v = el("div", "value");
   if (!data.available) { v.textContent = "—"; t.appendChild(v); t.appendChild(el("div", "sub", data.error || "unavailable")); return t; }
   if (!active) { v.textContent = "—"; t.appendChild(v); t.appendChild(el("div", "sub", "no active account")); return t; }
@@ -424,47 +276,46 @@ function tile(name, data) {
     v.textContent = left + "%"; v.appendChild(el("small", null, "left"));
     if (left <= 0) v.classList.add("ember");
     t.appendChild(v);
-    const r = duration(soonestReset(active));
-    t.appendChild(el("div", "sub", (active.email || "") + (r ? " · resets " + r : "")));
+    const limiting = (active.windows || []).filter((w) => typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent)).sort((a, b) => b.usedPercent - a.usedPercent)[0];
+    const r = duration(limiting?.resetAfterSeconds);
+    t.appendChild(el("div", "sub", (active.email || "") + (r ? ` · ${limiting.label} limit resets in ${r}` : "")));
   }
   return t;
 }
 
-// -- meter: one window ---------------------------------------------------------
 function meter(w) {
-  const left = Math.max(0, 100 - (w.usedPercent ?? 0));
-  const m = el("div", "meter");
+  const left = typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent) ? Math.max(0, Math.min(100, 100 - w.usedPercent)) : null;
+  const m = el("div", "meter" + (left === null ? " unknown" : ""));
   m.appendChild(el("span", "label", `${w.label} window`));
-  const num = el("span", "num" + (left <= 0 ? " out" : left <= 20 ? " low" : ""));
-  num.textContent = `${left}% left`;
+  const num = el("span", "num" + (left === null ? "" : left <= 0 ? " out" : left <= 20 ? " low" : ""));
+  num.textContent = left === null ? "Not reported" : `${left}% left`;
   const r = duration(w.resetAfterSeconds);
   if (r) num.appendChild(el("span", null, ` · resets ${r}`));
+  m.title = `${w.label} window: ${left === null ? "not reported" : left + "% left"}${r ? " · resets in " + r : ""}`;
+  m.setAttribute("aria-label", m.title);
   m.appendChild(num);
   const track = el("div", "track");
   const fill = el("div", "fill" + (left <= 0 ? " out" : ""));
-  fill.style.width = left + "%";
+  fill.style.width = (left ?? 0) + "%";
   track.appendChild(fill);
   m.appendChild(track);
   return m;
 }
 
-// -- account card --------------------------------------------------------------
 function card(provider, a, data) {
-  const c = el("div", "card");
+  const c = el("article", "card" + (a.active ? " is-active" : ""));
   const top = el("div", "top");
-  top.appendChild(el("span", "slot", a.number));
-  top.appendChild(el("span", "name", a.email || ("account " + a.number)));
-  if (a.alias) top.appendChild(el("span", "pill soft", a.alias));
-  if (a.plan) top.appendChild(el("span", "pill", a.plan));
-  if (a.org && a.org !== "personal") top.appendChild(el("span", "pill", a.org));
-  if (a.disabled) top.appendChild(el("span", "pill", "disabled"));
-  top.appendChild(el("div", "grow"));
-  const b = actionButton(a.active ? "active" : "switch", () => act("/api/switch", {provider, number: a.number}, b, "switching…"));
+  const avatar = el("span", "avatar " + provider, String(a.number).padStart(2, "0"));
+  avatar.setAttribute("aria-hidden", "true");
+  const identity = el("div", "identity-stack"), name = el("span", "name", a.alias || a.email || ("Account " + a.number));
+  name.title = a.email || name.textContent;
+  identity.append(name, el("div", "account-meta", [a.alias ? a.email : null, a.plan, a.org !== "personal" ? a.org : null, "Slot " + a.number].filter(Boolean).join(" · ")));
+  top.append(avatar, identity);
+  const b = actionButton(a.active ? "Current" : "Switch", () => provider === "codex" ? requestCodexSwitch(a, b) : act("/api/switch", {provider, number: a.number}, b, "Switching…"));
   b.dataset.focusKey = provider + ":switch:" + a.number;
-  b.className = a.active ? "ghost" : "";
+  b.className = a.active ? "ghost" : "primary";
   b.setAttribute("aria-label", a.active ? `Account ${a.number} is active` : `Switch to account ${a.number}`);
   block(b, !!a.active || a.switchable === false || !supports(data, "switch"));
-  top.appendChild(b);
   c.appendChild(top);
 
   const ws = a.windows || [];
@@ -495,11 +346,19 @@ function card(provider, a, data) {
   } else if (!ws.length) {
     c.appendChild(el("div", "state", "usage unknown"));
   }
+  const footer = el("div", "account-footer");
+  footer.append(b, el("span", "hint", a.disabled ? "Excluded from auto-switch" : a.onCredits ? "Manual only" : a.active ? "Current saved login" : ""));
+  const menu = el("details", "account-overflow"), summary = el("summary", null, "···");
+  menu.dataset.menu = provider + ":menu:" + a.number;
+  summary.dataset.control = "";
+  summary.dataset.focusKey = menu.dataset.menu;
+  summary.setAttribute("aria-label", `Manage account ${a.number}`);
+  menu.appendChild(summary);
   const actions = el("div", "actions");
-  const disable = actionButton(a.disabled ? "Enable" : "Disable", () => act("/api/disabled", {provider, number: a.number, disabled: !a.disabled}, disable, "saving…"));
+  const disable = actionButton(a.disabled ? "Include in auto-switch" : "Exclude from auto-switch", () => act("/api/disabled", {provider, number: a.number, disabled: !a.disabled}, disable, "saving…"));
   disable.dataset.focusKey = provider + ":disable:" + a.number;
-  disable.setAttribute("aria-label", `${a.disabled ? "Enable" : "Disable"} account ${a.number} for auto-switch`);
-  disable.title = "Disabled accounts are excluded from automatic selection.";
+  disable.setAttribute("aria-label", `${a.disabled ? "Include" : "Exclude"} account ${a.number} ${a.disabled ? "in" : "from"} auto-switch`);
+  disable.title = "Excluded accounts stay available for manual switching.";
   block(disable, !supports(data, "disable"));
   const remove = actionButton("Remove", () => confirmAction({
     title: `Remove ${providers[provider]} account?`,
@@ -512,7 +371,7 @@ function card(provider, a, data) {
   remove.setAttribute("aria-label", `Remove account ${a.number}`);
   block(remove, !supports(data, "remove"));
   actions.append(disable, remove);
-  c.appendChild(actions);
+  menu.appendChild(actions); footer.appendChild(menu); c.appendChild(footer);
   return c;
 }
 
@@ -536,6 +395,7 @@ function actionButton(label, onClick) {
   const button = el("button", null, label);
   button.type = "button";
   button.dataset.action = "";
+  button.dataset.control = "";
   button.onclick = onClick;
   return button;
 }
@@ -553,6 +413,7 @@ function syncBusy() {
     input.disabled = busy || input.dataset.blocked === "true";
   });
   $("dialog-cancel").disabled = busy;
+  for (const view of ["accounts", "usage", "settings"]) $("nav-" + view).disabled = busy;
   $("dialog-form").setAttribute("aria-busy", String(busy));
 }
 
@@ -561,7 +422,7 @@ const desktopProfileUI = {};
 
 function setupDesktopProfiles() {
   const actions = $("claude-desktop-actions");
-  desktopProfileUI.create = actionButton("Create empty profile", () => createDesktopProfile(desktopProfileUI.create));
+  desktopProfileUI.create = actionButton("New profile", () => createDesktopProfile(desktopProfileUI.create));
   desktopProfileUI.default = actionButton("Open usual Claude (default)", () => openDesktopProfile("default", "usual Claude (default)", desktopProfileUI.default));
   desktopProfileUI.refresh = actionButton("Check again", () => refreshUsage(desktopProfileUI.refresh));
   actions.append(desktopProfileUI.create, desktopProfileUI.default, desktopProfileUI.refresh);
@@ -591,6 +452,10 @@ function renderDesktopProfiles(data) {
   desktopProfileUI.default.title = openBlocked ? openReason : "";
   desktopProfileUI.default.setAttribute("aria-describedby", "claude-desktop-status");
   const host = $("claude-desktop-profiles");
+  const signature = JSON.stringify([data.profiles, openBlocked, openReason]);
+  if (desktopProfileUI.signature === signature) return;
+  desktopProfileUI.signature = signature;
+  const focused = host.contains(document.activeElement) ? document.activeElement.dataset.profileId : null;
   host.replaceChildren();
   const profiles = Array.isArray(data.profiles) ? data.profiles : [];
   if (!profiles.length) host.appendChild(el("div", "empty", "No named profiles yet. Creating one makes an empty profile; sign in through Claude after opening it."));
@@ -601,16 +466,19 @@ function renderDesktopProfiles(data) {
     row.appendChild(el("span", "grow"));
     const open = actionButton("Open", () => openDesktopProfile(profile.id, profile.name, open));
     open.setAttribute("aria-label", `Open Claude Desktop profile ${profile.name}`);
+    open.dataset.profileId = profile.id;
     block(open, openBlocked);
     open.title = openBlocked ? openReason : "";
     open.setAttribute("aria-describedby", "claude-desktop-status");
     row.appendChild(open);
     card.appendChild(row);
     host.appendChild(card);
+    if (focused === profile.id && !open.disabled) open.focus({preventScroll: true});
   });
 }
 
 function desktopConsent(host) {
+  if (preferences.profileNoticeVersion >= 1 || profileConsentSaved) return;
   const check = el("label", "check");
   const input = el("input");
   input.type = "checkbox";
@@ -625,7 +493,7 @@ function createDesktopProfile(opener) {
   let name;
   confirmAction({
     title: "Create an empty Claude Desktop profile?", description: desktopProfileWarning + " Creation does not launch Claude or sign you in.",
-    label: "Create empty profile", opener,
+    label: "Create profile", opener, kind: "profile",
     fields: (host) => {
       const field = el("label", "field", "Profile label (up to 64 characters)");
       name = el("input");
@@ -635,10 +503,13 @@ function createDesktopProfile(opener) {
       host.append(field);
       desktopConsent(host);
     },
-    submit: (button) => {
+    submit: async (button) => {
       const label = name.value.trim();
       if (!label || label.length > 64 || !(state.claudeDesktop?.canCreate ?? state.claudeDesktop?.available)) return false;
-      return act("/api/claude-desktop/create", {name: label, confirm: true}, button, "creating…");
+      if (!await saveProfileConsent()) return false;
+      const success = await act("/api/claude-desktop/create", {name: label, confirm: true}, button, "creating…");
+      if (success) toast("Empty profile created; sign in through Claude after choosing Open on the new profile. Nothing has launched.", false, true);
+      return success;
     },
   });
 }
@@ -647,8 +518,10 @@ function openDesktopProfile(profileId, name, opener) {
   if (!state.claudeDesktop?.available || state.claudeDesktop.running !== false) return;
   confirmAction({
     title: `Open ${name}?`, description: desktopProfileWarning + " This only requests a launch; it does not authenticate or switch an account. The Dock normally opens the usual default profile.",
-    label: "Request launch", opener, fields: desktopConsent,
+    label: "Open profile", opener, fields: desktopConsent, kind: "profile",
     submit: async (button) => {
+      if (!state.claudeDesktop?.available || state.claudeDesktop.running !== false) return false;
+      if (!await saveProfileConsent()) return false;
       if (!state.claudeDesktop?.available || state.claudeDesktop.running !== false) return false;
       const result = await act("/api/claude-desktop/open", {profileId, confirm: true}, button, "requesting…");
       dialogOpener = desktopProfileUI.refresh;
@@ -679,8 +552,8 @@ function setupProvider(id) {
     host.appendChild(token);
   }
   const auto = $(id + "-auto");
-  const heading = el("div", "auto-heading");
-  heading.appendChild(el("h3", null, "Auto-switch"));
+  const heading = el("summary", "auto-heading");
+  heading.appendChild(el("span", null, "Auto-switch"));
   ui.status = el("span", "pill", "unavailable");
   heading.appendChild(ui.status);
   auto.appendChild(heading);
@@ -723,6 +596,10 @@ function renderAccounts(id, data, force = false) {
   const host = $(id);
   const focused = host.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
   if (focused && !force) return;
+  const signature = JSON.stringify([data.available, data.error, data.accounts, data.liveLogin, data.capabilities, isDesktop()]);
+  if (!force && providerUI[id].accountSignature === signature) return;
+  providerUI[id].accountSignature = signature;
+  const openMenus = new Set(Array.from(host.querySelectorAll("[data-menu]")).filter((menu) => menu.open).map((menu) => menu.dataset.menu));
   host.replaceChildren();
   const n = (data.accounts || []).length;
   if (!data.available) { host.appendChild(el("div", "empty", data.error || "unavailable")); return; }
@@ -732,7 +609,9 @@ function renderAccounts(id, data, force = false) {
   else if (!n) {
     const e = el("div", "empty");
     if (isDesktop()) {
-      e.textContent = "No accounts saved yet. Sign in through this provider's CLI, then use Add existing login. Open Help for setup instructions.";
+      e.textContent = id === "codex"
+        ? "No accounts saved yet. Sign in through Codex Desktop or CLI with a file-backed login, then use Add existing login. The Codex CLI is not required for a Desktop login. Open Settings for setup help."
+        : "No accounts saved yet. Sign in through this provider's CLI, then use Add existing login. Open Settings for setup help.";
     } else {
       e.textContent = "Nothing managed and nothing signed in. Run ";
       e.appendChild(el("code", null, `agent-switch ${id === "codex" ? "codex " : ""}add`));
@@ -740,7 +619,8 @@ function renderAccounts(id, data, force = false) {
     host.appendChild(e);
   }
   if (focused) {
-    const next = Array.from(host.querySelectorAll("[data-action]")).find((button) => button.dataset.focusKey === focused);
+    host.querySelectorAll("[data-menu]").forEach((menu) => { menu.open = openMenus.has(menu.dataset.menu); });
+    const next = Array.from(host.querySelectorAll("[data-control]")).find((button) => button.dataset.focusKey === focused);
     if (next && !next.disabled) next.focus({preventScroll: true});
   }
 }
@@ -786,15 +666,21 @@ function updateProvider(id, data, force = false) {
 async function load(force = false, silent = false) {
   if (loadingVersion && !force) return false;
   const version = ++requestVersion;
+  const preferenceAtStart = preferenceVersion;
   loadingVersion = version;
   try {
     const {ok, body} = await api("/api/state" + (force ? "?force=1" : ""));
     if (version !== requestVersion) return false;
     if (!ok || body.error) {
+      $("state-error").hidden = false;
+      $("state-error").textContent = safeMessage(body.message || body.error || "Could not load accounts. Your saved logins have not been changed.");
       if (!silent) toast(body.message || body.error || "Could not load state.", true);
       return false;
     }
     state = body;
+    if (preferenceAtStart === preferenceVersion && body.preferences) receivePreferences(body.preferences);
+    $("state-error").hidden = true;
+    $("settings-lifecycle").textContent = automationLifecycle();
     renderHelp();
     $("kpis").replaceChildren(tile("Codex", body.codex || {}), tile("Claude Code", body.claude || {}));
     Object.keys(providers).forEach((id) => updateProvider(id, body[id] || {}, force));
@@ -802,6 +688,10 @@ async function load(force = false, silent = false) {
     $("stamp").textContent = "updated " + new Date().toLocaleTimeString();
     return true;
   } catch {
+    if (version === requestVersion) {
+      $("state-error").hidden = false;
+      $("state-error").textContent = "The local service couldn't be reached. Previously loaded accounts may be out of date. Refresh or reopen Agent Switch.";
+    }
     if (version === requestVersion && !silent) toast(isDesktop() ? "Could not reach the app's local service. Reopen Agent Switch and try again." : "Could not reach agent-switch. Check that the local dashboard server is still open.", true);
     return false;
   } finally {
@@ -840,7 +730,9 @@ async function act(path, payload, button, pending) {
     if (path === "/api/auto" && success && payload.threshold !== undefined) providerUI[payload.provider].dirty = false;
     const refreshed = await load(true, true);
     if (!refreshed) message += isDesktop() ? " State could not be refreshed; try Refresh usage or reopen the app." : " State could not be refreshed; check the local dashboard server.";
-    toast(message, !success || !!body.restartRequired || !refreshed, noSwitch);
+    if (success && body.followUp) message += " " + safeMessage(body.followUp, payload.token);
+    const actionRequired = body.kind === "action-required" && ["codex-running", "codex-status-unknown"].includes(body.code);
+    toast(message, (!success && !actionRequired) || !refreshed, noSwitch || !!body.followUp || !!body.restartRequired || actionRequired);
     if ($("action-dialog").open && !success) {
       $("dialog-feedback").textContent = message;
       $("dialog-feedback").hidden = false;
@@ -865,8 +757,9 @@ async function act(path, payload, button, pending) {
   }
 }
 
-function confirmAction({title, description, label, opener, submit, fields}) {
-  if (busy || $("action-dialog").open) return;
+function confirmAction({title, description, label, opener, submit, fields, kind = "action"}) {
+  if (busy || codexFlow || $("action-dialog").open) return;
+  dialogKind = kind;
   dialogOpener = opener;
   dialogAction = submit;
   $("dialog-title").textContent = title;
@@ -950,6 +843,67 @@ function tokenDialog(opener) {
   });
 }
 
+__USAGE_SCRIPT__
+__SWITCH_SCRIPT__
+
+let preferenceQueue = Promise.resolve();
+function receivePreferences(value) {
+  if (["system", "light", "dark"].includes(value?.theme)) {
+    preferences.theme = value.theme;
+    $("theme").value = value.theme;
+    applyTheme();
+  }
+  if ([0, 1].includes(value?.profileNoticeVersion)) preferences.profileNoticeVersion = profileConsentSaved ? 1 : value.profileNoticeVersion;
+}
+
+async function loadPreferences() {
+  const version = preferenceVersion;
+  try {
+    const {ok, body} = await api("/api/preferences");
+    if (ok && version === preferenceVersion) receivePreferences(body.preferences || body);
+  } catch {}
+}
+
+function savePreferences(patch) {
+  const request = preferenceQueue.then(() => api("/api/preferences", {method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify(patch)}));
+  preferenceQueue = request.catch(() => {});
+  return request;
+}
+
+async function saveProfileConsent() {
+  if (preferences.profileNoticeVersion >= 1 || profileConsentSaved) return true;
+  busy = true; ++preferenceVersion; syncBusy();
+  try {
+    const {ok, body} = await savePreferences({profileNoticeVersion: 1, confirm: true});
+    if (!ok || body.ok === false || body.error) throw new Error("Preference write failed");
+    profileConsentSaved = true; preferences.profileNoticeVersion = 1;
+    return true;
+  } catch {
+    $("dialog-feedback").textContent = "The profile acknowledgement couldn't be saved. Nothing was created or opened. Try again.";
+    $("dialog-feedback").hidden = false;
+    return false;
+  } finally { busy = false; syncBusy(); }
+}
+
+function navigate(view, updateHash = true) {
+  view = ["accounts", "usage", "settings"].includes(view) ? view : "accounts";
+  if (busy) { if (location.hash !== "#" + activeView) location.hash = activeView; return; }
+  if (codexFlow) cancelCodexSwitch();
+  if ($("action-dialog").open) $("action-dialog").close();
+  const changed = activeView !== view;
+  if (changed && activeView === "usage") { ++analyticsVersion; analyticsLoading = false; }
+  activeView = view;
+  for (const id of ["accounts", "usage", "settings"]) {
+    $("view-" + id).hidden = view !== id;
+    $("nav-" + id).setAttribute("aria-current", view === id ? "page" : "false");
+  }
+  (view === "settings" ? $("settings-guide-slot") : $("guide-slot")).appendChild($("desktop-guide"));
+  renderHelp();
+  if (updateHash && location.hash !== "#" + view) location.hash = view;
+  if (changed) $(view + "-title").focus({preventScroll: true});
+  if (view === "usage" && (changed || !analyticsBody)) return loadAnalytics();
+}
+
 $("dialog-form").onsubmit = async (event) => {
   event.preventDefault();
   if (busy || !$("dialog-form").reportValidity() || !dialogAction) return;
@@ -959,7 +913,7 @@ $("dialog-cancel").onclick = () => { if (!busy) $("action-dialog").close(); };
 $("action-dialog").addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
 $("action-dialog").addEventListener("close", () => {
   $("dialog-fields").replaceChildren();
-  dialogAction = null;
+  dialogAction = null; dialogKind = null;
   if (dialogOpener && dialogOpener.isConnected) dialogOpener.focus();
   else $("theme").focus();
 });
@@ -970,7 +924,19 @@ function applyTheme() {
   document.documentElement.dataset.theme = theme;
   try { localStorage.setItem("agent-switch-theme", theme); } catch {}
 }
-$("theme").onchange = applyTheme;
+$("theme").onchange = async () => {
+  const version = ++preferenceVersion;
+  applyTheme();
+  const theme = document.documentElement.dataset.theme;
+  try {
+    const {ok, body} = await savePreferences({theme});
+    if (version !== preferenceVersion) return;
+    if (!ok || body.ok === false || body.error) throw new Error("Preference write failed");
+    preferences.theme = theme;
+  } catch {
+    if (version === preferenceVersion) toast("Appearance changed for this window, but couldn't be saved. Try again in Settings.", true);
+  }
+};
 applyTheme();
 $("watch").onchange = () => {
   $("watch-status").textContent = $("watch").checked ? "Every 20 seconds · auto-switch runs independently" : "Updates paused · auto-switch is not stopped";
@@ -991,9 +957,16 @@ $("guide-check").onclick = () => refreshUsage($("guide-check"));
 Object.keys(providers).forEach(setupHelp);
 Object.keys(providers).forEach(setupProvider);
 setupDesktopProfiles();
+for (const view of ["accounts", "usage", "settings"]) $("nav-" + view).onclick = () => navigate(view);
+window.addEventListener("hashchange", () => navigate(location.hash.slice(1), false));
+loadPreferences();
 load();
+navigate((location.hash || "").slice(1), false);
 setInterval(() => { if ($("watch").checked && !busy && !$("action-dialog").open) load(); }, 20000);
+setInterval(() => {
+  if (!busy && (dialogKind === "profile" || (activeView === "accounts" && !$("claude-desktop-panel").hidden && ($("watch").checked || state.claudeDesktop?.running !== false))) && (!$("action-dialog").open || dialogKind === "profile")) load(false, true);
+}, 5000);
 </script>
 </body>
 </html>
-"""
+""".replace("__PAGE_STYLE__", PAGE_STYLE).replace("__USAGE_SCRIPT__", USAGE_SCRIPT).replace("__SWITCH_SCRIPT__", SWITCH_SCRIPT)
