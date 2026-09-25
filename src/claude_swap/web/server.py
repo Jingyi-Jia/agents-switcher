@@ -52,6 +52,7 @@ DEFAULT_PORT = 8765
 URL_FILENAME = "web-url"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 MAX_BODY_BYTES = 32768
+REJECTION_DRAIN_TIMEOUT_S = 0.25
 
 
 def _quota_window(label, percent, window_seconds, reset_at, reset_after, observed_at) -> dict:
@@ -432,7 +433,7 @@ def _make_handler(state: DashboardState, token: str):
         def _json(self, status, payload: dict) -> None:
             self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
 
-        def _body(self) -> dict:
+        def _content_length(self) -> int:
             lengths = self.headers.get_all("Content-Length", [])
             if (
                 len(lengths) != 1 or not lengths[0].isascii()
@@ -443,9 +444,39 @@ def _make_handler(state: DashboardState, token: str):
             length = int(lengths[0])
             if not 0 < length <= MAX_BODY_BYTES:
                 raise ProviderActionError(f"JSON body must contain 1 to {MAX_BODY_BYTES} bytes")
+            return length
+
+        def _reject(self, status, payload: dict) -> None:
+            self.close_connection = True
+            self._json(status, payload)
+            self.wfile.flush()
+            if self._body_started:
+                return
+            try:
+                remaining = self._content_length()
+            except ProviderActionError:
+                return
+            self._body_started = True
+            deadline = time.monotonic() + REJECTION_DRAIN_TIMEOUT_S
+            try:
+                while remaining:
+                    timeout = deadline - time.monotonic()
+                    if timeout <= 0:
+                        break
+                    self.connection.settimeout(timeout)
+                    chunk = self.rfile.read1(remaining)
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except OSError:
+                pass
+
+        def _body(self) -> dict:
+            length = self._content_length()
             if self.headers.get_content_type() != "application/json":
                 raise ProviderActionError("Content-Type must be application/json")
             self.connection.settimeout(10)
+            self._body_started = True
             raw = self.rfile.read(length)
             if len(raw) != length:
                 raise ProviderActionError("Incomplete JSON body")
@@ -510,9 +541,10 @@ def _make_handler(state: DashboardState, token: str):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib hook
+            self._body_started = False
             parsed = urlparse(self.path)
             if not self._authorized({}):
-                self._json(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
+                self._reject(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
                 return
             routes = {
                 "/api/preferences": (state.preferences.update, set(), {"theme", "profileNoticeVersion", "confirm"}),
@@ -531,7 +563,7 @@ def _make_handler(state: DashboardState, token: str):
                 "/api/auto": (state.configure_auto, {"provider", "mode"}, {"threshold", "confirm"}),
             }
             if parsed.path not in routes:
-                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                self._reject(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
             try:
                 payload = self._body()
@@ -545,7 +577,7 @@ def _make_handler(state: DashboardState, token: str):
                 result = {"ok": False, "message": safe_error(e)}
                 if isinstance(e, ActionRequired):
                     result.update({"kind": "action-required", "code": e.code})
-                self._json(HTTPStatus.BAD_REQUEST, result)
+                self._reject(HTTPStatus.BAD_REQUEST, result)
                 return
             self._json(HTTPStatus.OK, result)
 
