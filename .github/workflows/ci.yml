@@ -16,9 +16,13 @@ jobs:
       matrix:
         include:
           - os: windows-latest
+            mode: grouped
+          - os: windows-latest
             mode: traced
+          - os: windows-latest
+            mode: serial-native
           - os: ubuntu-latest
-            mode: traced
+            mode: grouped
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +31,14 @@ jobs:
         with:
           python-version: '3.12'
       - run: uv sync --locked
+      - name: Run the original checks with grouped Node fixtures
+        if: matrix.mode == 'grouped'
+        timeout-minutes: 5
+        run: uv run pytest -o faulthandler_timeout=60
+      - name: Run the native file without competing test workers
+        if: matrix.mode == 'serial-native'
+        timeout-minutes: 5
+        run: uv run pytest -n 0 tests/test_codex_desktop.py -o faulthandler_timeout=60
       - name: Trace the original native calls during the full suite
         if: matrix.mode == 'traced'
         timeout-minutes: 5

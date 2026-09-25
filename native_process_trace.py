@@ -14,7 +14,7 @@ def pytest_runtest_call(item):
         original_run = item.module._NATIVE_RUN
         script = cd._WINDOWS_SCRIPT.replace(
             "$ErrorActionPreference = 'Stop'",
-            "$watch = [System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('TRACE startup ' + $watch.Elapsed.TotalSeconds); $ErrorActionPreference = 'Stop'",
+            "$watch = [System.Diagnostics.Stopwatch]::StartNew(); [Console]::Error.WriteLine('TRACE host-start-ms ' + ([DateTimeOffset]::UtcNow).ToUnixTimeMilliseconds()); [Console]::Error.WriteLine('TRACE startup ' + $watch.Elapsed.TotalSeconds); $ErrorActionPreference = 'Stop'",
         ).replace(
             '    Import-Module "$PSHOME\\Modules\\CimCmdlets',
             "    [Console]::Error.WriteLine('TRACE utility-loaded ' + $watch.Elapsed.TotalSeconds)\n    Import-Module \"$PSHOME\\Modules\\CimCmdlets",
@@ -33,10 +33,14 @@ def pytest_runtest_call(item):
         ).replace(
             '    [pscustomobject]@{ Complete',
             "    [Console]::Error.WriteLine('TRACE processes-loaded ' + $watch.Elapsed.TotalSeconds)\n    [pscustomobject]@{ Complete",
+        ).replace(
+            '        ConvertTo-Json -Depth 4 -Compress',
+            "        ConvertTo-Json -Depth 4 -Compress\n    [Console]::Error.WriteLine('TRACE serialization-complete ' + $watch.Elapsed.TotalSeconds)\n    [Console]::Error.WriteLine('TRACE host-end-ms ' + ([DateTimeOffset]::UtcNow).ToUnixTimeMilliseconds())",
         )
 
         def traced_run(*args, **kwargs):
             start = time.monotonic()
+            print("TRACE python-start-ms", time.time_ns() // 1_000_000, flush=True)
             kwargs["timeout"] = 45
             print("TRACE diagnostic-only deadline 45s; production remains 10s", flush=True)
             try:
@@ -52,6 +56,7 @@ def pytest_runtest_call(item):
                 raise
             else:
                 print("TRACE python-complete", round(time.monotonic() - start, 3), flush=True)
+                print("TRACE python-end-ms", time.time_ns() // 1_000_000, flush=True)
                 for line in result.stderr.splitlines():
                     if line.startswith("TRACE "):
                         print(line, flush=True)

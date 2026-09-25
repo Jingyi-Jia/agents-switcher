@@ -870,7 +870,7 @@ def _deterministic_colour(monkeypatch):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items):
-    """Pin every real-Keychain test to ONE xdist worker.
+    """Serialize tests sharing native Keychain or Node process state.
 
     ``no_keychain_fake`` means "this test drives the actual ``security`` CLI
     against a real keychain" -- a process-wide shared resource. Under
@@ -891,7 +891,12 @@ def pytest_collection_modifyitems(items):
     grouping at all -- a direct ``@pytest.mark.xdist_group`` on the same tests
     landed them all on gw0. Applying the marker late is the same as not
     applying it.
+
+    Node-backed UI tests share a worker with the native process probes so
+    their short-lived subprocesses cannot exit during a probe's metadata read.
     """
     for item in items:
         if item.get_closest_marker("no_keychain_fake"):
             item.add_marker(pytest.mark.xdist_group("real-keychain"))
+        if "node" in item.fixturenames:
+            item.add_marker(pytest.mark.xdist_group("native-codex-processes"))
