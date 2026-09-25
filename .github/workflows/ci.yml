@@ -1,11 +1,10 @@
-name: CI
+name: Diagnostic only - HTTP rejection transport
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  # Lets CI be run on demand for any ref, e.g. a branch that has no PR yet.
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -22,6 +21,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Node for dashboard runtime tests
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+
       - name: Install dependencies
         run: uv sync --locked
 
@@ -34,28 +39,87 @@ jobs:
         run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
 
   test-windows:
+    name: Windows (${{ matrix.handler }}, replica ${{ matrix.replica }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - handler: baseline
+            replica: 1
+          - handler: patched
+            replica: 1
+          - handler: patched
+            replica: 2
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
 
+      - name: Install Node for dashboard runtime tests
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Restore the unpatched handler for the diagnostic control
+        if: matrix.handler == 'baseline'
+        shell: bash
+        run: git show 07a433baa6f8a9546566814b219928ddc1bd0620:src/claude_swap/web/server.py > src/claude_swap/web/server.py
+
+      - name: Observe the original profile POST assertions on the baseline
+        if: matrix.handler == 'baseline'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: uv run pytest -n 0 tests/test_claude_desktop.py::test_http_actions_require_header_token_and_exact_fields -vv --junitxml=baseline-profile.xml
+
+      - name: Reproduce the transport gap on the unpatched handler
+        if: matrix.handler == 'baseline'
+        id: baseline-transport
+        continue-on-error: true
+        timeout-minutes: 15
+        run: uv run pytest -n 0 tests/test_web_rejection.py -k "early_rejection_flushes_before_discarding_unparsed_body or rejection_reaches_client_before_delayed_body_is_drained" -vv --junitxml=baseline-transport.xml
+
+      - name: Require the diagnostic control to reproduce all five failures
+        if: matrix.handler == 'baseline'
+        env:
+          BASELINE_OUTCOME: ${{ steps.baseline-transport.outcome }}
+        run: |
+          uv run python -c "import os, xml.etree.ElementTree as ET; suite = ET.parse('baseline-transport.xml').getroot().find('testsuite'); assert os.environ['BASELINE_OUTCOME'] == 'failure'; assert (suite.get('tests'), suite.get('failures'), suite.get('errors')) == ('5', '5', '0'); print('Confirmed five baseline transport failures without collection errors')"
+
+      - name: Verify the fixed transport and unchanged profile POST assertions
+        if: matrix.handler == 'patched'
+        timeout-minutes: 15
+        run: uv run pytest -n 0 tests/test_web_rejection.py tests/test_claude_desktop.py::test_http_actions_require_header_token_and_exact_fields -vv --junitxml=patched-rejection.xml
+
       - name: Run tests
+        if: matrix.handler == 'patched'
         # Includes the TUI tests: the Textual TUI (unlike the old curses one)
         # runs on stock Windows, and this job is the proof.
         timeout-minutes: 15
-        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600
+        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600 --junitxml=main-tests.xml
 
       - name: Run native process probes without competing test workers
         timeout-minutes: 15
-        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
+        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600 --junitxml=native-tests.xml
+
+      - name: Upload diagnostic-only rejection results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: http-rejection-${{ matrix.handler }}-${{ matrix.replica }}
+          path: '*.xml'
+          if-no-files-found: warn
+          retention-days: 7
 
   # The id stays `macos-keychain` although the job now runs everything: it is
   # the name branch protection matches on, and renaming it silently drops the
@@ -70,6 +134,12 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           python-version: '3.12'
+
+      - name: Install Node for dashboard runtime tests
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
 
       - name: Install dependencies
         run: uv sync --locked
