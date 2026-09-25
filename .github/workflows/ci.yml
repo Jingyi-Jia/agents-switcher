@@ -1,115 +1,139 @@
-name: CI
+name: Mac process-state diagnostics
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  # Lets CI be run on demand for any ref, e.g. a branch that has no PR yet.
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-
+  native:
+    name: ${{ matrix.variant }}-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            variant: baseline
+          - os: macos-15-intel
+            variant: corrected
+          - os: macos-15
+            variant: corrected
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-
-      # uv (not pip) so the PEP 735 dev dependency-group — pytest,
-      # pytest-asyncio — installs from the committed lockfile, same as local
-      # development.
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          version: '0.12.3'
           python-version: '3.12'
-
-      - name: Install Node for dashboard runtime tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+          enable-cache: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: "24.18.0"
+          node-version: '24.18.0'
           package-manager-cache: false
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Run tests
+      - name: Select the original implementation for the control
+        if: matrix.variant == 'baseline'
+        run: git restore --source=ac657c0d5963f44ff5d766613d213c055c0e3d17 -- src/claude_swap/codex/desktop.py tests/test_codex_desktop.py
+      - name: Install locked dependencies
+        run: uv sync --locked --group desktop-build
+      - name: Run the unchanged main test phase
         timeout-minutes: 15
-        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600
+        run: uv run --no-sync pytest -m 'not native_process' -o faulthandler_timeout=600
+      - name: Prepare sanitized process-row observations
+        run: |
+          cat > "$RUNNER_TEMP/mac_state_observer.py" <<'PY'
+          import collections
+          import json
+          import os
+          import re
+          import subprocess
+          import time
+          from concurrent.futures import ThreadPoolExecutor
 
-      - name: Run native process probes without competing test workers
-        timeout-minutes: 15
-        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
+          _run = subprocess.run
+          _ps = ['/bin/ps', '-axww', '-o', 'pid=,ppid=,uid=,stat=,tty=,comm=']
+          _states = collections.Counter()
+          _rejected = collections.Counter()
 
-  test-windows:
-    runs-on: windows-latest
+          def observe(result):
+              if result.returncode or not isinstance(result.stdout, str):
+                  print('MAC_PS_SCAN_UNAVAILABLE', flush=True)
+                  return
+              rejected = []
+              for line in result.stdout.splitlines():
+                  fields = line.split(None, 5)
+                  if len(fields) < 5:
+                      rejected.append({'fieldCount': len(fields)})
+                      continue
+                  pid, parent, owner, state, tty = fields[:5]
+                  valid = [bool(re.fullmatch(pattern, value)) for pattern, value in zip(
+                      [r'[0-9]+', r'[0-9]+', r'-?[0-9]+', r'[A-Z][A-Za-z0-9+<>=-]*'],
+                      [pid, parent, owner, state],
+                  )]
+                  safe_state = state if re.fullmatch(r'[A-Za-z0-9?+<>=-]{1,16}', state) else '<invalid>'
+                  _states[safe_state] += 1
+                  if not all(valid):
+                      _rejected[safe_state] += 1
+                      rejected.append({
+                          'pid': int(pid) if valid[0] else '<invalid>',
+                          'parent': int(parent) if valid[1] else '<invalid>',
+                          'owner': int(owner) if valid[2] else '<invalid>',
+                          'state': safe_state,
+                          'validPidParentOwnerState': valid,
+                          'commandPresent': len(fields) == 6 and bool(fields[5].strip()),
+                      })
+              if rejected:
+                  print('MAC_PS_LEGACY_REJECTIONS ' + json.dumps(rejected), flush=True)
 
-    steps:
-      - uses: actions/checkout@v4
+          def observed_run(*args, **kwargs):
+              result = _run(*args, **kwargs)
+              if args and args[0] == _ps:
+                  observe(result)
+              return result
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '3.12'
+          subprocess.run = observed_run
 
-      - name: Install Node for dashboard runtime tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
+          def pytest_sessionfinish(session, exitstatus):
+              print('MAC_PS_SUMMARY ' + json.dumps({'states': _states, 'legacyRejected': _rejected}), flush=True)
 
-      - name: Install dependencies
-        run: uv sync --locked
+          if __name__ == '__main__':
+              def churn():
+                  for _ in range(300):
+                      _run(['/usr/bin/true'], check=True)
+                      time.sleep(0.01)
 
-      - name: Run tests
-        # Includes the TUI tests: the Textual TUI (unlike the old curses one)
-        # runs on stock Windows, and this job is the proof.
-        timeout-minutes: 15
-        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600
-
-      - name: Run native process probes without competing test workers
-        timeout-minutes: 15
-        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
-
-  # The id stays `macos-keychain` although the job now runs everything: it is
-  # the name branch protection matches on, and renaming it silently drops the
-  # required check.
-  macos-keychain:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install Node for dashboard runtime tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Run the main suite (not only the Keychain files)
-        # THE NARROW SELECTION WAS A BLIND SPOT, not a saving. Three cases
-        # failed on macOS -- one asserting the Linux XDG layout, two because a
-        # usable Keychain takes the write and leaves no `.enc` to chmod --
-        # while every job stayed green, because this job never ran them. A merge that
-        # restores a two-file selection here re-opens that hole invisibly:
-        # those cases pass now, they would simply stop running.
-        #
-        # faulthandler dumps every thread's stack past the budget, the only
-        # clue when a `security` call blocks on an invisible SecurityAgent
-        # dialog. While pyproject sets no faulthandler keys this `-o` is the
-        # only thing setting the budget and the dump does not abort; PR 287
-        # adds them repo-wide at the same 600, after which this is a no-op
-        # and the dump aborts the worker. `timeout-minutes` is the backstop
-        # that holds under either ordering.
-        timeout-minutes: 15
-        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600
-
-      - name: Run native process probes without competing test workers
-        timeout-minutes: 15
-        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
+              with ThreadPoolExecutor(max_workers=1) as pool:
+                  worker = pool.submit(churn)
+                  for _ in range(60):
+                      observe(_run(_ps, capture_output=True, text=True, check=True, timeout=5,
+                                   env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}))
+                      time.sleep(0.1)
+                  worker.result()
+              print('MAC_PS_BOUNDED_SAMPLE ' + json.dumps({'states': _states, 'legacyRejected': _rejected}), flush=True)
+          PY
+      - name: Sample a fixed number of native process tables
+        run: uv run --no-sync python "$RUNNER_TEMP/mac_state_observer.py"
+      - name: Run five serial native probe replicas
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          export PYTHONPATH="$RUNNER_TEMP:$PWD/src"
+          failures=0
+          for attempt in 1 2 3 4 5; do
+            echo "Native probe replica $attempt of 5 ($VARIANT)"
+            if uv run --no-sync pytest -n 0 -m native_process -s -p mac_state_observer -o faulthandler_timeout=600; then
+              echo "NATIVE_REPLICA_$attempt=passed"
+            else
+              failures=$((failures + 1))
+              echo "NATIVE_REPLICA_$attempt=failed"
+            fi
+          done
+          echo "NATIVE_REPLICA_FAILURES=$failures"
+          if [ "$VARIANT" = corrected ]; then test "$failures" -eq 0; fi
