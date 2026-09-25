@@ -525,3 +525,15 @@ state.claudeDesktop.running = true;
 intervals.find(i => i.ms === 5000).callback(); await settle();
 assert.equal(calls.filter(c => c.path.startsWith('/api/state')).length, before + 1);
 """)
+
+
+def test_persistent_notifications_can_be_dismissed_without_an_action(node):
+    run_page(node, r"""
+toast('Check the selected account in Codex.', false, true);
+const close = nodes('toast').find(n => n.attributes['aria-label'] === 'Dismiss notification');
+assert(close);
+assert.match($('toast').className, /show/);
+close.click();
+assert.equal($('toast').className, '');
+assert.equal(posts().length, 0);
+""")

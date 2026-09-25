@@ -229,7 +229,11 @@ function safeMessage(message, secret) {
 function toast(message, ember, persistent = false) {
   const n = $("toast");
   clearTimeout(toastTimer);
-  n.textContent = safeMessage(message);
+  const dismiss = el("button", "dismiss-toast");
+  dismiss.type = "button";
+  dismiss.setAttribute("aria-label", "Dismiss notification");
+  dismiss.onclick = () => { n.className = ""; };
+  n.replaceChildren(el("span", null, safeMessage(message)), dismiss);
   n.className = "show" + (ember ? " ember" : "");
   if (!ember && !persistent) toastTimer = setTimeout(() => { n.className = ""; }, 5000);
 }

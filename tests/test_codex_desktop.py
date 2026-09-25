@@ -530,6 +530,66 @@ def test_linux_unreadable_executable_requires_a_fresh_esrch_result(scan, monkeyp
     exists.assert_called_once_with(100, 0)
 
 
+def test_linux_protected_non_target_requires_matching_command_identity(scan, monkeypatch):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="linux"))
+    scan.add(100, "/usr/bin/protected-agent")
+    monkeypatch.setattr(cd, "_read_linux_executable", Mock(side_effect=["/usr/bin/python3", PermissionError(errno.EACCES, "protected")]))
+    command = Mock(return_value=("/usr/bin/protected-agent", "--foreground"))
+    monkeypatch.setattr(cd, "_read_linux_command", command)
+    status = scan.backend.status()
+    assert status["available"] is True and status["running"] is False
+    command.assert_called_once_with(100)
+    cd.os.kill.assert_not_called()
+    scan.add(101, "/usr/bin/codex")
+    monkeypatch.setattr(cd, "_read_linux_executable", Mock(side_effect=["/usr/bin/python3", PermissionError(errno.EACCES, "protected"), "/usr/bin/codex"]))
+    status = scan.backend.status()
+    assert status["available"] is True and status["running"] is True
+    assert status["backgroundCount"] == 1
+
+
+@pytest.mark.parametrize("name,arguments", [
+    ("node", ("/usr/bin/node", "/private/codex.js")),
+    ("node", ("/usr/bin/node", "--eval", "process.stdin.resume()")),
+    ("bun", ("/usr/bin/bun", "script.js")),
+    ("MainThread", ("MainThread",)),
+    ("codex", ("/usr/bin/codex", "app-server")),
+    ("codex-x86_64-unknown-linux-musl", ("/bin/codex-x86_64-unknown-linux-musl",)),
+    ("protected-agent", ("/usr/bin/different-agent",)),
+    ("protected-agent", ("/usr/bin/protected-agent", "/private/codex.js")),
+])
+def test_linux_protected_relevant_or_inconsistent_commands_remain_unknown(scan, monkeypatch, name, arguments):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="linux"))
+    scan.add(100, "/usr/bin/" + name)
+    monkeypatch.setattr(cd, "_read_linux_executable", Mock(side_effect=["/usr/bin/python3", PermissionError(errno.EACCES, "protected")]))
+    monkeypatch.setattr(cd, "_read_linux_command", Mock(return_value=arguments))
+    monkeypatch.setattr(cd.os, "kill", Mock())
+    status = scan.backend.status()
+    assert status["available"] is False and status["running"] is None
+
+
+@pytest.mark.skipif(_NATIVE_PLATFORM != "linux", reason="Exercises Linux non-dumpable process metadata")
+def test_native_linux_protected_background_process_does_not_hide_codex(monkeypatch):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(cd.os, "getuid", _NATIVE_GETUID)
+    monkeypatch.setattr(cd.os, "kill", _NATIVE_KILL)
+    monkeypatch.setattr(cd.subprocess, "run", _NATIVE_RUN)
+    monkeypatch.setattr(cd.subprocess, "Popen", _NATIVE_POPEN)
+    monkeypatch.setattr(cd, "_installed_apps", lambda: [])
+    monkeypatch.setattr(cd, "_read_linux_executable", _READ_LINUX_EXECUTABLE)
+    monkeypatch.setattr(cd, "_read_linux_arguments", _READ_LINUX_ARGUMENTS)
+    code = 'import ctypes,sys; assert ctypes.CDLL(None).prctl(4,0,0,0,0) == 0; print("ready",flush=True); sys.stdin.readline()'
+    with subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=cd._child_environment()) as process:
+        try:
+            assert process.stdout.readline().strip() == "ready"
+            if _NATIVE_GETUID() != 0:
+                with pytest.raises(PermissionError):
+                    _READ_LINUX_EXECUTABLE(process.pid)
+            assert cd.CodexDesktop().status()["available"] is True
+        finally:
+            process.stdin.close()
+            process.wait(timeout=5)
+
+
 def test_unsupported_platform_cannot_authorize_switching(scan, monkeypatch):
     monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="freebsd"))
     status = scan.backend.status()
@@ -621,8 +681,13 @@ def test_mac_native_metadata_uses_fixed_kernel_request(monkeypatch):
     raw = bytes(ctypes.c_int(2)) + b"/bin/codex\0\0codex\0app-server\0SECRET=private\0"
 
     def sysctl(mib, count, buffer, size, new_value, new_length):
+        if list(mib) == [1, 8]:
+            assert count == 2
+            ctypes.cast(buffer, ctypes.POINTER(ctypes.c_int)).contents.value = 32768
+            return 0
         assert list(mib) == [1, 49, 123]
         assert count == 3
+        assert ctypes.cast(size, ctypes.POINTER(ctypes.c_size_t)).contents.value == 32768
         assert new_value is None and new_length == 0
         ctypes.memmove(buffer, raw, len(raw))
         ctypes.cast(size, ctypes.POINTER(ctypes.c_size_t)).contents.value = len(raw)
@@ -633,6 +698,18 @@ def test_mac_native_metadata_uses_fixed_kernel_request(monkeypatch):
     monkeypatch.setattr(cd.ctypes, "CDLL", loader)
     assert _READ_MAC_ARGUMENTS(123) == ("/bin/codex", ("codex", "app-server"))
     loader.assert_called_once_with("/usr/lib/libSystem.B.dylib", use_errno=True)
+
+
+@pytest.mark.parametrize("maximum", [0, -1, 4, cd._MAX_ARGUMENT_BYTES + 1])
+def test_mac_argument_limit_must_be_valid_and_bounded(monkeypatch, maximum):
+    def sysctl(mib, count, buffer, size, new_value, new_length):
+        assert list(mib) == [1, 8]
+        ctypes.cast(buffer, ctypes.POINTER(ctypes.c_int)).contents.value = maximum
+        return 0
+
+    monkeypatch.setattr(cd.ctypes, "CDLL", Mock(return_value=SimpleNamespace(sysctl=Mock(side_effect=sysctl))))
+    with pytest.raises(ValueError, match="argument limit"):
+        _READ_MAC_ARGUMENTS(123)
 
 
 def test_mac_native_metadata_permission_failure_is_not_an_empty_command(monkeypatch):

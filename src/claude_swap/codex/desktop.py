@@ -1,4 +1,10 @@
-"""Read-only Codex process checks and consent-gated macOS app assistance."""
+"""Read-only Codex process checks and consent-gated macOS app assistance.
+
+Prefer native executable identities to mutable process titles. Linux may deny
+the executable link of a protected background process while exposing its argv.
+Only matching, non-Codex, non-interpreter names can use that bounded command
+fallback. Missing, inconsistent, or relevant metadata remains unknown.
+"""
 
 from __future__ import annotations
 
@@ -119,13 +125,19 @@ def _read_mac_executable(pid: int) -> str:
 
 def _read_mac_arguments(pid: int) -> tuple[str, tuple[str, ...]]:
     library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
-    mib = (ctypes.c_int * 3)(1, 49, pid)
-    size = ctypes.c_size_t(_MAX_ARGUMENT_BYTES)
-    buffer = ctypes.create_string_buffer(size.value)
     library.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint,
                               ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t),
                               ctypes.c_void_p, ctypes.c_size_t]
     library.sysctl.restype = ctypes.c_int
+    maximum = ctypes.c_int()
+    maximum_size = ctypes.c_size_t(ctypes.sizeof(maximum))
+    if library.sysctl((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(maximum), ctypes.byref(maximum_size), None, 0) != 0:
+        raise OSError(ctypes.get_errno(), "Process argument limit unavailable")
+    if maximum_size.value != ctypes.sizeof(maximum) or not ctypes.sizeof(maximum) < maximum.value <= _MAX_ARGUMENT_BYTES:
+        raise ValueError("Invalid process argument limit")
+    mib = (ctypes.c_int * 3)(1, 49, pid)
+    size = ctypes.c_size_t(maximum.value)
+    buffer = ctypes.create_string_buffer(size.value)
     if library.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) != 0:
         raise OSError(ctypes.get_errno(), "Process arguments unavailable")
     return _parse_mac_arguments(buffer.raw[:size.value])
@@ -157,17 +169,23 @@ def _read_linux_executable(pid: int) -> str:
     return os.readlink(Path("/proc") / str(pid) / "exe").removesuffix(" (deleted)")
 
 
-def _read_linux_arguments(pid: int) -> tuple[str, tuple[str, ...]]:
+def _read_linux_command(pid: int) -> tuple[str, ...]:
     root = Path("/proc") / str(pid)
-    executable = _read_linux_executable(pid)
     with (root / "cmdline").open("rb") as stream:
         raw = stream.read(_MAX_ARGUMENT_BYTES + 1)
     if not raw or not raw.endswith(b"\0") or len(raw) > _MAX_ARGUMENT_BYTES:
         raise ValueError
     arguments = tuple(os.fsdecode(argument) for argument in raw[:-1].split(b"\0"))
-    if not executable or not arguments[0]:
+    if not arguments[0]:
         raise ValueError
-    return executable, arguments
+    return arguments
+
+
+def _read_linux_arguments(pid: int) -> tuple[str, tuple[str, ...]]:
+    executable = _read_linux_executable(pid)
+    if not executable:
+        raise ValueError
+    return executable, _read_linux_command(pid)
 
 
 def _posix_processes() -> list[_Process]:
@@ -215,7 +233,18 @@ def _posix_processes() -> list[_Process]:
         arguments = ()
         try:
             read_executable = _read_mac_executable if sys.platform == "darwin" else _read_linux_executable
-            executable = read_executable(process.pid)
+            try:
+                executable = read_executable(process.pid)
+            except PermissionError:
+                if sys.platform != "linux":
+                    raise
+                arguments = _read_linux_command(process.pid)
+                name = _basename(arguments[0]).lower()
+                if (name != _basename(process.executable).lower()
+                        or name in _INTERPRETERS | {"mainthread"} or name.startswith("codex")
+                        or any(_basename(argument).lower() in {"codex", "codex.js", "codex.mjs"} for argument in arguments[1:])):
+                    raise
+                executable = arguments[0]
             name = _basename(executable).lower()
             if (name.startswith("codex") or name in _INTERPRETERS
                     or "/Codex.app/Contents/" in executable):
