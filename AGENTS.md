@@ -269,6 +269,9 @@ are in [desktop/README.md](desktop/README.md) and
   on disposable macOS CI, never on a developer's workstation. Normalize signed
   Mac UIDs before comparing ownership. Skip only confirmed zombies; missing
   commands on live rows must still block launch.
+  Codex readiness accepts macOS's `?` scheduling state and its known modifiers,
+  but still requires native identity metadata for current-user processes. It
+  never treats an unknown scheduling state or the exiting `E` flag as a zombie.
   Packaging CI runs `--check-processes` on the frozen and bundled helper even
   when provider apps are not installed, so installation detection cannot hide a
   scan failure. It checks strict Codex readiness on all three platforms and
