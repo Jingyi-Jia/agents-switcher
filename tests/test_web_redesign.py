@@ -147,8 +147,36 @@ const table = nodes('usage-content').find(n => n.attributes['aria-label'] === 'M
 assert.match(table.textContent, /InputOutputCache readCache write/);
 assert.match(table.textContent, /1005060Not reported/);
 assert.doesNotMatch(table.textContent, /210/);
-assert.match($('usage-content').textContent, /not added into a second, potentially double-counted total/);
+assert.match($('usage-content').textContent, /components are shown separately as reported/);
+assert.match($('usage-content').textContent, /Daily model totals are used as reported, without adding components again/);
 assert.match($('usage-content').textContent, /not filtered by date/);
+""")
+
+
+def test_codex_insights_use_account_labels_and_omit_absent_insights(node):
+    run_page(node, ANALYTICS + r"""
+await navigate('usage');
+analyticsBody.accounts[0].insights = {fastModePercent: 0, topReasoningEffort: 'high', topInvocations: [{kind: 'tool', name: '<img src=x onerror=alert(1)>', usageCount: 12}]};
+analyticsBody.accounts[1].insights = {fastModePercent: null, topReasoningEffort: null, topInvocations: []};
+$('usage-models').click();
+assert.match($('usage-content').textContent, /How you work · Work/);
+assert.match($('usage-content').textContent, /Fast mode: 0% · Top reasoning effort: high/);
+assert.match($('usage-content').textContent, /<img src=x onerror=alert\(1\)>12/);
+assert.doesNotMatch($('usage-content').textContent, /How you work · Personal|This device/);
+assert.equal(nodes('usage-content').some(n => n.tagName === 'IMG'), false);
+analyticsAccount = '2'; renderUsage();
+assert.doesNotMatch($('usage-content').textContent, /How you work/);
+""")
+
+
+def test_claude_models_explain_complete_lifetime_components_without_codex_insights(node):
+    run_page(node, ANALYTICS + r"""
+await navigate('usage');
+$('usage-provider').value = 'claude'; $('usage-provider').onchange(); await settle();
+$('usage-models').click();
+assert.match($('usage-content').textContent, /these four components sum to Claude Code's lifetime token total/);
+assert.match($('usage-content').textContent, /Daily token buckets already aggregate them/);
+assert.doesNotMatch($('usage-content').textContent, /potentially double-counted|How you work|Fast mode|Top reasoning effort/);
 """)
 
 
@@ -246,8 +274,23 @@ assert.deepEqual(posts()[0].payload, {provider: 'codex', number: '2'});
 
 
 ASSIST = r"""
-codexStatus = {available: true, running: true, desktopRunning: true, terminalCount: 0, backgroundCount: 0, canAssist: true, canOpen: true};
+codexStatus = {available: true, running: true, desktopRunning: true, terminalCount: 0, backgroundCount: 0, canAssist: true, canOpen: false};
 """
+
+
+def test_running_codex_can_assist_before_it_can_open(node):
+    run_page(node, ASSIST + r"""
+await button('codex', 'Switch').click();
+assert.equal(codexStatus.canOpen, false);
+assert.equal($('codex-assist').hidden, false);
+assert.equal($('codex-assist').disabled, false);
+assert.equal($('codex-continue').disabled, true);
+assert.equal(posts().length, 0);
+codexStatus.canAssist = false;
+await $('codex-check').click();
+assert.equal($('codex-assist').hidden, true);
+assert.equal(posts().length, 0);
+""")
 
 
 def test_codex_assist_is_never_available_with_terminal_or_background_blockers(node):
@@ -270,7 +313,7 @@ def test_codex_assist_quits_then_switches_then_opens_only_after_success(node):
 await button('codex', 'Switch').click();
 assert.equal($('codex-assist').hidden, false);
 fetchHandler = async path => {
-  if (path === '/api/codex/quit') codexStatus = {...codexStatus, running: false, desktopRunning: false};
+  if (path === '/api/codex/quit') codexStatus = {...codexStatus, running: false, desktopRunning: false, canOpen: true};
   return {ok: true, json: async () => path === '/api/codex/status' ? codexStatus : path.startsWith('/api/state') ? apiState : response};
 };
 await $('codex-assist').click();

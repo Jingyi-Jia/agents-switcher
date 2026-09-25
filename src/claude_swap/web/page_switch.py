@@ -12,7 +12,7 @@ function codexStopped(status) {
 }
 
 function codexAssistAllowed(status) {
-  return status?.available === true && status.running === true && status.canAssist === true && status.canOpen === true && status.desktopRunning === true && status.terminalCount === 0 && status.backgroundCount === 0;
+  return status?.available === true && status.running === true && status.canAssist === true && status.desktopRunning === true && status.terminalCount === 0 && status.backgroundCount === 0;
 }
 
 function codexMessage(message, error = false) {
