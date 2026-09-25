@@ -467,3 +467,61 @@ assert.equal($('codex-auto').tagName, 'DETAILS');
     assert "[hidden] { display:none !important; }" in PAGE_HTML
     assert ":focus-visible" in PAGE_HTML
     assert "innerHTML" not in PAGE_HTML
+
+
+def test_quota_summary_reset_belongs_to_the_limiting_window(node):
+    run_page(node, r"""
+const summary = tile('Codex', {available: true, accounts: [{active: true, email: 'sample@example.test', windows: [
+  {label: '5h', usedPercent: 18, resetAfterSeconds: 3600},
+  {label: '7d', usedPercent: 41, resetAfterSeconds: 259200},
+]}]});
+assert.match(summary.textContent, /59%left/);
+assert.match(summary.textContent, /7d limit resets in 3d 0h/);
+assert.doesNotMatch(summary.textContent, /resets in 1h/);
+""")
+
+
+def test_real_codex_shape_shows_streaks_threads_and_insights_without_empty_model_panels(node):
+    run_page(node, ANALYTICS + r"""
+await navigate('usage');
+analyticsBody.accounts[0].models = [];
+analyticsBody.accounts[0].dailyModels = [];
+analyticsBody.accounts[0].summary.totalThreads = 12;
+renderUsage();
+const metrics = nodes('usage-content').filter(n => n.className === 'metric');
+assert.match(metrics.map(n => n.textContent).join(' '), /Best current streak2Days · all reported history · partial/);
+assert.match(metrics.map(n => n.textContent).join(' '), /Threads12All reported history · partial/);
+assert.doesNotMatch(metrics.map(n => n.textContent).join(' '), /Sessions|Messages/);
+assert.equal($('usage-models').textContent, 'Insights');
+$('usage-models').click();
+assert.match($('usage-content').textContent, /How you work · Work/);
+assert.doesNotMatch($('usage-content').textContent, /Models in this period|Token components/);
+analyticsAccount = '2'; renderUsage();
+assert.match($('usage-content').textContent, /No reported insights yet/);
+""")
+
+
+def test_claude_overview_uses_local_sessions_and_messages_not_account_streaks(node):
+    run_page(node, ANALYTICS + r"""
+await navigate('usage');
+$('usage-provider').value = 'claude'; $('usage-provider').onchange(); await settle();
+const metrics = nodes('usage-content').filter(n => n.className === 'metric');
+assert.match(metrics.map(n => n.textContent).join(' '), /Sessions1Reported in this period/);
+assert.match(metrics.map(n => n.textContent).join(' '), /Messages2Reported in this period/);
+assert.doesNotMatch($('usage-content').textContent, /Current streak|Longest streak|Threads/);
+assert.equal($('usage-models').textContent, 'Models');
+""")
+
+
+def test_paused_updates_do_not_refresh_a_ready_profile_panel(node):
+    run_page(node, r"""
+apiState.claudeDesktop = {supported: true, installed: true, available: true, canCreate: true, running: false, profiles: []};
+await load();
+$('watch').checked = false;
+const before = calls.filter(c => c.path.startsWith('/api/state')).length;
+intervals.find(i => i.ms === 5000).callback(); await settle();
+assert.equal(calls.filter(c => c.path.startsWith('/api/state')).length, before);
+state.claudeDesktop.running = true;
+intervals.find(i => i.ms === 5000).callback(); await settle();
+assert.equal(calls.filter(c => c.path.startsWith('/api/state')).length, before + 1);
+""")

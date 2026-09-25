@@ -1,7 +1,7 @@
 # Agent Switch
 
 A local account manager for **Claude Code and Codex**. Save existing logins,
-see quota, and choose which account to use from a desktop window, browser
+see quota and activity, and choose which account to use from a desktop window, browser
 dashboard, or terminal. Automatic switching is optional.
 
 The app and browser dashboard also offer **experimental Claude Desktop profiles**
@@ -81,6 +81,44 @@ it is **not** the standalone Electron app and still needs the CLI installation.
 a menu-bar/system-tray readout when the optional platform dependency is installed
 (`uv tool install '.[tray-macos]'` on macOS, `uv tool install '.[tray]'` elsewhere).
 
+## Accounts, Usage, and Settings
+
+**Accounts** is the everyday switching view. It keeps the selected login, current
+5-hour/weekly capacity, reset times, and switching controls together. Account
+management and automatic-switch settings remain separate from the primary switch
+action. An unavailable measurement is not zero remaining quota.
+
+**Usage** shows reporting data, not a second automatic-switch policy:
+
+- **Codex:** account-specific statistics reported by OpenAI, including daily
+  activity, lifetime totals, and available activity insights. Filter by account
+  and reported date range. Statistics can lag behind current quota, and the
+  provider does not supply every field for every account. Missing data is not
+  recorded as zero. The underlying endpoint is not a published stable API.
+- **Claude:** local Claude Code activity from `stats-cache.json` beneath the
+  configured Claude directory (`~/.claude` by default). Overview and model views
+  use the history already recorded there; Agent Switch does not scan conversation
+  content, run Claude commands, or modify Claude's cache. This is this device's
+  configured history, not a verified per-login total. Switching accounts does not
+  reassign that history to the new login. The cache can stop at the previous day;
+  current-session activity is not reconstructed. If it is missing or stale, open
+  `/usage` in Claude Code and then choose **Refresh activity** here.
+
+Data-through dates and stale/unavailable states explain the coverage of the
+charts. Reported token counts, subscription quota percentages, and billing credits
+are different quantities; the charts do not convert tokens into a subscription
+bill or add different providers' quota percentages together. Claude Desktop has
+no separate analytics dashboard.
+
+**Settings** contains appearance and view preferences. System, light, and dark
+appearance and acknowledgement of the profile notice persist in the private
+`ui-preferences.json` file under Agent Switch's data directory. This file contains
+no credentials. Closing the standalone app still stops its backend and its own
+automatic-switching session; the menu-bar icon does not imply background mode.
+
+The native **View** menu and menu-bar menu open Accounts, Usage, and Settings.
+Keyboard shortcuts are **⌘/Ctrl+1**, **⌘/Ctrl+2**, and **⌘/Ctrl+,** respectively.
+
 ## Save and switch Claude Code accounts
 
 Sign in to Claude Code, then save that login. Repeat after signing in to each
@@ -104,21 +142,23 @@ prompt rather than putting a secret in shell history. Experimental
 terminal profile; it does not support API-key accounts and is not Desktop
 profile switching. See `agent-switch run --help` for isolation and sharing options.
 
-## Try Claude Desktop profiles (experimental)
+## Try Claude Desktop profiles (Beta)
 
-Use the **Claude Desktop — Experimental profiles** panel in the app or browser
+Use the **Claude Desktop — Profiles · Beta** panel in the app or browser
 dashboard. It is not the Claude Code account list, and **Add existing login** does
 not import a Desktop session.
 
 1. Install official Claude Desktop in `/Applications/Claude.app` or
    `~/Applications/Claude.app` on macOS, or its official Linux package at
    `/usr/bin/claude-desktop`. Custom install locations and Windows are not supported.
-2. Choose **Create empty profile**, give it a label such as “Work”, and acknowledge
-   the experimental limitations. This only creates empty private directories;
+2. Choose **New profile**, give it a label such as “Work”, and acknowledge
+   the profile limitations. This only creates empty private directories;
    it works even if Claude is not detected or its process status is unknown.
    Those checks block opening profiles, not creating them.
-3. Fully **quit Claude Desktop**. Closing its window may leave it running. Choose
-   **Check again**, then **Open** beside the profile and confirm the launch.
+3. Fully **quit Claude Desktop**. Closing its window may leave it running. Once
+   the app detects that Claude has quit, choose **Open** beside the profile.
+   The first-use acknowledgement is remembered; every launch is still a deliberate
+   action, and the current process state is checked again before opening.
 4. Sign in directly inside Claude. Repeat with another empty profile for another
    account. To return to a saved profile, quit Claude first and open that profile
    from Agent Switch. **Verify the selected account inside Claude before working**;
@@ -128,7 +168,7 @@ not import a Desktop session.
    not the last named profile chosen here.
 
 If **Open** is disabled, read the status box above it. A running Claude app must
-be fully quit with **⌘Q** on Mac before choosing **Check again**. If Claude is not
+be fully quit with **⌘Q** on Mac. If Claude is not
 detected, move the official app into one of the supported installation locations
 above. A failed process check or unreadable profile registry also blocks launch;
 creating a profile does not bypass those checks.
@@ -171,6 +211,14 @@ For every switch:
 1. **Quit Codex completely**, including its desktop app and terminal sessions.
 2. Run `agent-switch codex switch work` (or select a saved account in Agent Switch).
 3. Reopen Codex and verify the account before continuing work.
+
+The app presents a neutral guided step when Codex needs to close, rather than
+reporting a completed switch. On supported macOS installations, **Quit, switch
+& reopen** requests a normal quit of the official Codex app, waits for confirmed
+exit, changes the login, and requests a relaunch. It never force-quits the app or
+terminates terminal sessions. Close any terminal/background Codex sessions
+yourself; if process detection fails, switching remains blocked. Unsupported app
+locations and custom Codex-home configurations use the manual quit-first flow.
 
 The active badge follows the managed account in Codex's current `auth.json`, not
 the last slot selected in Agent Switch. Signing in outside Agent Switch can

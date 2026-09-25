@@ -76,6 +76,7 @@ def dashboard():
 
     def start(claude=None, codex=None):
         state = DashboardState(claude_switcher=claude, codex_switcher=codex)
+        state.codex_desktop.status = lambda: {"available": True, "running": False}
         server, url = serve(state, host="127.0.0.1", port=0)
         # poll_interval: serve_forever's 0.5s default makes every teardown
         # wait that long, which dominated the runtime of this file.

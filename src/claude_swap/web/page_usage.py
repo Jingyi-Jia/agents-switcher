@@ -86,20 +86,31 @@ function usageHeading(title, detail) {
   return heading;
 }
 
-function renderUsageSummary(host, days) {
+function renderUsageSummary(host, days, accounts) {
   const metrics = el("div", "usage-summary");
   const reported = days.filter((d) => knownNumber(d.tokens));
   const values = [
-    ["Tokens", sumKnown(days.map((d) => d.tokens)), "Reported in this period", "count"],
-    ["Peak day", reported.length ? Math.max(...reported.map((d) => d.tokens)) : null, "Tokens · this period", "count"],
-    ["Sessions", sumKnown(days.map((d) => d.sessions)), "Reported in this period", "sessionsCount"],
-    ["Messages", sumKnown(days.map((d) => d.messages)), "Reported in this period", "messagesCount"],
+    ["Tokens", sumKnown(days.map((d) => d.tokens)), "Reported in this period", days.some((d) => d.count < d.total)],
+    ["Peak day", reported.length ? Math.max(...reported.map((d) => d.tokens)) : null, "Tokens · this period", days.some((d) => d.count < d.total)],
   ];
-  values.forEach(([label, value, detail, coverage]) => {
+  if (analyticsProvider === "claude") {
+    values.push(
+      ["Sessions", sumKnown(days.map((d) => d.sessions)), "Reported in this period", days.some((d) => d.sessionsCount < d.total)],
+      ["Messages", sumKnown(days.map((d) => d.messages)), "Reported in this period", days.some((d) => d.messagesCount < d.total)],
+    );
+  } else {
+    const streaks = accounts.map((a) => a.summary?.currentStreakDays).filter(knownNumber);
+    const threads = accounts.map((a) => a.summary?.totalThreads);
+    values.push(
+      [accounts.length > 1 ? "Best current streak" : "Current streak", streaks.length ? Math.max(...streaks) : null, "Days · all reported history", streaks.length < accounts.length],
+      ["Threads", sumKnown(threads), "All reported history", threads.some((value) => !knownNumber(value))],
+    );
+  }
+  values.forEach(([label, value, detail, partial]) => {
     const metric = el("div", "metric"), number = el("strong", null, shortNumber(value));
     number.title = numberText(value);
     number.setAttribute("aria-label", label + ": " + numberText(value));
-    metric.append(el("div", "label", label), number, el("small", null, knownNumber(value) ? detail + (days.some((d) => d[coverage] < d.total) ? " · partial" : "") : "Not reported"));
+    metric.append(el("div", "label", label), number, el("small", null, knownNumber(value) ? detail + (partial ? " · partial" : "") : "Not reported"));
     metrics.appendChild(metric);
   });
   host.appendChild(metrics);
@@ -161,11 +172,11 @@ function renderComparison(host, accounts) {
   if (analyticsProvider !== "codex") return;
   const panel = el("section", "comparison");
   panel.appendChild(usageHeading("Account comparison", "Selected period · reported totals"));
-  panel.appendChild(usageTable(["Account", "Tokens", "Sessions", "Data through", "Status"], accounts.map((a) => {
+  panel.appendChild(usageTable(["Account", "Tokens", "Data through", "Status"], accounts.map((a) => {
     const days = periodDays([a]);
     const label = el("span", null, a.label || "Account " + a.number);
     if (a.error) label.appendChild(el("small", null, safeMessage(a.error)));
-    return [label, numberText(sumKnown(days.map((d) => d.tokens))), numberText(sumKnown(days.map((d) => d.sessions))), dayKey(a.dataThrough) || "Not reported", a.stale ? "Cached · stale" : !a.available ? "Unavailable" : "Available"];
+    return [label, numberText(sumKnown(days.map((d) => d.tokens))), dayKey(a.dataThrough) || "Not reported", a.stale ? "Cached · stale" : !a.available ? "Unavailable" : "Available"];
   }), "Codex account comparison"));
   host.appendChild(panel);
 }
@@ -173,9 +184,10 @@ function renderComparison(host, accounts) {
 function renderLifetime(host, accounts) {
   const panel = el("section", "comparison");
   panel.appendChild(usageHeading("Beyond this period", "All reported history · not filtered by date"));
-  panel.appendChild(usageTable([analyticsProvider === "claude" ? "Scope" : "Account", "Lifetime tokens", "Peak daily tokens", "Current streak", "Longest streak", "Sessions", "Messages", "Threads"], accounts.map((a) => {
+  const columns = analyticsProvider === "claude" ? ["Scope", "Lifetime tokens", "Peak daily tokens", "Sessions", "Messages"] : ["Account", "Lifetime tokens", "Peak daily tokens", "Current streak", "Longest streak", "Threads"];
+  panel.appendChild(usageTable(columns, accounts.map((a) => {
     const s = a.summary || {};
-    return [analyticsProvider === "claude" ? "This device" : a.label || "Account " + a.number, numberText(s.lifetimeTokens), numberText(s.peakDailyTokens), knownNumber(s.currentStreakDays) ? s.currentStreakDays + " days" : "Not reported", knownNumber(s.longestStreakDays) ? s.longestStreakDays + " days" : "Not reported", numberText(s.totalSessions), numberText(s.totalMessages), numberText(s.totalThreads)];
+    return [analyticsProvider === "claude" ? "This device" : a.label || "Account " + a.number, numberText(s.lifetimeTokens), numberText(s.peakDailyTokens), ...(analyticsProvider === "claude" ? [numberText(s.totalSessions), numberText(s.totalMessages)] : [knownNumber(s.currentStreakDays) ? s.currentStreakDays + " days" : "Not reported", knownNumber(s.longestStreakDays) ? s.longestStreakDays + " days" : "Not reported", numberText(s.totalThreads)])];
   }), "All reported history"));
   host.appendChild(panel);
 }
@@ -200,7 +212,7 @@ function renderModels(host, accounts, days) {
     }), "Model activity for selected period"));
     period.appendChild(el("p", "hint", "Totals include only reported daily model data; coverage may differ from the daily activity chart."));
   } else period.appendChild(el("p", "hint", "Daily model breakdowns are not reported for this period. No totals are inferred."));
-  host.appendChild(period);
+  if (totals.size || analyticsProvider === "claude") host.appendChild(period);
   const components = new Map();
   accounts.forEach((a) => (a.models || []).forEach((model) => {
     if (!components.has(model.name)) components.set(model.name, []);
@@ -214,20 +226,24 @@ function renderModels(host, accounts, days) {
     return numberText(total) + (knownNumber(total) && rows.some((r) => !knownNumber(r[key])) ? " · partial" : "");
   })]), "Model token components"));
   else panel.appendChild(el("p", "hint", "Token components are not reported by this source."));
-  host.appendChild(panel);
+  if (components.size || analyticsProvider === "claude") host.appendChild(panel);
+  let insightCount = 0;
   if (analyticsProvider === "codex") accounts.forEach((a) => {
     const insights = a.insights || {};
     if (!knownNumber(insights.fastModePercent) && !insights.topReasoningEffort && !(insights.topInvocations || []).length) return;
+    insightCount++;
     const details = el("section", "comparison");
     details.appendChild(usageHeading("How you work · " + (a.label || "Account " + a.number), "All reported history"));
     details.append(el("p", "hint", `Fast mode: ${knownNumber(insights.fastModePercent) ? insights.fastModePercent + "%" : "Not reported"} · Top reasoning effort: ${insights.topReasoningEffort || "Not reported"}`));
-    if ((insights.topInvocations || []).length) details.appendChild(usageTable(["Kind", "Invocation", "Uses"], insights.topInvocations.map((i) => [i.kind || "Not reported", i.name, numberText(i.usageCount)]), "Top local invocations"));
+    if ((insights.topInvocations || []).length) details.appendChild(usageTable(["Kind", "Invocation", "Uses"], insights.topInvocations.map((i) => [i.kind || "Not reported", i.name, numberText(i.usageCount)]), "Top account invocations"));
     host.appendChild(details);
   });
+  if (analyticsProvider === "codex" && !insightCount && !totals.size && !components.size) host.appendChild(usageEmpty("No reported insights yet", "Codex hasn't reported fast-mode, reasoning, or invocation details for this selection. Your saved logins are unchanged."));
 }
 
 function renderUsage() {
   $("usage-subtitle").textContent = analyticsProvider === "claude" ? "Claude Code activity · This device" : "Codex activity · saved accounts";
+  $("usage-models").textContent = analyticsProvider === "claude" ? "Models" : "Insights";
   $("usage-account-field").hidden = analyticsProvider !== "codex";
   $("usage-content").setAttribute("aria-busy", String(analyticsLoading));
   $("usage-refresh").disabled = analyticsLoading;
@@ -251,12 +267,13 @@ function renderUsage() {
   const available = accounts.filter((a) => a.available).length;
   const through = accounts.map((a) => dayKey(a.dataThrough)).filter(Boolean).sort();
   const coverage = `${available} of ${accounts.length} ${analyticsProvider === "claude" ? "local sources" : "accounts"} available · ${complete} of ${days.length} days with complete token coverage`;
-  $("usage-context").textContent = `${analyticsBody.source || "Provider activity"} · Fetched ${timeText(analyticsBody.fetchedAt)}. Data through ${through.length ? through[0] + (through[0] !== through.at(-1) ? "–" + through.at(-1) : "") : "not reported"}. ${coverage}.${available < accounts.length || complete < days.length ? " Partial coverage: totals include reported values only." : ""}${accounts.some((a) => a.stale) ? " Cached data is stale." : ""} Gaps are not zero.`;
+  const source = {"codex-profile-stats": "OpenAI account statistics", "claude-stats-cache": "Claude Code local stats cache"}[analyticsBody.source] || analyticsBody.source || "Provider activity";
+  $("usage-context").textContent = `${source} · Fetched ${timeText(analyticsBody.fetchedAt)}. Data through ${through.length ? through[0] + (through[0] !== through.at(-1) ? "–" + through.at(-1) : "") : "not reported"}. ${coverage}.${available < accounts.length || complete < days.length ? " Partial coverage: totals include reported values only." : ""}${accounts.some((a) => a.stale) ? " Cached data is stale." : ""} Gaps are not zero.`;
   accounts.filter((a) => a.error).forEach((a) => host.appendChild(el("p", "load-error", (analyticsProvider === "claude" ? "This device" : a.label || "Account " + a.number) + ": " + safeMessage(a.error))));
   if (analyticsProvider === "claude" && accounts.some((a) => a.stale || !a.available)) host.appendChild(el("p", "hint", "Open /usage in Claude Code, then choose Refresh activity here. This view reads the local activity cache; it doesn't reconstruct transcripts or attribute activity to saved accounts."));
   if (analyticsTab === "models") renderModels(host, accounts, days);
   else {
-    renderUsageSummary(host, days);
+    renderUsageSummary(host, days, accounts);
     if (!days.some((d) => knownNumber(d.tokens))) host.appendChild(usageEmpty("No reported tokens in this period", "Try a wider date range. Missing days are left as gaps, not filled with zeroes."));
     renderDailyChart(host, days); renderHeatmap(host, days); renderComparison(host, accounts); renderLifetime(host, accounts);
   }

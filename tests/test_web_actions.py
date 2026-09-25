@@ -22,6 +22,7 @@ def web(tmp_path, monkeypatch):
 
     monkeypatch.setattr(autoswitch, "running_codex_processes", list)
     state = DashboardState(Claude(), Codex(tmp_path / "codex"))
+    state.codex_desktop.status = Mock(return_value={"available": True, "running": False})
     server, _ = serve(state, host="127.0.0.1", port=0, token="test-web-auth")
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()

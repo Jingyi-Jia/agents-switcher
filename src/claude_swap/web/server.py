@@ -35,8 +35,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from claude_swap.claude_desktop import ClaudeDesktopProfiles
-from claude_swap.providers import ProviderActionError, ProviderActions, safe_error
+from claude_swap.providers import ActionRequired, ProviderActionError, ProviderActions, account_number, safe_error
 from claude_swap.web.page import PAGE_HTML
+from claude_swap.web.preferences import UiPreferences
 
 _logger = logging.getLogger("claude-swap")
 
@@ -100,10 +101,18 @@ class DashboardState:
     """
 
     def __init__(self, claude_switcher=None, codex_switcher=None) -> None:
+        from claude_swap.analytics import UsageAnalytics
+        from claude_swap.codex.desktop import CodexDesktop
+
         self._claude = claude_switcher
         self._codex = codex_switcher
         self.claude_desktop = ClaudeDesktopProfiles()
-        self.actions = ProviderActions(claude=claude_switcher, codex=codex_switcher)
+        self.codex_desktop = CodexDesktop()
+        self.analytics = UsageAnalytics(codex_switcher)
+        self.preferences = UiPreferences()
+        self.actions = ProviderActions(
+            claude=claude_switcher, codex=codex_switcher, codex_preflight=self._require_codex_quit,
+        )
         self._lock = self.actions.lock
         self._cached: dict | None = None
         self._cached_at = 0.0
@@ -133,6 +142,7 @@ class DashboardState:
             return {
                 **self._cached,
                 "claudeDesktop": self.claude_desktop.status(),
+                "preferences": self.preferences.get(),
                 **{
                     provider: {
                         **self._cached[provider],
@@ -271,9 +281,34 @@ class DashboardState:
     def switch(self, provider: str, number: str) -> dict:
         """Switch one provider, returning what the user still has to do."""
         try:
-            return self.actions.switch(provider, number)
+            with self._lock:
+                if provider == "codex":
+                    number = account_number(number)
+                    self._require_codex_quit()
+                return self.actions.switch(provider, number)
         finally:
             self.invalidate()
+
+    def _require_codex_quit(self) -> None:
+        status = self.codex_desktop.status()
+        if status.get("available") is not True or type(status.get("running")) is not bool:
+            raise ActionRequired(
+                "Could not confirm that Codex is closed. Check its status again; your login has not changed.",
+                code="codex-status-unknown",
+            )
+        if status.get("running") is not False:
+            raise ActionRequired(
+                "Close Codex before switching, including its app and terminal sessions. Your login has not changed.",
+                code="codex-running",
+            )
+
+    def quit_codex(self, *, confirm=False) -> dict:
+        with self._lock:
+            return self.codex_desktop.quit(confirm=confirm)
+
+    def open_codex(self, *, confirm=False) -> dict:
+        with self._lock:
+            return self.codex_desktop.open(confirm=confirm)
 
     def set_disabled(self, provider: str, number, disabled: bool) -> dict:
         try:
@@ -289,7 +324,10 @@ class DashboardState:
 
     def switch_best(self, provider: str) -> dict:
         try:
-            return self.actions.switch_best(provider)
+            with self._lock:
+                if provider == "codex":
+                    self._require_codex_quit()
+                return self.actions.switch_best(provider)
         finally:
             self.invalidate()
 
@@ -426,8 +464,9 @@ def _make_handler(state: DashboardState, token: str):
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib hook
             parsed = urlparse(self.path)
-            query = parse_qs(parsed.query)
-            if not self._authorized(query):
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            private_read = parsed.path in {"/api/analytics", "/api/codex/status", "/api/preferences"}
+            if not self._authorized({} if private_read else query):
                 self._json(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
                 return
             if parsed.path in ("/", "/index.html"):
@@ -435,6 +474,26 @@ def _make_handler(state: DashboardState, token: str):
             elif parsed.path == "/api/state":
                 force = (query.get("force") or ["0"])[0] == "1"
                 self._json(HTTPStatus.OK, state.get(force=force))
+            elif private_read:
+                try:
+                    if parsed.path == "/api/analytics":
+                        if (
+                            set(query) - {"provider", "force"}
+                            or any(len(values) != 1 for values in query.values())
+                            or (query.get("provider") or [None])[0] not in {"claude", "codex"}
+                            or (query.get("force") or ["0"])[0] not in {"0", "1"}
+                        ):
+                            raise ProviderActionError("Choose a valid usage provider and refresh option.")
+                        result = state.analytics.get(query["provider"][0], force=query.get("force") == ["1"])
+                    elif parsed.query:
+                        raise ProviderActionError("This request does not accept query parameters.")
+                    elif parsed.path == "/api/preferences":
+                        result = state.preferences.get()
+                    else:
+                        result = state.codex_desktop.status()
+                    self._json(HTTPStatus.OK, result)
+                except Exception as error:
+                    self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": safe_error(error)})
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
@@ -444,6 +503,9 @@ def _make_handler(state: DashboardState, token: str):
                 self._json(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
                 return
             routes = {
+                "/api/preferences": (state.preferences.update, set(), {"theme", "profileNoticeVersion", "confirm"}),
+                "/api/codex/quit": (state.quit_codex, {"confirm"}, set()),
+                "/api/codex/open": (state.open_codex, {"confirm"}, set()),
                 "/api/claude-desktop/create": (state.claude_desktop.create, {"name", "confirm"}, set()),
                 "/api/claude-desktop/open": (state.claude_desktop.open, {"profileId", "confirm"}, set()),
                 "/api/switch": (state.switch, {"provider", "number"}, set()),
@@ -466,7 +528,10 @@ def _make_handler(state: DashboardState, token: str):
                     raise ProviderActionError("threshold must be a number")
                 result = action(**payload)
             except Exception as e:  # noqa: BLE001 - surfaced to the page
-                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": safe_error(e)})
+                result = {"ok": False, "message": safe_error(e)}
+                if isinstance(e, ActionRequired):
+                    result.update({"kind": "action-required", "code": e.code})
+                self._json(HTTPStatus.BAD_REQUEST, result)
                 return
             self._json(HTTPStatus.OK, result)
 

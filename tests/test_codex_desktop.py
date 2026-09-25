@@ -702,6 +702,15 @@ def test_native_posix_status_reads_harmless_node_arguments(monkeypatch):
     monkeypatch.setattr(cd, "_installed_apps", lambda: [])
     monkeypatch.setattr(cd, "_read_mac_executable", _READ_MAC_EXECUTABLE)
     monkeypatch.setattr(cd, "_read_linux_executable", _READ_LINUX_EXECUTABLE)
+    original_scan = cd._posix_processes
+
+    def checked_scan():
+        try:
+            return original_scan()
+        except (OSError, ValueError) as error:
+            raise AssertionError("Native process scan failed before classification") from error
+
+    monkeypatch.setattr(cd, "_posix_processes", checked_scan)
     reader = Mock(wraps=_READ_MAC_ARGUMENTS if _NATIVE_PLATFORM == "darwin" else _READ_LINUX_ARGUMENTS)
     name = "_read_mac_arguments" if _NATIVE_PLATFORM == "darwin" else "_read_linux_arguments"
     monkeypatch.setattr(cd, name, reader)

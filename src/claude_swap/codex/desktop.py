@@ -113,7 +113,7 @@ def _read_mac_executable(pid: int) -> str:
     library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     library.proc_pidpath.restype = ctypes.c_int
     if library.proc_pidpath(pid, buffer, len(buffer)) <= 0 or not buffer.value:
-        raise OSError("Process executable unavailable")
+        raise OSError(ctypes.get_errno(), "Process executable unavailable")
     return os.fsdecode(buffer.value)
 
 
@@ -127,7 +127,7 @@ def _read_mac_arguments(pid: int) -> tuple[str, tuple[str, ...]]:
                               ctypes.c_void_p, ctypes.c_size_t]
     library.sysctl.restype = ctypes.c_int
     if library.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) != 0:
-        raise OSError("Process arguments unavailable")
+        raise OSError(ctypes.get_errno(), "Process arguments unavailable")
     return _parse_mac_arguments(buffer.raw[:size.value])
 
 

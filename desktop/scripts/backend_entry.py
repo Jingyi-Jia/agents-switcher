@@ -38,9 +38,14 @@ def main() -> int:
         return smoke_tls()
     if sys.argv[1:] == ["--smoke-processes"]:
         from claude_swap.claude_desktop import running
+        from claude_swap.codex.desktop import CodexDesktop
 
         try:
-            running()
+            if sys.platform in {"darwin", "linux"}:
+                running()
+            status = CodexDesktop().status()
+            if status.get("available") is not True or type(status.get("running")) is not bool:
+                raise RuntimeError("Codex process status is unknown")
         except Exception:
             print("Frozen helper process smoke failed", file=sys.stderr)
             return 1

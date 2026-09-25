@@ -247,11 +247,6 @@ function headroom(a) {
   if (ws.length) return Math.max(0, Math.min(...ws.map((w) => 100 - w.usedPercent)));
   return (typeof a.percent === "number" && Number.isFinite(a.percent)) ? Math.max(0, Math.min(100, 100 - a.percent)) : null;
 }
-function soonestReset(a) {
-  const ws = (a.windows || []).filter((w) => w.resetAfterSeconds > 0);
-  return ws.length ? Math.min(...ws.map((w) => w.resetAfterSeconds)) : null;
-}
-
 function tile(name, data) {
   const t = el("div", "tile");
   t.appendChild(el("div", "label", name + " · active"));
@@ -277,8 +272,9 @@ function tile(name, data) {
     v.textContent = left + "%"; v.appendChild(el("small", null, "left"));
     if (left <= 0) v.classList.add("ember");
     t.appendChild(v);
-    const r = duration(soonestReset(active));
-    t.appendChild(el("div", "sub", (active.email || "") + (r ? " · resets " + r : "")));
+    const limiting = (active.windows || []).filter((w) => typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent)).sort((a, b) => b.usedPercent - a.usedPercent)[0];
+    const r = duration(limiting?.resetAfterSeconds);
+    t.appendChild(el("div", "sub", (active.email || "") + (r ? ` · ${limiting.label} limit resets in ${r}` : "")));
   }
   return t;
 }
@@ -964,7 +960,7 @@ load();
 navigate((location.hash || "").slice(1), false);
 setInterval(() => { if ($("watch").checked && !busy && !$("action-dialog").open) load(); }, 20000);
 setInterval(() => {
-  if (!busy && (dialogKind === "profile" || (activeView === "accounts" && !$("claude-desktop-panel").hidden)) && (!$("action-dialog").open || dialogKind === "profile")) load(false, true);
+  if (!busy && (dialogKind === "profile" || (activeView === "accounts" && !$("claude-desktop-panel").hidden && ($("watch").checked || state.claudeDesktop?.running !== false))) && (!$("action-dialog").open || dialogKind === "profile")) load(false, true);
 }, 5000);
 </script>
 </body>
