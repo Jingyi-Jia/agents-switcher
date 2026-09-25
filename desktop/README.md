@@ -30,11 +30,22 @@ distributions are not yet validated.
 **Public macOS releases must be Developer ID signed and notarized; public Windows
 releases must be code signed.** Signing credentials are not included in this
 repository, and configuration alone does not establish release trust. PR and
-manual-workflow artifacts are unsigned developer previews (macOS arm64 may be
-ad-hoc signed), not recommended downloads for nontechnical users. An unsigned
-preview may be blocked by Gatekeeper or SmartScreen. Do not disable these
-protections; wait for a trusted release or build in a disposable development
-environment. Windows reputation warnings can still occur for newly signed apps.
+manual-workflow artifacts are developer previews, not recommended downloads for
+nontechnical users. Both macOS architectures use ad-hoc signatures to seal the
+modified app bundle; these signatures do not identify an Apple-trusted developer
+and are not notarization. Other preview platforms remain unsigned. Gatekeeper or
+SmartScreen may still block previews. Do not disable these protections; wait for
+a trusted release or build in a disposable development environment. Windows
+reputation warnings can still occur for newly signed apps.
+
+Older Mac previews skipped bundle signing and can report that Agent Switch
+"is damaged and can't be opened." Use a newer build rather than removing
+quarantine attributes or re-signing the downloaded app yourself. CI now verifies
+the app's signatures in the build directory, extracted ZIP, and mounted DMG.
+For a verified preview from this repository, an unidentified-developer warning
+can still require an explicit **System Settings → Privacy & Security → Open
+Anyway** approval. Only approve a preview if you trust its source and intend to
+test it; see [Apple's guidance](https://support.apple.com/en-us/102445).
 
 There is no auto-updater. Use **Help → Download updates** to visit Releases and install
 the newer version. Quitting the application, including closing its only window,
@@ -96,8 +107,9 @@ npm run dist -- --win --x64
 ```
 
 Outputs are in `desktop/release/`. A local macOS build can discover your own
-signing identity; set `CSC_IDENTITY_AUTO_DISCOVERY=false` for a preview without
-using that identity. Linux packaging needs the normal native build utilities
+signing identity; for a preview without using that identity, run
+`CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist -- --mac --arm64 -c.mac.identity=- -c.mac.notarize=false`
+(use `--x64` for Intel). Linux packaging needs the normal native build utilities
 (`make`, C/C++ toolchain, `binutils`, `dpkg`, `fakeroot` and `rpm` as required by
 electron-builder's package tooling), and access to npm/PyPI/GitHub downloads.
 On macOS install Xcode Command Line Tools; Windows builds use the tools downloaded
@@ -110,14 +122,19 @@ built on a newer glibc may not run on the baseline even if Electron does.
 `macos-15-intel` (x64), `windows-2022` (x64), and `ubuntu-22.04` (x64).
 It tests the Python suite and Electron shell, builds and smoke-tests the frozen
 helper, packages installers, then smoke-tests the helper again from the actual
-application resources. Each job uploads only installers and SHA-256 checksums,
-not unpacked workspaces or accounts. CI has no display-driven installer test;
+application resources. macOS jobs also verify bundle signatures in the packaged
+app and both distributed formats before uploading. Each job uploads only
+installers and SHA-256 checksums, not unpacked workspaces or accounts. CI has no display-driven installer test;
 clean-machine installation and first-run checks remain a release prerequisite.
 
 PR path changes and **Run workflow** produce preview artifacts in the workflow
 run's Artifacts section. Neither path receives signing secrets or release write
-permission. The workflow uses `pull_request`, never `pull_request_target`, and
-does not check out a different branch during the build.
+permission. The macOS preview step explicitly enables the builder's PR signing
+path only for an ad-hoc identity (`-`), with certificate discovery disabled and
+certificate inputs removed from the environment. This seals the modified bundle without using a private
+key; it does not enable trusted release signing for PRs. The workflow uses
+`pull_request`, never `pull_request_target`, and does not check out a different
+branch during the build.
 
 A maintainer publishing an existing GitHub release triggers the release build
 from that tag. The workflow never creates tags or releases. All native builds

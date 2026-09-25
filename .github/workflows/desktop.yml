@@ -71,11 +71,20 @@ jobs:
       - name: Smoke-test frozen backend in disposable account directories
         run: uv run --no-sync python desktop/scripts/smoke_backend.py --disposable-runner
       - name: Build unsigned preview installers
-        if: github.event_name != 'release'
+        if: github.event_name != 'release' && matrix.platform != 'mac'
         working-directory: desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run dist -- --${{ matrix.platform }} --${{ matrix.arch }}
+      - name: Build ad-hoc signed macOS preview installers
+        if: github.event_name != 'release' && matrix.platform == 'mac'
+        working-directory: desktop
+        env:
+          CSC_FOR_PULL_REQUEST: "true"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          unset CSC_LINK CSC_KEY_PASSWORD
+          npm run dist -- --mac --${{ matrix.arch }} -c.mac.identity=- -c.mac.notarize=false
       - name: Build signed and notarized macOS release
         if: github.event_name == 'release' && matrix.platform == 'mac'
         working-directory: desktop
@@ -125,6 +134,23 @@ jobs:
         if: github.event_name == 'release' && matrix.platform == 'linux'
         working-directory: desktop
         run: npm run dist -- --linux --x64
+      - name: Verify macOS app and distributed bundle signatures
+        if: matrix.platform == 'mac'
+        working-directory: desktop
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          suffix=""; if [ "$TARGET_ARCH" = arm64 ]; then suffix="-arm64"; fi
+          codesign --verify --deep --strict --verbose=2 "release/mac$suffix/Agent Switch.app"
+          codesign --verify --strict --verbose=2 "release/mac$suffix/Agent Switch.app/Contents/Resources/backend/agent-switch-backend"
+          zip_dir="$(mktemp -d)"
+          dmg_mount="$(mktemp -d)"
+          trap 'hdiutil detach "$dmg_mount" >/dev/null 2>&1 || true; rm -rf "$zip_dir" "$dmg_mount"' EXIT
+          ditto -x -k release/*.zip "$zip_dir"
+          codesign --verify --deep --strict --verbose=2 "$zip_dir/Agent Switch.app"
+          hdiutil verify release/*.dmg
+          hdiutil attach -readonly -nobrowse -mountpoint "$dmg_mount" release/*.dmg
+          codesign --verify --deep --strict --verbose=2 "$dmg_mount/Agent Switch.app"
       - name: Smoke-test the helper copied into the app
         env:
           TARGET_PLATFORM: ${{ matrix.platform }}
