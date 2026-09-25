@@ -26,24 +26,53 @@ running ``codex`` keeps the old account until it restarts. The result says so.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 
 from claude_swap.codex.auth_file import has_live_login, read_auth, write_auth
 from claude_swap.codex.identity import CodexIdentity, identity_from_auth
 from claude_swap.codex.processes import CodexProcess, running_codex_processes
-from claude_swap.codex.store import CodexAccount, CodexAccountStore
-from claude_swap.codex.tokens import TokenRefreshError, needs_refresh, refresh_tokens
 from claude_swap.codex.stats import (
     CodexProfileStats,
     CodexResetCredits,
     fetch_profile_stats,
     fetch_reset_credits,
 )
+from claude_swap.codex.store import CodexAccount, CodexAccountStore
+from claude_swap.codex.tokens import (
+    TokenRefreshError,
+    access_token_expiry,
+    needs_refresh,
+    refresh_tokens,
+)
 from claude_swap.codex.usage import CodexUsage, UsageAuthError, UsageError, fetch_usage
 from claude_swap.exceptions import AccountNotFoundError, SwitchError, ValidationError
 
 _logger = logging.getLogger("claude-swap")
+
+
+def _live_login_is_older(saved: dict, live: dict) -> bool:
+    refreshed = []
+    for credentials in (saved, live):
+        try:
+            at = datetime.fromisoformat(credentials.get("last_refresh", ""))
+        except (TypeError, ValueError):
+            at = None
+        refreshed.append(at if at is not None and at.tzinfo is not None else None)
+    saved_at, live_at = refreshed
+    if saved_at is not None and live_at is not None:
+        return saved_at > live_at
+    saved_expiry = access_token_expiry(saved.get("tokens") or {})
+    live_expiry = access_token_expiry(live.get("tokens") or {})
+    if (
+        saved_expiry is not None and live_expiry is not None
+        and math.isfinite(saved_expiry) and math.isfinite(live_expiry)
+        and saved_expiry != live_expiry
+    ):
+        return saved_expiry > live_expiry
+    return saved_at is not None and live_at is None and saved.get("tokens") != live.get("tokens")
 
 
 @dataclass(frozen=True)
@@ -187,6 +216,13 @@ class CodexSwitcher:
                     f"Slot {target.number} ({target.display_label}) has no saved "
                     "credential. Log in as that account and re-add it."
                 )
+            if not has_live_login(target_credentials) or not target.identity.matches(
+                identity_from_auth(target_credentials)
+            ):
+                raise SwitchError(
+                    f"Slot {target.number} has an invalid or mismatched saved login. "
+                    "Sign in to that Codex account and add the existing login again."
+                )
 
             live = read_auth()
             live_identity = identity_from_auth(live) if has_live_login(live) else None
@@ -208,14 +244,26 @@ class CodexSwitcher:
                     raise SwitchError(
                         f"{target.display_label} is already the active Codex account."
                     )
-                # Rotation capture: the live tokens supersede whatever was saved
-                # when this slot was added. Guarded by identity, which is what
-                # stops one account's tokens landing in another's slot.
-                self.store.write_credentials(previous.number, live)
-                synced_back = True
+                previous_credentials = self.store.read_credentials(previous.number)
+                synced_back = not _live_login_is_older(previous_credentials or {}, live)
+                if synced_back:
+                    self.store.write_credentials(previous.number, live)
             else:
                 synced_back = False
 
+            target_tokens = target_credentials.get("tokens") or {}
+            if (
+                access_token_expiry(target_tokens) is not None
+                and needs_refresh(target_tokens, now=time.time())
+            ):
+                if not self._refresh_is_safe(target):
+                    raise SwitchError("Quit Codex before refreshing this account and switching.")
+                try:
+                    target_credentials = self._refresh_and_persist(target, target_credentials)
+                except UsageError as error:
+                    raise SwitchError(
+                        f"Cannot switch; your current login was not replaced. {error}"
+                    ) from error
             write_auth(target_credentials)
             self.store.set_active(target.number)
 
@@ -313,28 +361,51 @@ class CodexSwitcher:
             UsageError: The call failed, including a refresh that could not be
                 completed.
         """
+        refreshed = False
+        with self.store.lock():
+            credentials = self._credentials_with_live_updates(account)
+            tokens = credentials.get("tokens") or {}
+            if (
+                allow_refresh
+                and needs_refresh(tokens, now=time.time())
+                and self._refresh_is_safe(account)
+            ):
+                credentials = self._refresh_and_persist(account, credentials)
+                tokens = credentials["tokens"]
+                refreshed = True
+
+        try:
+            return fetcher(tokens)
+        except UsageAuthError:
+            with self.store.lock():
+                latest = self._credentials_with_live_updates(account)
+                if latest.get("tokens") != tokens:
+                    credentials = latest
+                elif refreshed or not allow_refresh or not self._refresh_is_safe(account):
+                    raise
+                else:
+                    credentials = self._refresh_and_persist(account, latest)
+            return fetcher(credentials.get("tokens") or {})
+
+    def _credentials_with_live_updates(self, account: CodexAccount) -> dict:
+        """Reconcile a saved login while the caller holds the store lock."""
+        current = self.resolve(account.number)
+        if current.account_id != account.account_id:
+            raise SwitchError("This saved Codex account changed. Refresh the account list and try again.")
         credentials = self.store.read_credentials(account.number)
         if credentials is None:
             raise SwitchError(
                 f"Slot {account.number} ({account.display_label}) has no saved "
                 "credential."
             )
-        tokens = credentials.get("tokens") or {}
-
-        if (
-            allow_refresh
-            and needs_refresh(tokens, now=time.time())
-            and self._refresh_is_safe(account)
-        ):
-            tokens = self._refresh_and_persist(account, credentials, tokens)
-
-        try:
-            return fetcher(tokens)
-        except UsageAuthError:
-            if not allow_refresh or not self._refresh_is_safe(account):
-                raise
-            tokens = self._refresh_and_persist(account, credentials, tokens)
-            return fetcher(tokens)
+        live = read_auth()
+        if has_live_login(live) and account.identity.matches(identity_from_auth(live)):
+            if _live_login_is_older(credentials, live):
+                return credentials
+            if live != credentials:
+                self.store.write_credentials(account.number, live)
+            credentials = live
+        return credentials
 
     def usage_for(self, identifier: str, *, allow_refresh: bool = True) -> CodexUsage:
         """Read one managed account's quota.
@@ -369,29 +440,31 @@ class CodexSwitcher:
         )
 
     def _refresh_and_persist(
-        self, account: CodexAccount, credentials: dict, tokens: dict
+        self, account: CodexAccount, credentials: dict
     ) -> dict:
-        """Rotate this slot's tokens and save them before returning.
+        """Rotate and persist credentials while the caller holds the store lock.
 
         Persisting first is the whole point: the previous refresh token is dead
         as soon as the new one is issued, so anything that happens between the
         refresh and the write costs the account.
         """
+        tokens = credentials.get("tokens") or {}
         try:
             rotated = refresh_tokens(tokens)
         except TokenRefreshError as e:
             raise UsageError(f"{account.display_label}: {e}") from e
         updated = dict(credentials)
         updated["tokens"] = rotated
-        with self.store.lock():
-            self.store.write_credentials(account.number, updated)
-            # The live auth.json holds the same credential when this slot is
-            # active, and Codex reads the FILE, not our backup -- leaving it on
-            # the superseded token would make the next Codex request fail.
-            if self._live_account_id() == account.account_id:
-                write_auth(updated)
+        updated["last_refresh"] = datetime.now(UTC).isoformat()
+        self.store.write_credentials(account.number, updated)
+        live = read_auth()
+        if (
+            account.identity.matches(identity_from_auth(live))
+            and live.get("tokens") == tokens
+        ):
+            write_auth(updated)
         _logger.info("Refreshed Codex tokens for slot %s", account.number)
-        return rotated
+        return updated
 
     def usage_all(self) -> dict[str, CodexUsage | Exception]:
         """Quota for every managed account, keyed by slot.

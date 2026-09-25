@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from claude_swap.client_support import CLAUDE_SWITCH_NOTICE
+from claude_swap.codex.processes import running_codex_processes
 from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.settings import SETTING_SPECS, AutoSwitchSettings, load_settings
 
@@ -131,6 +132,12 @@ class ProviderActions:
             try:
                 if provider == "claude":
                     return self._claude_result(switcher.switch_to(number, json_output=True))
+                if running_codex_processes():
+                    raise ProviderActionError(
+                        "Quit Codex completely before switching, including its desktop app "
+                        "and terminal sessions. Then switch here and reopen Codex; "
+                        "your current login has not been changed."
+                    )
                 result = switcher.switch_to(number)
                 message = f"Switched to {result.account.display_label}."
                 if result.restart_required:
