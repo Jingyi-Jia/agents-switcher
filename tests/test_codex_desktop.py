@@ -568,6 +568,7 @@ def test_linux_protected_relevant_or_inconsistent_commands_remain_unknown(scan, 
 
 
 @pytest.mark.skipif(_NATIVE_PLATFORM != "linux", reason="Exercises Linux non-dumpable process metadata")
+@pytest.mark.xdist_group("native-codex-processes")
 def test_native_linux_protected_background_process_does_not_hide_codex(monkeypatch):
     monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="linux"))
     monkeypatch.setattr(cd.os, "getuid", _NATIVE_GETUID)
@@ -628,6 +629,11 @@ def test_windows_verified_scan_supports_manual_switching(scan, monkeypatch, rows
     args, kwargs = scan.run.call_args
     assert args[0][-1] == cd._WINDOWS_SCRIPT
     assert "GetOwnerSid" in cd._WINDOWS_SCRIPT
+    assert "$PSModuleAutoLoadingPreference = 'None'" in cd._WINDOWS_SCRIPT
+    assert r'Import-Module "$PSHOME\Modules\CimCmdlets\CimCmdlets.psd1" -ErrorAction Stop' in cd._WINDOWS_SCRIPT
+    assert r'Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1" -ErrorAction Stop' in cd._WINDOWS_SCRIPT
+    assert cd._WINDOWS_SCRIPT.index("Microsoft.PowerShell.Utility") < cd._WINDOWS_SCRIPT.index("CimCmdlets")
+    assert kwargs["timeout"] == 10
     assert kwargs["check"] is True
     assert "tasklist" not in str(scan.run.call_args_list)
 
@@ -664,6 +670,48 @@ def test_windows_other_users_missing_command_is_ignored(scan, monkeypatch):
     scan.run.side_effect = None
     scan.run.return_value = subprocess.CompletedProcess([], 0, json.dumps(windows_payload([row])), "")
     assert scan.backend.status()["running"] is False
+
+
+@pytest.mark.skipif(_NATIVE_PLATFORM != "win32", reason="Exercises native Windows process metadata")
+@pytest.mark.xdist_group("native-codex-processes")
+def test_native_windows_status_reads_harmless_node_arguments(monkeypatch):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required for the native Windows process smoke test")
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(cd.os, "kill", _NATIVE_KILL)
+    monkeypatch.setattr(cd.subprocess, "run", _NATIVE_RUN)
+    monkeypatch.setattr(cd.subprocess, "Popen", _NATIVE_POPEN)
+    original = cd._windows_processes
+    seen = []
+
+    def read():
+        try:
+            processes = original()
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            raise AssertionError("Native Windows process scan failed before classification") from error
+        seen.extend(process.pid for process in processes)
+        return processes
+
+    monkeypatch.setattr(cd, "_windows_processes", read)
+    environment = {key: value for key, value in os.environ.items()
+                   if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"}}
+    with subprocess.Popen(
+        [node, "-e", "process.stdin.resume()"], env=environment,
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ) as process:
+        try:
+            assert process.poll() is None
+            status = cd.CodexDesktop().status()
+            assert status["available"] is True, status["message"]
+            assert process.pid in seen
+        finally:
+            process.stdin.close()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
 
 
 def test_mac_kernel_arguments_preserve_spaces_and_do_not_parse_environment():
@@ -768,6 +816,7 @@ def test_linux_native_metadata_rejects_missing_or_truncated_arguments(monkeypatc
 
 
 @pytest.mark.skipif(_NATIVE_PLATFORM not in {"darwin", "linux"}, reason="Exercises native POSIX process metadata")
+@pytest.mark.xdist_group("native-codex-processes")
 def test_native_posix_status_reads_harmless_node_arguments(monkeypatch):
     node = shutil.which("node")
     if node is None:

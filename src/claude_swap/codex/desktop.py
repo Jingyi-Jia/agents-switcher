@@ -41,7 +41,10 @@ function run(argv) {
 }'''
 _WINDOWS_SCRIPT = r'''
 $ErrorActionPreference = 'Stop'
+$PSModuleAutoLoadingPreference = 'None'
 try {
+    Import-Module "$PSHOME\Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1" -ErrorAction Stop
+    Import-Module "$PSHOME\Modules\CimCmdlets\CimCmdlets.psd1" -ErrorAction Stop
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
         $_.Name -match '^(codex.*|node|nodejs|bun)(\.exe)?$'
