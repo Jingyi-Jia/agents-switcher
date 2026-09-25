@@ -14,7 +14,7 @@ import pytest
 from claude_swap.codex.autoswitch import Action, AutoDecision
 from claude_swap.codex.identity import CodexIdentity
 from claude_swap.codex.store import CodexAccount, CodexAccountStore
-from claude_swap.codex.switcher import CodexSwitcher, SwitchResult
+from claude_swap.codex.switcher import CodexStatus, CodexSwitcher, SwitchResult
 from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow
 from claude_swap.providers import MAX_EVENTS, ProviderActionError, ProviderActions
 from claude_swap.settings import SETTING_SPECS
@@ -41,6 +41,13 @@ class Codex:
 
     def list_accounts(self):
         return list(self.accounts)
+
+    def status(self):
+        account = next((a for a in self.accounts if a.number == self.active), None)
+        return CodexStatus(
+            bool(account), account.identity if account else None,
+            account, account.number if account else None,
+        )
 
     def usage_all(self):
         return self.usage

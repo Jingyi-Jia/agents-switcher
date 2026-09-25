@@ -61,6 +61,30 @@ def test_initial_eof_exits_without_creating_a_store(monkeypatch):
     assert not status.getvalue()
 
 
+def test_native_tls_is_initialized_before_provider_state_and_server(monkeypatch):
+    events = []
+    serve = desktop.serve
+
+    def build_state(*, state_class):
+        assert events == ["tls"]
+        events.append("state")
+        return state_class()
+
+    def start_server(*args, **kwargs):
+        assert events == ["tls", "state"]
+        events.append("server")
+        return serve(*args, **kwargs)
+
+    monkeypatch.setattr(desktop, "use_native_tls", lambda: events.append("tls"))
+    monkeypatch.setattr(desktop, "_build_state", build_state)
+    monkeypatch.setattr(desktop, "serve", start_server)
+    status = io.StringIO()
+
+    assert desktop.run(lines(start_message(), {"type": "shutdown"}), status) == 0
+    assert events == ["tls", "state", "server"]
+    assert json.loads(status.getvalue())["type"] == "ready"
+
+
 @pytest.mark.parametrize("finish", [[], [{"type": "shutdown"}]])
 def test_shutdown_and_eof_close_server_and_actions_without_exposing_token(monkeypatch, finish):
     state = desktop.DesktopState()

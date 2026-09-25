@@ -19,6 +19,7 @@ import argparse
 import json
 import sys
 
+from claude_swap.codex.auth_file import CodexAuthError
 from claude_swap.codex.autoswitch import Action, AutoSettings, run_once
 from claude_swap.codex.switcher import CodexSwitcher
 from claude_swap.codex.usage import CodexUsage
@@ -71,7 +72,7 @@ def _print_status(switcher: CodexSwitcher, as_json: bool) -> None:
 
 def _print_list(switcher: CodexSwitcher, as_json: bool) -> None:
     accounts = switcher.list_accounts()
-    active = switcher.store.active_number()
+    active = switcher.status().active_number
     if as_json:
         print(json.dumps({
             "activeNumber": active,
@@ -229,7 +230,7 @@ def _print_usage(switcher: CodexSwitcher, target: str | None, as_json: bool) -> 
     if not accounts:
         print(dimmed("No Codex accounts are managed yet."))
         return
-    active = switcher.store.active_number()
+    active = switcher.status().active_number
     print(bolded("Codex usage:"))
     for account in accounts:
         result = results.get(account.number)
@@ -586,7 +587,7 @@ auth.json once at startup and will not adopt a different account mid-run.
                 print(f"{accent('Removed alias')} for slot {updated.number}")
             else:
                 print(f"{accent('Set alias')} '{updated.alias}' for slot {updated.number}")
-    except (ClaudeSwitchError, ValueError) as e:
+    except (ClaudeSwitchError, CodexAuthError, ValueError) as e:
         if args.json:
             print(json.dumps({"error": str(e)}, indent=2))
         else:

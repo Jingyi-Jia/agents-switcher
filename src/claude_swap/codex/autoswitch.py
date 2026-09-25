@@ -337,7 +337,7 @@ def run_once(
     states = collect_states(switcher)
     decision = decide(
         states,
-        active_number=switcher.store.active_number(),
+        active_number=switcher.status().active_number,
         settings=settings,
         processes=tuple(running_codex_processes()),
         now=now,

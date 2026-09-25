@@ -15,7 +15,9 @@ Read the implementation and nearby tests before changing a provider's behavior.
   and Desktop are supported when they use the same `auth.json`; keyring-only and
   API-key logins are not. Quit both Codex clients before switching.
   Claude Desktop, including its Code tab, has a separate sign-in and is not
-  switched. Keep that boundary consistent with
+  switched by the CLI-account actions. The app/dashboard's experimental Desktop
+  profile launcher is independent; it launches empty or saved local profiles,
+  never imports CLI credentials or confirms a signed-in identity. Keep that boundary consistent with
   [client_support.py](src/claude_swap/client_support.py).
 - The standalone Electron shell bundles a frozen backend, not provider CLIs.
   `agent-switch app install` is a browser-launcher shortcut, not that app.
@@ -34,6 +36,7 @@ Read the implementation and nearby tests before changing a provider's behavior.
 | Terminal UI | [tui/](src/claude_swap/tui/): Textual provider chooser, account dashboards and modals. |
 | Browser and tray | [web/server.py](src/claude_swap/web/server.py), [web/page.py](src/claude_swap/web/page.py), [web/cli.py](src/claude_swap/web/cli.py), [web/tray.py](src/claude_swap/web/tray.py), [web/launcher.py](src/claude_swap/web/launcher.py). |
 | Standalone app | [desktop.py](src/claude_swap/desktop.py): private backend protocol; [desktop/src/](desktop/src/): Electron lifecycle and security; [desktop/scripts/](desktop/scripts/): freezing and smoke tests. |
+| Claude Desktop profiles | [claude_desktop.py](src/claude_swap/claude_desktop.py): experimental macOS/Linux launcher, private label registry, process interlock and profile directories. Separate from provider accounts and automatic switching. |
 | Tests and CI | [tests/](tests/), [desktop/test/](desktop/test/), [.github/workflows/](.github/workflows/). |
 
 ## Supported command and JSON entry points
@@ -67,6 +70,18 @@ UI surface, not a promised public SDK. The Electron stdin/stdout protocol in
 [desktop.py](src/claude_swap/desktop.py) and
 [backend.cjs](desktop/src/backend.cjs) is private; do not expose its token in logs,
 command-line arguments or screenshots.
+
+Both CLI and desktop startup initialize native TLS through
+[tls.py](src/claude_swap/tls.py) before provider clients or workers run. Preserve
+certificate and hostname verification, including when native trust is unavailable.
+
+The experimental Desktop panel reads `claudeDesktop` in `/api/state`. Its private
+POST routes are `/api/claude-desktop/create` (`name`, `confirm: true`) and
+`/api/claude-desktop/open` (`profileId`, `confirm: true`); `profileId: "default"`
+opens the usual Claude profile without a user-data override. `canCreate` is
+independent of installation and process detection; creation does not launch.
+Launch success never means authenticated or account-switched. There is
+no Desktop-profile CLI/TUI command or automatic-switch policy.
 
 ## Setup, tests and builds
 
@@ -107,7 +122,7 @@ uv run --no-sync python desktop/scripts/build_backend.py
 On Linux, smoke-test the frozen helper before opening the app:
 
 ```bash
-uv run --no-sync python desktop/scripts/smoke_backend.py
+uv run --no-sync python desktop/scripts/smoke_backend.py --check-processes
 npm start --prefix desktop
 ```
 
@@ -152,6 +167,10 @@ are in [desktop/README.md](desktop/README.md) and
    `ProviderActions.add_current` calls `add_current(refresh_existing=True)` to
    refresh a saved slot; the CLI's `codex add` does not. Regression coverage:
    [test_codex_login_recovery.py](tests/test_codex_login_recovery.py).
+   Display and selection decisions must use the live login reported by
+   `CodexSwitcher.status()`, not the historical store active marker. An unmanaged
+   or missing live login is not an active managed account; an unreadable auth
+   file is an error, never permission to fall back to the saved marker.
 6. **Dry-run is not a credential sandbox.** It prevents account switching, but
    usage collection may refresh tokens or write cache data. Keep automation
    selection based on eligible, sufficiently fresh data, not display-only
@@ -163,6 +182,17 @@ are in [desktop/README.md](desktop/README.md) and
    snapshots or attachments. Keep the dashboard loopback-bound by default and
    retain token/origin checks. Preserve Electron's sandbox, navigation and
    external-link restrictions in [security.cjs](desktop/src/security.cjs).
+8. **Desktop profiles remain experimental.** Require explicit consent, reject
+   malformed registries and linked profile directories, serialize mutations and
+   launches, and fail closed when process detection fails. Never stop Claude,
+   copy cookies, inspect its authentication files, spoof vendor test authorization,
+   or patch the official app. Use fixed installed executable locations and
+   validated stored IDs, not request-supplied paths or commands. Strip inherited
+   Claude/API/debugging overrides and give each named profile its own
+   `CLAUDE_CONFIG_DIR`. Preserve the local Chrome-pairing warning and distinguish
+   Linux empty-profile validation from still-unverified Mac signed-in persistence
+   and Code/Cowork behavior. Profile session data is sensitive even though its
+   label registry contains no tokens.
 
 ## Verification and contribution checklist
 
@@ -176,6 +206,18 @@ are in [desktop/README.md](desktop/README.md) and
 - Test JSON by parsing it and checking exit codes, not by comparing colored
   terminal text. Account-list and usage commands can make authenticated requests;
   mock transports or use empty disposable stores for documentation checks.
+- Desktop profile coverage: [test_claude_desktop.py](tests/test_claude_desktop.py)
+  mocks every app launch and checks registry, process, environment and HTTP
+  boundaries; [test_claude_desktop_page.py](tests/test_claude_desktop_page.py)
+  checks consent and rendering. Do not run native sign-ins as an unattended test.
+  [test_claude_desktop_processes.py](tests/test_claude_desktop_processes.py) also
+  covers macOS's `<defunct>` zombie marker and signed 32-bit UID formatting
+  (`nobody` appears as `-2`). It creates a short-lived nobody-owned process only
+  on disposable macOS CI, never on a developer's workstation. Normalize signed
+  Mac UIDs before comparing ownership. Skip only confirmed zombies; missing
+  commands on live rows must still block launch.
+  Packaging CI runs `--check-processes` on the frozen and bundled helper even
+  when Claude is not installed, so installation detection cannot hide a scan failure.
 - Keep the human [README](README.md), this guide, CLI help and visible notices
   aligned with implemented behavior. Do not advertise Claude Desktop profile
   switching before it exists and has safety tests.

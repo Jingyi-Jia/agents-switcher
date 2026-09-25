@@ -97,10 +97,13 @@ class CodexScreen(DashboardScreen):
         await asyncio.to_thread(self.actions.close)
 
     def _rebuild(self) -> None:
-        accounts = self.switcher.list_accounts()
-        self.snapshot = codex_snapshot(
-            accounts, self.switcher.store.active_number(), self._usage, self._fetched_at,
-        )
+        try:
+            accounts = self.switcher.list_accounts()
+            self.snapshot = codex_snapshot(
+                accounts, self.switcher.status().active_number, self._usage, self._fetched_at,
+            )
+        except Exception as exc:
+            self._refresh_failed(safe_error(exc, include_detail=True))
 
     def request_refresh(self) -> None:
         if self.app._claude_active or not self.is_mounted:
@@ -120,7 +123,7 @@ class CodexScreen(DashboardScreen):
                 usage = {(a.number, a.account_id): usage.get(a.number) for a in accounts}
                 fetched_at = time.time()
                 snapshot = codex_snapshot(
-                    accounts, self.switcher.store.active_number(), usage, fetched_at,
+                    accounts, self.switcher.status().active_number, usage, fetched_at,
                 )
                 revision = self.actions.revision
             if self.is_mounted:
@@ -146,6 +149,7 @@ class CodexScreen(DashboardScreen):
     def _refresh_failed(self, message: str) -> None:
         self._refreshing = False
         self._refresh_again = False
+        self.snapshot = None
         self.refresh_status = f"Could not load quota: {message}"
         self._status(self.refresh_status)
 

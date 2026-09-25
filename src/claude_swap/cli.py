@@ -21,6 +21,7 @@ from claude_swap.printer import (
 )
 from claude_swap.settings import load_ui_settings
 from claude_swap.switcher import ClaudeAccountSwitcher
+from claude_swap.tls import use_native_tls
 
 
 def _prog_name() -> str:
@@ -890,31 +891,6 @@ Examples:
         sys.exit(130)
 
 
-def _use_native_tls() -> None:
-    """Route TLS trust decisions through the OS-native verifier.
-
-    Claude's token endpoint (``platform.claude.com``) serves a Let's Encrypt
-    chain. Python's stdlib ``ssl`` uses OpenSSL, which on Windows loads the
-    system cert store as a flat set and matches CA certs by *subject name*, so a
-    stale, expired duplicate of an intermediate (e.g. an old ``ISRG Root X2``
-    left in the user's store) can shadow the valid path and fail verification
-    with "certificate has expired" even though the served chain is valid — which
-    silently breaks inactive-account token refresh. The OS-native verifiers
-    (SChannel on Windows, SecureTransport on macOS) build the chain correctly
-    and don't trip on the expired duplicate — the same reason Claude Code (Node,
-    with its own bundled roots) is unaffected. ``truststore`` delegates to them.
-
-    Best-effort: on any failure fall back to stdlib ``ssl`` rather than block
-    the CLI over a TLS-trust nicety.
-    """
-    try:
-        import truststore
-
-        truststore.inject_into_ssl()
-    except Exception:
-        pass
-
-
 def _menubar_service(args) -> int:
     """Handle ``menubar --install-service|--uninstall-service|--service-status``.
 
@@ -976,7 +952,7 @@ def _menubar_service(args) -> int:
 def main() -> None:
     """Main entry point for the CLI."""
     force_utf8_output()
-    _use_native_tls()
+    use_native_tls()
     argv = sys.argv[1:]
     explicit_claude = bool(argv and argv[0] == "claude")
     if explicit_claude:

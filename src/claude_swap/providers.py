@@ -202,11 +202,11 @@ class ProviderActions:
                 from claude_swap.codex.autoswitch import collect_states
 
                 states = collect_states(switcher)
+                active = switcher.status().active_number
                 eligible = [s for s in states if s.eligible and not s.account.disabled]
                 if not eligible:
                     return {"ok": False, "switched": False, "reason": "no-target",
                             "message": "No enabled Codex account has known included quota left."}
-                active = switcher.store.active_number()
                 best = max(eligible, key=lambda s: (s.headroom or 0.0, s.account.number == active))
                 if best.account.number == active:
                     return {"ok": True, "switched": False, "reason": "already-active",

@@ -69,7 +69,7 @@ build-backend = "hatchling.build"
 packages = ["src/claude_swap"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5", "trustme>=1.2.1"]
 desktop-build = ["pyinstaller==6.22.3"]
 
 [tool.pytest.ini_options]

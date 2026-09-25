@@ -82,6 +82,13 @@ directories, does not inherit provider tokens or Python environment overrides,
 and disables Python keyring discovery. It tests the private stdin handshake,
 authentication, both provider state collectors with empty accounts, and shutdown
 by both a control message and stdin EOF. It never prints the session token.
+Add `--check-tls` to also require native certificate trust in the frozen helper
+and make credential-free HTTPS HEAD requests to `chatgpt.com`, `auth.openai.com`,
+`api.anthropic.com`, and `platform.claude.com`. This opt-in check needs network
+access; HTTP denials are acceptable, but TLS verification failures are not.
+CI enables it for both the newly frozen helper and the copy inside each app.
+Normal app startup does not make these probes. The Python TLS tests separately
+verify rejection of untrusted certificates and mismatched hostnames on loopback.
 On macOS and Windows, HOME isolation does **not** isolate the system credential
 store. Run the test only in a disposable VM/CI runner with
 `--disposable-runner`; the script refuses other native runs by default. Do not
