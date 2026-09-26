@@ -89,6 +89,8 @@ def test_rejection_never_drains_ambiguous_or_unbounded_framing(rejected_post, he
     handler.rfile.read.assert_not_called()
     handler.rfile.read1.assert_not_called()
     handler.connection.settimeout.assert_not_called()
+    handler.connection.setblocking.assert_not_called()
+    handler.connection.recv.assert_not_called()
     assert handler.close_connection is True
     assert rejected_post.state.mock_calls == []
 
@@ -148,6 +150,147 @@ def test_rejection_still_succeeds_if_socket_timeout_cannot_be_set(rejected_post)
 
     handler._json.assert_called_once_with(403, {"error": "bad or missing token"})
     handler.rfile.read1.assert_not_called()
+
+
+def test_malformed_framing_finish_discards_late_raw_transport_without_http_body_read(rejected_post):
+    handler = rejected_post.handler
+    handler.headers = HTTPMessage()
+    handler.headers["Transfer-Encoding"] = "chunked"
+    left, right = socket.socketpair()
+    try:
+        handler.connection = left
+
+        handler.do_POST()
+        right.sendall(b"8\r\nnot-json\r\n0\r\n\r\n")
+        right.shutdown(socket.SHUT_WR)
+        handler.finish()
+
+        handler._json.assert_called_once_with(403, {"error": "bad or missing token"})
+        handler.rfile.read.assert_not_called()
+        handler.rfile.read1.assert_not_called()
+        assert left.recv(1) == b""
+        assert rejected_post.state.mock_calls == []
+    finally:
+        left.close()
+        right.close()
+
+
+def test_malformed_framing_finish_stops_on_peer_eof(rejected_post):
+    handler = rejected_post.handler
+    handler.headers = HTTPMessage()
+    handler.headers["Transfer-Encoding"] = "chunked"
+    left, right = socket.socketpair()
+    right.close()
+    try:
+        handler.connection = left
+
+        handler.do_POST()
+        handler.finish()
+
+        handler.rfile.read.assert_not_called()
+        handler.rfile.read1.assert_not_called()
+        assert rejected_post.state.mock_calls == []
+    finally:
+        left.close()
+
+
+def test_malformed_framing_finish_ignores_socket_errors(rejected_post, monkeypatch):
+    handler = rejected_post.handler
+    handler.headers = HTTPMessage()
+    handler.headers["Transfer-Encoding"] = "chunked"
+    handler.connection.recv.side_effect = OSError()
+    monkeypatch.setattr(server.select, "select", Mock(return_value=([handler.connection], [], [])))
+
+    handler.do_POST()
+    handler.finish()
+
+    handler.rfile.read.assert_not_called()
+    handler.rfile.read1.assert_not_called()
+    handler.connection.recv.assert_called_once_with(8192)
+    assert rejected_post.state.mock_calls == []
+
+
+def test_malformed_framing_finish_handles_spurious_readiness(rejected_post, monkeypatch):
+    handler = rejected_post.handler
+    handler.headers = HTTPMessage()
+    handler.headers["Transfer-Encoding"] = "chunked"
+    handler.connection.recv.side_effect = [BlockingIOError(), b"x", b""]
+    monkeypatch.setattr(server.select, "select", Mock(return_value=([handler.connection], [], [])))
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(monotonic=Mock(side_effect=[0.0, 0.05, 0.10, 0.15])),
+    )
+
+    handler.do_POST()
+    handler.finish()
+
+    handler.connection.setblocking.assert_called_once_with(False)
+    assert handler.connection.recv.call_args_list == [call(8192), call(8192), call(8192)]
+    handler.rfile.read.assert_not_called()
+    handler.rfile.read1.assert_not_called()
+    assert rejected_post.state.mock_calls == []
+
+
+def test_malformed_framing_finish_shares_total_deadline(rejected_post, monkeypatch):
+    handler = rejected_post.handler
+    handler.headers = HTTPMessage()
+    handler.headers["Transfer-Encoding"] = "chunked"
+    select_mock = Mock(return_value=([handler.connection], [], []))
+    monkeypatch.setattr(server.select, "select", select_mock)
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(
+            monotonic=Mock(side_effect=[0.0, server.REJECTION_DRAIN_TIMEOUT_S + 0.01]),
+        ),
+    )
+
+    handler.do_POST()
+    handler.finish()
+
+    select_mock.assert_not_called()
+    handler.connection.recv.assert_not_called()
+    handler.rfile.read.assert_not_called()
+    handler.rfile.read1.assert_not_called()
+    assert rejected_post.state.mock_calls == []
+
+
+def test_declared_body_drain_and_finish_share_byte_budget(rejected_post, monkeypatch):
+    handler = rejected_post.handler
+    handler.headers.replace_header("Content-Length", "2")
+    handler.rfile.read1.return_value = b"ab"
+    handler.connection.recv.return_value = b"xyz"
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 5)
+    monkeypatch.setattr(server.select, "select", Mock(return_value=([handler.connection], [], [])))
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(monotonic=Mock(side_effect=[0.0, 0.01, 0.02])),
+    )
+
+    handler.do_POST()
+    handler.finish()
+
+    handler.rfile.read1.assert_called_once_with(2)
+    handler.connection.recv.assert_called_once_with(3)
+    assert handler._reject_transport_remaining == 0
+    assert rejected_post.state.mock_calls == []
+
+
+def test_consumed_body_rejection_finish_discards_unread_extra_bytes(rejected_post, monkeypatch):
+    handler = rejected_post.handler
+    handler.headers["X-Auth-Token"] = "test-web-auth"
+    handler.headers.replace_header("Content-Length", "1")
+    handler.rfile.read.return_value = b"{"
+    handler.connection.recv.side_effect = [b"extra", b""]
+    monkeypatch.setattr(server.select, "select", Mock(return_value=([handler.connection], [], [])))
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(monotonic=Mock(side_effect=[0.0, 0.01, 0.02])),
+    )
+
+    handler.do_POST()
+    handler.finish()
+
+    assert handler._json.call_args.args[0] == 400
+    handler.rfile.read.assert_called_once_with(1)
+    handler.rfile.read1.assert_not_called()
+    assert handler.connection.recv.call_args_list == [call(8192), call(8192)]
+    assert rejected_post.state.mock_calls == []
 
 
 def test_content_type_rejection_drains_without_parsing(rejected_post, monkeypatch):
@@ -257,6 +400,54 @@ def test_rejection_reaches_client_before_delayed_body_is_drained(
             connection.sendall(body)
             assert drained.wait(2)
             assert bytes(received) == body
+            assert connection.recv(1) == b""
+        finally:
+            response.close()
+
+    assert web.state._claude.calls == []
+    assert web.state._codex.calls == []
+
+
+def test_chunked_rejection_returns_400_before_transport_close(web):
+    connection = http.client.HTTPConnection("127.0.0.1", web.server.server_port, timeout=5)
+    try:
+        connection.request(
+            "POST", "/api/add", body=b'{"provider":"claude"}',
+            headers={
+                "X-Auth-Token": web.token,
+                "Content-Type": "application/json",
+                "Transfer-Encoding": "chunked",
+            },
+        )
+        response = connection.getresponse()
+        try:
+            assert response.status == 400
+            assert json.loads(response.read())
+        finally:
+            response.close()
+    finally:
+        connection.close()
+
+    assert web.state._claude.calls == []
+    assert web.state._codex.calls == []
+
+
+def test_chunked_rejection_gracefully_discards_late_bytes_after_response(web):
+    body = b"8\r\nnot-json\r\n0\r\n\r\n"
+    headers = [
+        "POST /api/add HTTP/1.1", "Host: 127.0.0.1",
+        "Transfer-Encoding: chunked", "Content-Type: application/json",
+        f"X-Auth-Token: {web.token}",
+    ]
+
+    with socket.create_connection(("127.0.0.1", web.server.server_port), timeout=5) as connection:
+        connection.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii"))
+        response = http.client.HTTPResponse(connection)
+        try:
+            response.begin()
+            assert response.status == 400
+            assert json.loads(response.read())
+            connection.sendall(body)
             assert connection.recv(1) == b""
         finally:
             response.close()
