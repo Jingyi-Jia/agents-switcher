@@ -33,6 +33,6 @@ with tempfile.TemporaryDirectory() as root:
                 print("DELETE_PENDING", label, type(error).__name__, "winerror", error.winerror, flush=True)
     finally:
         kernel.CloseHandle(handle)
-    path.mkdir()
+    path.mkdir(exist_ok=True)
     path.rmdir()
     print("AFTER_HANDLE_CLOSE mkdir succeeded", flush=True)
