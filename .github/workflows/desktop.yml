@@ -41,6 +41,6 @@ jobs:
           status=0
           for attempt in $(seq 1 24); do
             echo "STASH_REPLICA=$attempt"
-            uv run --no-sync pytest -n 0 -s -p stash_trace tests/test_switcher.py::TestStashManifestConcurrentMutation || status=1
+            uv run --no-sync python -m pytest -n 0 -s -p stash_trace tests/test_switcher.py::TestStashManifestConcurrentMutation || status=1
           done
           exit "$status"
