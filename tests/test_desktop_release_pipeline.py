@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import urllib.error
+import urllib.response
 from unittest.mock import Mock
 import zipfile
 
@@ -462,7 +463,7 @@ def test_release_api_fails_closed_without_echoing_response_bodies_or_tokens(rele
     monkeypatch.setenv("GH_TOKEN", "synthetic-private-token")
     error = urllib.error.HTTPError("https://api.github.com", status, "private-response", {}, None)
     request = Mock(side_effect=error)
-    monkeypatch.setattr(release_script.urllib.request, "urlopen", request)
+    monkeypatch.setattr(release_script.urllib.request, "build_opener", Mock(return_value=Mock(open=request)))
     if status == 404 and missing_ok:
         assert release_script.GitHub().request("GET", "releases/tags/v3.2.1", missing_ok=True) is None
     else:
@@ -473,3 +474,33 @@ def test_release_api_fails_closed_without_echoing_response_bodies_or_tokens(rele
     assert outgoing.full_url.startswith(f"https://api.github.com/repos/{release_script.REPOSITORY}/")
     assert outgoing.headers["Authorization"] == "Bearer synthetic-private-token"
     assert request.call_args.kwargs == {"timeout": 60}
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+@pytest.mark.parametrize("target", ["https://unexpected.invalid/capture", "http://unexpected.invalid/capture", "https://api.github.com/moved"])
+def test_release_api_never_forwards_a_bearer_header_to_any_redirect(release_script, monkeypatch, status, target):
+    monkeypatch.setenv("GH_TOKEN", "synthetic-private-token")
+    requests = []
+
+    class SyntheticTransport(release_script.urllib.request.BaseHandler):
+        handler_order = 499
+
+        def https_open(self, request):
+            requests.append((request.full_url, request.get_header("Authorization")))
+            headers = {"Location": target} if len(requests) == 1 else {}
+            response = urllib.response.addinfourl(io.BytesIO(b"{}"), headers, request.full_url,
+                                                 status if len(requests) == 1 else 200)
+            response.msg = "private redirect message"
+            return response
+
+        http_open = https_open
+
+    build_opener = release_script.urllib.request.build_opener
+    monkeypatch.setattr(release_script.urllib.request, "build_opener",
+                        lambda *handlers: build_opener(*handlers, SyntheticTransport()))
+    with pytest.raises(RuntimeError, match=f"^GitHub release request failed \\(HTTP {status}\\)$") as failure:
+        release_script.GitHub().request("GET", "releases/tags/v3.2.1", missing_ok=True)
+    assert requests == [(f"https://api.github.com/repos/{release_script.REPOSITORY}/releases/tags/v3.2.1",
+                         "Bearer synthetic-private-token")]
+    assert "private" not in str(failure.value)
+    assert "unexpected" not in str(failure.value)
