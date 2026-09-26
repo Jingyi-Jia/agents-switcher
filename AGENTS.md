@@ -78,19 +78,28 @@ Both CLI and desktop startup initialize native TLS through
 certificate and hostname verification, including when native trust is unavailable.
 
 Standalone updates use a sandboxed preload's zero-argument
-`window.agentSwitchUpdater` methods, never an HTTP update endpoint. Keep the
-feed fixed to this repository's public stable releases; never accept a renderer
-feed URL, executable, path, or credential. Checks, downloads, and installation are
-deliberate actions, and normal quit must never install a downloaded update.
-Validate the IPC sender and main frame; expose only sanitized state. Installation
-requires native confirmation and a confirmed clean backend exit. The desktop
-backend drains HTTP requests before exiting, including profile and
-analytics work outside the credential-action lock; do not restore daemon request
-threads for this helper. Retain signed macOS/Windows gates, strict signature
-checks, separate Mac architecture metadata,
-and the Linux writable-AppImage restriction. Development and preview builds must
-remain explicitly unsupported. A verified package or mocked updater test is not
-proof that a signed end-to-end upgrade or public release occurred.
+`window.agentSwitchUpdater` methods, including `viewRelease()`, never an HTTP
+update endpoint. Keep the release target fixed to this repository; never accept a
+renderer URL, feed, executable, path, token, or credential. Community mode is
+manual: a user-initiated check reports availability without opening a browser;
+the separate `viewRelease()` action opens the corresponding fixed GitHub release
+and never downloads or self-installs an executable, even through IPC. It never
+performs automatic checks. Signed mode may retain explicit download and install
+only after native confirmation, strict signature checks, and a confirmed clean
+backend exit. Normal quit must never install a downloaded update in any mode.
+
+The implementation contract uses `agentSwitchRelease: false` and
+`agentSwitchCommunityRelease: false` by default, keeping development and preview
+builds unsupported. Community builds embed `agentSwitchRelease: false` and
+`agentSwitchCommunityRelease: true`; signed builds embed the reverse. Runtime
+state is `mode: "manual"`, `"install"`, or `"unsupported"`. Validate the IPC
+sender and main frame; expose only sanitized state. The desktop backend drains
+HTTP requests before exiting, including profile and analytics work outside the
+credential-action lock; do not restore daemon request threads for this helper.
+Retain signed macOS/Windows gates, strict signature checks, separate Mac
+architecture metadata, and the Linux writable-AppImage restriction. A verified
+package or mocked updater test is not proof of a signed end-to-end upgrade or
+public release.
 
 The experimental Desktop panel reads `claudeDesktop` in `/api/state`. Its private
 POST routes are `/api/claude-desktop/create` (`name`, optional `emailLabel`,
@@ -302,6 +311,18 @@ are in [desktop/README.md](desktop/README.md) and
   inherited names are not permission for broad compatibility-breaking renames.
 - A release workflow is not evidence of a release. Verify actual assets and
   signing results before changing download claims. Preview artifacts last 14
-  days; macOS previews are ad-hoc signed and not notarized. Public release jobs
-  require real signing credentials, never committed keys. Keep Python and desktop
-  versions aligned when preparing a release, and perform clean-machine checks.
+  days; macOS previews and community builds are ad-hoc signed and not notarized,
+  while Windows community builds are unsigned NSIS installers. The maintainer
+  workflow is displayed as **Prepare desktop release** and accepts a
+  `community`/`signed` distribution input, defaulting to `community`; it builds
+  the reviewed `main` commit, native artifacts and Python distributions, and
+  generates SHA256 checksums and provenance attestations in the actual build
+  jobs before staging a matching private draft. Community releases upload no
+  `latest*.yml` or `.blockmap` feeds; the signed path retains verified feeds and
+  signature gates. Signed jobs require real credentials and must fail closed,
+  never silently fall back; never commit keys. Keep Python and desktop versions
+  aligned for each release, and perform clean-machine checks. Attestations can be
+  checked with `gh attestation verify FILE --repo Jingyi-Jia/agents-switcher`
+  while checking the expected workflow and source; they prove claimed provenance,
+  not safe code or reproducible native binaries, and checksums alone are not
+  publisher identity.
