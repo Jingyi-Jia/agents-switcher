@@ -1,7 +1,7 @@
 {
   "name": "agents-switcher-desktop",
   "desktopName": "agent-switch-desktop",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A private desktop dashboard for Claude Code and Codex accounts",
   "main": "src/main.cjs",
   "author": "Jingyi Jia",

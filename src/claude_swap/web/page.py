@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .page_style import PAGE_STYLE
 from .page_switch import SWITCH_SCRIPT
+from .page_updates import UPDATES_SCRIPT
 from .page_usage import USAGE_SCRIPT
 
 PAGE_HTML = r"""<!doctype html>
@@ -90,12 +91,27 @@ PAGE_HTML = r"""<!doctype html>
   <section id="view-settings" aria-labelledby="settings-title" hidden>
     <header class="page-heading"><div><div class="eyebrow">Make yourself at home</div><h2 id="settings-title" tabindex="-1">Settings</h2><p>A quieter workspace, your way.</p></div></header>
     <div class="settings-panel">
-      <h3>Appearance &amp; updates</h3>
+      <h3>Appearance &amp; live data</h3>
       <div class="setting-row"><div><label for="theme">Appearance</label><p class="hint">Follow your device, or set the mood.</p></div><select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
       <div class="setting-row"><div><label for="watch">Live updates</label><p class="hint" id="watch-status">Every 20 seconds · auto-switch runs independently</p></div><input id="watch" type="checkbox" checked></div>
       <p id="settings-lifecycle">Closing the app stops its automation. Pausing live updates only pauses this view. Use Stop in an account's auto-switch controls to stop automation.</p>
       <p class="hint">Usage history refreshes when you open Usage or choose Refresh activity, not on every live update. Profile readiness is checked while Profiles is visible.</p>
     </div>
+    <section class="settings-panel" id="app-updates" aria-labelledby="app-updates-title" hidden>
+      <h3 id="app-updates-title">App updates</h3>
+      <p class="hint" id="update-version"></p>
+      <p id="update-status" role="status" aria-live="polite">Reading update support…</p>
+      <progress id="update-progress" max="100" aria-label="Update download progress" hidden></progress>
+      <p class="hint" id="update-transfer" hidden></p>
+      <div class="actions">
+        <button type="button" id="update-check" data-action disabled>Check for updates</button>
+        <button type="button" id="update-download" data-action hidden disabled>Download update</button>
+        <button type="button" id="update-cancel" data-action hidden disabled>Cancel download</button>
+        <button type="button" id="update-install" class="primary" data-action hidden disabled>Install and restart…</button>
+        <a href="https://github.com/Jingyi-Jia/agents-switcher/releases" target="_blank" rel="noopener noreferrer">Release notes &amp; manual downloads ↗</a>
+      </div>
+      <p class="hint">Updates come from Agent Switch's stable GitHub releases. Downloads start only when you choose them. Installing asks for confirmation and restarts this app; its automatic switching stops. Your provider apps and saved accounts are not updated or removed.</p>
+    </section>
     <div class="settings-panel"><h3>Here to help</h3><p>Save existing provider logins, switch deliberately, and keep automatic selection under your control.</p><button type="button" id="help-toggle" aria-controls="desktop-guide" aria-expanded="false" hidden>Account setup &amp; help</button><p>Claude Code accounts and Claude Desktop profiles are separate. Paid-credit accounts stay manual-only; auto-switch never chooses them.</p></div>
     <div id="settings-guide-slot"></div>
   </section>
@@ -997,6 +1013,7 @@ function tokenDialog(opener) {
 
 __USAGE_SCRIPT__
 __SWITCH_SCRIPT__
+__UPDATES_SCRIPT__
 
 let preferenceQueue = Promise.resolve();
 function receivePreferences(value) {
@@ -1109,6 +1126,7 @@ $("guide-check").onclick = () => refreshUsage($("guide-check"));
 Object.keys(providers).forEach(setupHelp);
 Object.keys(providers).forEach(setupProvider);
 setupDesktopProfiles();
+setupUpdates();
 for (const view of ["accounts", "usage", "settings"]) $("nav-" + view).onclick = () => navigate(view);
 window.addEventListener("hashchange", () => navigate(location.hash.slice(1), false));
 loadPreferences();
@@ -1121,4 +1139,4 @@ setInterval(() => {
 </script>
 </body>
 </html>
-""".replace("__PAGE_STYLE__", PAGE_STYLE).replace("__USAGE_SCRIPT__", USAGE_SCRIPT).replace("__SWITCH_SCRIPT__", SWITCH_SCRIPT)
+""".replace("__PAGE_STYLE__", PAGE_STYLE).replace("__USAGE_SCRIPT__", USAGE_SCRIPT).replace("__SWITCH_SCRIPT__", SWITCH_SCRIPT).replace("__UPDATES_SCRIPT__", UPDATES_SCRIPT)
