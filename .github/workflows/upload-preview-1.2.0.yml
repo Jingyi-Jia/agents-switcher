@@ -28,7 +28,11 @@ jobs:
           python-version: "3.12"
           enable-cache: false
       - name: Rebuild the Python distributions from the merged source
-        run: uv build --out-dir "$RUNNER_TEMP/preview-assets"
+        run: |
+          uv build --out-dir "$RUNNER_TEMP/python-dist"
+          mkdir -p "$RUNNER_TEMP/preview-assets"
+          cp "$RUNNER_TEMP/python-dist/agents_switcher-1.2.0-py3-none-any.whl" "$RUNNER_TEMP/preview-assets/"
+          cp "$RUNNER_TEMP/python-dist/agents_switcher-1.2.0.tar.gz" "$RUNNER_TEMP/preview-assets/"
       - name: Retrieve and verify the exact reviewed native artifacts
         env:
           GH_TOKEN: ${{ github.token }}
