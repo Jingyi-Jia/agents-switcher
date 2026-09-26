@@ -217,10 +217,16 @@ if (!app.requestSingleInstanceLock()) {
   process.on('SIGINT', () => app.quit());
   process.on('SIGTERM', () => app.quit());
   void app.whenReady().then(async () => {
-    const runtime = await createUpdateRuntime({ app, releaseBuild: require('../package.json').agentSwitchRelease });
+    const metadata = require('../package.json');
+    const runtime = await createUpdateRuntime({ app, releaseBuild: metadata.agentSwitchRelease,
+      communityBuild: metadata.agentSwitchCommunityRelease });
     if (quitting) return;
     updates = new UpdateController({
       ...runtime, currentVersion: app.getVersion(), platform: process.platform, arch: process.arch,
+      openRelease: async url => {
+        if (quitting || recovering || !window || window.isDestroyed()) throw new Error();
+        await shell.openExternal(url);
+      },
       confirmInstall: async () => {
         if (quitting || recovering || !window || window.isDestroyed()) return false;
         const { response } = await dialog.showMessageBox({

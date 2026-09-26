@@ -4,20 +4,17 @@ const { EventEmitter } = require('node:events');
 const { CancellationToken } = require('builder-util-runtime');
 const semver = require('semver');
 const { isNavigationAllowed } = require('./security.cjs');
+const { stableVersion, releaseUrl } = require('./community-updates.cjs');
 
 const CHANNELS = Object.freeze({
   getState: 'agent-switch:update:state',
   check: 'agent-switch:update:check',
+  viewRelease: 'agent-switch:update:view-release',
   download: 'agent-switch:update:download',
   cancel: 'agent-switch:update:cancel',
   install: 'agent-switch:update:install',
 });
 const STATE_CHANNEL = 'agent-switch:update:changed';
-
-function stableVersion(value) {
-  return typeof value === 'string' && value.length < 64 && semver.valid(value) === value
-    && semver.prerelease(value) === null;
-}
 
 function validateUpdate(info, currentVersion, platform, arch) {
   if (!info || !stableVersion(info.version) || !semver.gt(info.version, currentVersion)
@@ -36,21 +33,28 @@ function validateUpdate(info, currentVersion, platform, arch) {
 }
 
 class UpdateController extends EventEmitter {
-  constructor({ updater = null, currentVersion, platform, arch, reason,
+  #releaseUrl = null;
+  #checkAbort = null;
+
+  constructor({ updater = null, checkRelease = null, openRelease, currentVersion, platform, arch, reason,
     confirmInstall, prepareInstall, installFailed, verifyDownload = async () => {}, validateInstall = async () => {} }) {
     super();
-    Object.assign(this, { updater, platform, arch, confirmInstall, prepareInstall, installFailed, verifyDownload, validateInstall });
+    const mode = !updater && typeof checkRelease === 'function' ? 'manual' : updater && checkRelease === null ? 'install' : 'unsupported';
+    Object.assign(this, { updater: mode === 'install' ? updater : null, checkRelease: mode === 'manual' ? checkRelease : null,
+      openRelease, platform, arch, confirmInstall, prepareInstall, installFailed, verifyDownload, validateInstall });
     this.closed = false;
     this.busy = false;
     this.token = null;
     this.downloaded = null;
     this.installStarted = false;
     this.state = {
-      schemaVersion: 1, supported: Boolean(updater), status: updater ? 'idle' : 'unsupported',
+      schemaVersion: 1, mode, supported: mode !== 'unsupported', status: mode === 'unsupported' ? 'unsupported' : 'idle',
       currentVersion, availableVersion: null, progress: null,
-      message: reason || 'Check for a new stable release. Nothing is downloaded or installed automatically.',
+      message: reason || (mode === 'manual'
+        ? 'Check for a new stable release. Community builds open the release page for manual updating; this app never downloads or installs updates.'
+        : 'Check for a new stable release. Nothing is downloaded or installed automatically.'),
     };
-    if (!updater) return;
+    if (mode !== 'install') return;
     updater.autoDownload = false;
     updater.autoInstallOnAppQuit = false;
     updater.autoRunAppAfterInstall = true;
@@ -88,21 +92,53 @@ class UpdateController extends EventEmitter {
   }
 
   async check() {
-    if (!this.updater || this.closed || this.busy || this.installStarted || this.state.status === 'downloaded') return this.getState();
+    if (this.state.mode === 'unsupported' || this.closed || this.busy || this.installStarted || this.state.status === 'downloaded') return this.getState();
     this.busy = true;
     this.downloaded = null;
-    this.update({ status: 'checking', message: 'Checking the official stable release…', availableVersion: null, progress: null });
+    this.#releaseUrl = null;
+    this.update({ status: 'checking', message: this.state.mode === 'manual' ? 'Checking the public stable release…' : 'Checking the official stable release…', availableVersion: null, progress: null });
     try {
-      const result = await this.updater.checkForUpdates();
-      if (!result || typeof result.isUpdateAvailable !== 'boolean' || !stableVersion(result.updateInfo?.version)) throw new Error();
-      if (result.isUpdateAvailable) {
-        if (!validateUpdate(result.updateInfo, this.state.currentVersion, this.platform, this.arch)) throw new Error();
-        this.update({ status: 'available', availableVersion: result.updateInfo.version, message: 'A new version is available. Choose Download to continue.' });
+      if (this.closed) return this.getState();
+      if (this.state.mode === 'manual') {
+        this.#checkAbort = new AbortController();
+        const result = await this.checkRelease({ signal: this.#checkAbort.signal });
+        if (this.closed) return this.getState();
+        if (result !== null && (!stableVersion(result?.version) || result.url !== releaseUrl(result.version))) throw new Error();
+        if (result && semver.gt(result.version, this.state.currentVersion)) {
+          this.#releaseUrl = releaseUrl(result.version);
+          this.update({ status: 'available', availableVersion: result.version, message: 'A new version is available. Choose View release to update manually in your browser. This app does not download or install updates.' });
+        } else {
+          this.update({ status: 'not-available', message: 'No newer compatible stable release is available.' });
+        }
       } else {
-        this.update({ status: 'not-available', message: 'No newer compatible stable release is available.' });
+        const result = await this.updater.checkForUpdates();
+        if (this.closed) return this.getState();
+        if (!result || typeof result.isUpdateAvailable !== 'boolean' || !stableVersion(result.updateInfo?.version)) throw new Error();
+        if (result.isUpdateAvailable) {
+          if (!validateUpdate(result.updateInfo, this.state.currentVersion, this.platform, this.arch)) throw new Error();
+          this.update({ status: 'available', availableVersion: result.updateInfo.version, message: 'A new version is available. Choose Download to continue.' });
+        } else {
+          this.update({ status: 'not-available', message: 'No newer compatible stable release is available.' });
+        }
       }
     } catch {
       this.update({ status: 'error', message: 'Could not check for updates. Check your connection and try again; the release may not have finished publishing.' });
+    } finally {
+      this.#checkAbort = null;
+      this.busy = false;
+    }
+    return this.getState();
+  }
+
+  async viewRelease() {
+    if (this.state.mode !== 'manual' || this.closed || this.busy || this.state.status !== 'available' || !this.#releaseUrl) return this.getState();
+    this.busy = true;
+    try {
+      await this.openRelease(this.#releaseUrl);
+      this.update({ message: 'Opened the release page in your browser. Download and install the update manually; this app does not download or install updates.' });
+    } catch {
+      if (!this.closed) this.#releaseUrl = null;
+      this.update({ status: 'error', availableVersion: null, message: 'Could not open the release page. Check for updates to retry.' });
     } finally {
       this.busy = false;
     }
@@ -110,7 +146,7 @@ class UpdateController extends EventEmitter {
   }
 
   async download() {
-    if (!this.updater || this.closed || this.busy || this.state.status !== 'available') return this.getState();
+    if (this.state.mode !== 'install' || !this.updater || this.closed || this.busy || this.state.status !== 'available') return this.getState();
     this.busy = true;
     const token = new CancellationToken();
     this.token = token;
@@ -141,7 +177,7 @@ class UpdateController extends EventEmitter {
   }
 
   cancel() {
-    if (!this.closed && this.token && this.state.status === 'downloading') {
+    if (this.state.mode === 'install' && !this.closed && this.token && this.state.status === 'downloading') {
       this.update({ status: 'cancelling', message: 'Cancelling the download…', progress: null });
       this.token.cancel();
     }
@@ -149,7 +185,7 @@ class UpdateController extends EventEmitter {
   }
 
   async install() {
-    if (!this.updater || this.closed || this.busy || this.state.status !== 'downloaded') return this.getState();
+    if (this.state.mode !== 'install' || !this.updater || this.closed || this.busy || this.state.status !== 'downloaded') return this.getState();
     this.busy = true;
     let preparing = false;
     try {
@@ -174,13 +210,15 @@ class UpdateController extends EventEmitter {
   }
 
   failInstall() {
-    if (this.closed || this.state.status === 'error') return;
+    if (this.state.mode !== 'install' || this.closed || this.state.status === 'error') return;
     this.update({ status: 'error', message: 'Installation could not finish safely. Reopen Agent Switch and check its version before trying again.' });
     this.installFailed();
   }
 
   close() {
     this.closed = true;
+    this.#releaseUrl = null;
+    this.#checkAbort?.abort();
     this.token?.cancel();
   }
 }

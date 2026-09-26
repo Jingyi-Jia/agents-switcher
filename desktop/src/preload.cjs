@@ -6,6 +6,7 @@ if (process.isMainFrame) {
   contextBridge.exposeInMainWorld('agentSwitchUpdater', Object.freeze({
     getState: () => ipcRenderer.invoke('agent-switch:update:state'),
     check: () => ipcRenderer.invoke('agent-switch:update:check'),
+    viewRelease: () => ipcRenderer.invoke('agent-switch:update:view-release'),
     download: () => ipcRenderer.invoke('agent-switch:update:download'),
     cancel: () => ipcRenderer.invoke('agent-switch:update:cancel'),
     install: () => ipcRenderer.invoke('agent-switch:update:install'),

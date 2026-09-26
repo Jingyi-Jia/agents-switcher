@@ -99,18 +99,20 @@ PAGE_HTML = r"""<!doctype html>
     </div>
     <section class="settings-panel" id="app-updates" aria-labelledby="app-updates-title" hidden>
       <h3 id="app-updates-title">App updates</h3>
+      <p class="eyebrow" id="update-kind"></p>
       <p class="hint" id="update-version"></p>
       <p id="update-status" role="status" aria-live="polite">Reading update support…</p>
       <progress id="update-progress" max="100" aria-label="Update download progress" hidden></progress>
       <p class="hint" id="update-transfer" hidden></p>
       <div class="actions">
         <button type="button" id="update-check" data-action disabled>Check for updates</button>
+        <button type="button" id="update-view-release" class="primary" data-action hidden disabled>View release ↗</button>
         <button type="button" id="update-download" data-action hidden disabled>Download update</button>
         <button type="button" id="update-cancel" data-action hidden disabled>Cancel download</button>
         <button type="button" id="update-install" class="primary" data-action hidden disabled>Install and restart…</button>
         <a href="https://github.com/Jingyi-Jia/agents-switcher/releases" target="_blank" rel="noopener noreferrer">Release notes &amp; manual downloads ↗</a>
       </div>
-      <p class="hint">Updates come from Agent Switch's stable GitHub releases. Downloads start only when you choose them. Installing asks for confirmation and restarts this app; its automatic switching stops. Your provider apps and saved accounts are not updated or removed.</p>
+      <p class="hint" id="update-policy">Update checks start only when you ask. Release notes and manual downloads are available on GitHub.</p>
     </section>
     <div class="settings-panel"><h3>Here to help</h3><p>Save existing provider logins, switch deliberately, and keep automatic selection under your control.</p><button type="button" id="help-toggle" aria-controls="desktop-guide" aria-expanded="false" hidden>Account setup &amp; help</button><p>Claude Code accounts and Claude Desktop profiles are separate. Paid-credit accounts stay manual-only; auto-switch never chooses them.</p></div>
     <div id="settings-guide-slot"></div>

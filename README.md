@@ -16,8 +16,10 @@ Work developed in this repository includes:
 
 - **A standalone desktop app** with native menus, keyboard shortcuts, tray icons,
   and macOS, Windows, and Linux packaging. Its bundled runtime needs no separate
-  Python or Node.js installation. Supported official releases include deliberate
-  check, download, and install-and-restart controls.
+  Python or Node.js installation. Community releases provide a deliberate check
+  that reports availability and a separate **View release** action; a future
+  signed channel may also offer explicit download and install-and-restart
+  controls.
 - **A shared account workspace** across the desktop app, browser dashboard, and
   terminal UI, with manual account management and opt-in automatic switching.
 - **Codex account support** with rotation-safe credential handling, quota and
@@ -60,10 +62,12 @@ readout and can incur per-token charges.
 
 ### Get the app
 
-**There is no signed public installer release yet.** Draft releases and package
-version numbers are not published downloads. The
-[Releases page](https://github.com/jingyi-jia/agents-switcher/releases) is where
-verified release downloads will appear once signing and release checks pass.
+When a community release is published, use the
+[Releases page](https://github.com/jingyi-jia/agents-switcher/releases) and
+download the matching platform and architecture. The community distribution is
+public without paid Apple or Windows signing credentials; a separate signed
+distribution remains a future, optional path. Draft artifacts and package
+versions are not published downloads.
 
 For developers, successful runs of
 [Desktop installers](https://github.com/jingyi-jia/agents-switcher/actions/workflows/desktop.yml)
@@ -79,42 +83,71 @@ need Python, uv, Node.js or npm. You still need the provider app or CLI and a
 supported login, as described above.
 The experimental Claude Desktop panel needs the official Claude Desktop app
 instead of a CLI installation.
-Public macOS/Windows release builds require signing credentials, and macOS also
-requires notarization. The workflow exists; a trusted signed release still needs
-successful builds and clean-machine installation checks. Preview builds do not
-enable in-app updating and never install themselves over a trusted release.
+The optional signed distribution requires signing credentials, and macOS also
+requires notarization. Community macOS releases are free ad-hoc-signed
+installers, while community Windows releases are unsigned installers. Linux
+community releases retain the AppImage, deb, and tar formats. Community releases
+do not offer executable download or self-install, and do not silently fall back
+to unsigned artifacts when a signed build was explicitly requested. Fresh native
+installation checks are still required for every release; CI helper checks are
+not proof of that.
 
 ### Update the standalone client
 
-In a supported official stable release, open **Settings → App updates** (or
-**Help → Check for Updates…**):
+In a community release, open **Settings → App updates** (or **Help → Check for
+Updates…**) and choose **Check for updates**. The check is user-initiated and
+uses only this project's fixed public GitHub repository. It reports whether a
+release is available; it does not open a browser. If a release is found, choose
+**View release** separately to open the corresponding published release in your
+browser and download it yourself. The app never downloads an executable or
+self-installs from this flow, and it never performs automatic checks.
 
-1. Choose **Check for updates**. Checks use this project's stable GitHub releases;
-   they do not inspect provider accounts or request your GitHub credentials.
-2. Choose **Download update** if a newer compatible version is available. Progress
-   stays visible, and **Cancel download** stops the download without installing.
-3. Choose **Install and restart…** when ready, then confirm the native prompt.
-   Agent Switch requires its backend to exit cleanly before handing off to the
-   installer. Its own auto-switch session stops; your saved accounts and provider
-   apps are not removed or updated. Independently started CLI automation is not
-   stopped. Check the installed version after relaunch.
+A release page is not proof that its artifacts are safe: review the publisher
+and verify the published checksum and provenance before installing.
 
 Nothing downloads or installs automatically, including when you normally quit
-the app. A failed check, download, signature verification, or shutdown is shown
-as a failure, not as a successful update.
+the app. A failed check is shown as a failure, not as a successful update.
 
 | Installation | In-app update support |
 | --- | --- |
-| macOS | Official Developer ID-signed release installed in Applications; Apple Silicon and Intel use separate update metadata. Ad-hoc previews and apps run from a DMG are excluded. |
-| Windows | Official signed NSIS installation with a verified publisher; signature verification must succeed. |
-| Linux | Official, writable AppImage launched directly. DEB, tar, extracted, and read-only installations use manual replacement or their package manager. |
+| Community macOS | Manual release-page installation of the ad-hoc-signed arm64 or x64 installer. This is not Developer ID signing or notarization. |
+| Community Windows | Manual release-page installation of the unsigned installer. Windows publisher verification is unavailable. |
+| Community Linux | Manual installation of the AppImage, deb, or tar release. |
+| Future signed release | A separate signed mode may support explicit download and install after strict signature checks and confirmed clean shutdown. It must fail closed when credentials or verification are missing. |
 | Browser launcher, CLI, or TUI | These do not update the standalone client. Update your source installation separately. |
 
-An older preview without an updater needs a **one-time manual installation** of
-the first supported stable release. The updater cannot add itself to an already
-installed old build. Until signed releases are available, use the clearly labeled
-preview artifacts above; a complete signed upgrade remains a release validation
-step, not something a unit test can prove.
+An older preview needs a **manual installation** from the published release page.
+The community flow cannot add an updater to an existing installation. The
+ordinary app quit never installs an update in either mode.
+
+### Community release verification and platform warnings
+
+Community artifacts are accompanied by SHA256 checksums and GitHub provenance
+attestations when the release workflow completes. Anyone can verify an
+attestation without a paid GitHub plan, for example:
+
+```bash
+gh attestation verify Agent-Switch-<version>-linux-x86_64.AppImage \
+  --repo Jingyi-Jia/agents-switcher
+```
+
+Check that the attestation names the expected release/build workflow, reviewed
+`main` source, and intended distribution before trusting it. The builder may be
+reusable, so do not rely on a display name alone.
+An attestation proves claimed build provenance, not safe code or reproducible
+native binaries; a checksum alone proves neither publisher identity nor safety.
+
+macOS community builds are ad-hoc signed and non-notarized. If Gatekeeper offers
+it, follow Apple's official [Open Anyway instructions](https://support.apple.com/en-us/102445)
+only after choosing to trust the verified official download. Windows may show
+SmartScreen; where offered, select **More info → Run anyway** only after choosing
+to trust the verified official download. These warnings can recur, and
+SmartScreen, Smart App Control (SAC), Windows Defender Application Control, or
+enterprise policy can block execution with no per-app override. Never disable
+Gatekeeper, antivirus, or SmartScreen/Application Control, and never remove
+quarantine attributes. A
+damaged, malware, or unexpected-signature alert needs investigation rather than a
+bypass.
 
 ### Install the CLI from source
 

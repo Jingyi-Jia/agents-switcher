@@ -8,7 +8,7 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const yaml = require('js-yaml');
 const asar = require('@electron/asar');
-const { verifyArtifacts, verifyPackagedConfig, metadataName, digest } = require('../scripts/verify-updates.cjs');
+const { verifyArtifacts, verifyPackagedConfig, metadataName, installerNames, digest } = require('../scripts/verify-updates.cjs');
 const { FEED } = require('../src/updater-runtime.cjs');
 const { validateUpdate } = require('../src/updater.cjs');
 
@@ -84,9 +84,9 @@ test('Linux verification requires a real embedded blockmap and correct footer', 
 test('packaged ASAR includes the isolated bridge and pinned updater with the correct release capability', async t => {
   const options = await artifacts(t, 'win', 'x64');
   const input = path.join(options.directory, 'input'), resources = path.join(options.directory, 'win-unpacked', 'resources');
-  const manifest = { version: options.version, agentSwitchRelease: true,
+  const manifest = { version: options.version, agentSwitchRelease: true, agentSwitchCommunityRelease: false,
     dependencies: { 'electron-updater': require('../package.json').dependencies['electron-updater'] } };
-  for (const file of ['src/preload.cjs', 'src/updater.cjs', 'src/updater-runtime.cjs', 'node_modules/electron-updater/out/main.js']) {
+  for (const file of ['src/preload.cjs', 'src/updater.cjs', 'src/updater-runtime.cjs', 'src/community-updates.cjs', 'node_modules/electron-updater/out/main.js']) {
     fs.mkdirSync(path.dirname(path.join(input, file)), { recursive: true }); fs.writeFileSync(path.join(input, file), '');
   }
   fs.mkdirSync(resources, { recursive: true });
@@ -101,38 +101,128 @@ test('packaged ASAR includes the isolated bridge and pinned updater with the cor
   assert.throws(() => verifyPackagedConfig({ ...options, releaseBuild: true }), /fixed public/);
 });
 
-test('release workflow retains signing gates and publishes update metadata last', () => {
+test('release workflows retain strict signing gates and stage draft-only update metadata', () => {
   const config = yaml.load(fs.readFileSync(path.join(__dirname, '../electron-builder.yml'), 'utf8'));
   assert.equal(config.extraMetadata.agentSwitchRelease, false);
+  assert.equal(config.extraMetadata.agentSwitchCommunityRelease, false);
   assert.deepEqual(config.publish, { ...FEED, channel: 'latest' });
   assert.equal(config.mac.publish.channel, 'latest-${arch}');
   assert.equal(config.win.verifyUpdateCodeSignature, true);
+  assert.deepEqual(config.win.target, ['nsis']);
   assert.ok(config.mac.target.includes('zip'));
   assert.equal(config.deb.publish, null);
   const workflow = yaml.load(fs.readFileSync(path.join(__dirname, '../../.github/workflows/desktop.yml'), 'utf8'));
   assert.equal(workflow.permissions.contents, 'read');
-  assert.equal(workflow.jobs['upload-release'].needs, 'build');
-  const steps = workflow.jobs.build.steps;
+  assert.equal(workflow.on.release, undefined);
+  assert.equal(workflow.jobs.build.with.mode, 'preview');
+  assert.equal(workflow.jobs.build.secrets, undefined);
+  const native = yaml.load(fs.readFileSync(path.join(__dirname, '../../.github/workflows/desktop-build.yml'), 'utf8'));
+  const release = yaml.load(fs.readFileSync(path.join(__dirname, '../../.github/workflows/release.yml'), 'utf8'));
+  const steps = native.jobs.build.steps;
   const mac = steps.find(step => step.name === 'Build signed and notarized macOS release');
   const win = steps.find(step => step.name === 'Build signed Windows release');
   for (const step of [mac, win]) {
-    assert.match(step.if, /github.event_name == 'release'/);
+    assert.match(step.if, /inputs.mode == 'signed'/);
     assert.match(step.run, /Required release signing secret is missing/);
     assert.match(step.run, /-c.forceCodeSigning=true/);
     assert.match(step.run, /-c.extraMetadata.agentSwitchRelease=true/);
+    assert.match(step.run, /-c.extraMetadata.agentSwitchCommunityRelease=false/);
   }
   assert.match(mac.run, /certificate leaf\[field\.1\.2\.840\.113635\.100\.6\.1\.13\]/);
   assert.match(mac.run, /stapler validate/);
   const winVerification = steps.find(step => step.name === 'Verify Windows release signatures');
   assert.match(winVerification.run, /Get-AuthenticodeSignature/);
   assert.match(winVerification.run, /Status -ne 'Valid'/);
+  assert.match(winVerification.if, /inputs.mode == 'signed'/);
+  assert.match(winVerification.run, /backend\/agent-switch-backend.exe/);
   for (const step of steps.filter(step => /preview/.test(step.name || ''))) {
-    assert.match(step.if, /github.event_name != 'release'/);
+    assert.match(step.if, /inputs.mode == 'preview'/);
     assert.doesNotMatch(step.run, /agentSwitchRelease=true/);
   }
-  const artifacts = steps.find(step => step.name === 'Upload installers').with.path;
-  assert.match(artifacts, /\*\.blockmap/); assert.match(artifacts, /latest\*\.yml/);
-  const publish = workflow.jobs['upload-release'].steps.at(-1).run;
-  assert.ok(publish.indexOf('installers/Agent-Switch-*') < publish.indexOf('installers/latest*.yml'));
+  for (const step of steps.filter(step => /community installers/.test(step.name || ''))) {
+    assert.match(step.if, /inputs.mode == 'community'/);
+    assert.match(step.run, /agentSwitchRelease=false/);
+    assert.match(step.run, /agentSwitchCommunityRelease=true/);
+    assert.equal(step.env.CSC_IDENTITY_AUTO_DISCOVERY, 'false');
+    assert.equal(Object.keys(step.env).some(name => /CERTIFICATE|APPLE|CSC_LINK/.test(name)), false);
+  }
+  const communityMac = steps.find(step => step.name === 'Build ad-hoc signed macOS community installers');
+  assert.match(communityMac.run, /-c.mac.identity=-/);
+  assert.match(communityMac.run, /-c.mac.notarize=false/);
+  assert.equal(config.mac.hardenedRuntime, true);
+  assert.equal(config.mac.entitlements, 'scripts/entitlements.mac.plist');
+  assert.equal(config.mac.entitlementsInherit, config.mac.entitlements);
+  assert.equal(steps.find(step => step.name === 'Upload installers').with.path, 'desktop/release/artifacts/*');
+  assert.deepEqual(release.jobs.draft.needs, ['source', 'native', 'python']);
+  assert.equal(release.jobs.draft.permissions.contents, 'write');
+  assert.match(release.jobs.draft.steps.at(-1).run, /desktop_release.py draft/);
   assert.match(require('../package.json').scripts.dist, /--publish never$/);
+});
+
+test('the community installer allowlist matches native builder architecture names', () => {
+  const { Arch, getArtifactArchName } = require('builder-util');
+  for (const [platform, arch, extensions] of [
+    ['mac', 'arm64', ['dmg', 'zip']], ['mac', 'x64', ['dmg', 'zip']],
+    ['win', 'x64', ['exe']], ['linux', 'x64', ['AppImage', 'deb', 'tar.gz']],
+  ]) {
+    assert.deepEqual(installerNames(platform, arch, '3.2.1'),
+      extensions.map(extension => `Agent-Switch-3.2.1-${platform}-${getArtifactArchName(Arch[arch], extension)}.${extension}`));
+  }
+});
+
+test('trusted native build attests only after tests, signature gates, and packaged-helper smoke checks', () => {
+  const native = yaml.load(fs.readFileSync(path.join(__dirname, '../../.github/workflows/desktop-build.yml'), 'utf8'));
+  const release = yaml.load(fs.readFileSync(path.join(__dirname, '../../.github/workflows/release.yml'), 'utf8'));
+  assert.deepEqual(native.jobs.build.strategy.matrix.include.map(({ platform, arch }) => `${platform}-${arch}`),
+    ['mac-arm64', 'mac-x64', 'win-x64', 'linux-x64']);
+  assert.deepEqual(native.on, { workflow_call: native.on.workflow_call });
+  assert.equal(native.on.workflow_call.inputs.mode.default, 'preview');
+  assert.equal(native.jobs.build.permissions, undefined);
+  assert.deepEqual(release.jobs.native.permissions, { contents: 'read', 'id-token': 'write', attestations: 'write' });
+  assert.equal(release.jobs.draft.permissions['id-token'], undefined);
+  assert.equal(release.jobs.draft.permissions.attestations, 'read');
+  assert.equal(release.permissions.contents, 'read');
+  assert.equal(release.jobs.source.permissions, undefined);
+  assert.match(release.jobs.source.if, /github.ref == 'refs\/heads\/main'/);
+  assert.deepEqual(Object.keys(release.on), ['workflow_dispatch']);
+  assert.deepEqual(release.on.workflow_dispatch.inputs.distribution.options, ['community', 'signed']);
+  assert.equal(release.on.workflow_dispatch.inputs.distribution.default, 'community');
+  assert.equal(release.on.workflow_dispatch.inputs.source_sha.required, true);
+  const steps = native.jobs.build.steps;
+  const attestIndex = steps.findIndex(step => step.uses?.startsWith('actions/attest@'));
+  for (const name of ['Test Python backend', 'Test native process probes without competing test workers', 'Test Electron shell',
+    'Verify Windows release signatures', 'Verify macOS app and distributed bundle signatures',
+    'Smoke-test frozen backend in disposable account directories', 'Smoke-test the helper copied into the app',
+    'Verify packaged updater and release metadata', 'Smoke-test packaged desktop app', 'Stage allowlisted final files and their checksums']) {
+    const index = steps.findIndex(step => step.name === name);
+    assert.ok(index >= 0 && index < attestIndex, name);
+  }
+  for (const step of steps.filter(step => step.name?.startsWith('Smoke-test') && step.name !== 'Smoke-test packaged desktop app')) {
+    assert.match(step.run, /--disposable-runner --check-tls --check-processes/);
+  }
+  assert.equal(steps[attestIndex].if, "inputs.mode != 'preview'");
+  assert.equal(steps[attestIndex].with['subject-path'], 'desktop/release/artifacts/*');
+  assert.equal(steps[attestIndex].with['create-storage-record'], false);
+  const verify = steps.findIndex(step => step.name === 'Retain and verify the native build attestation');
+  assert.ok(attestIndex < verify && verify < steps.findIndex(step => step.name === 'Upload installers'));
+  assert.match(steps[verify].run, /desktop_release.py verify/);
+  const smokeIndex = steps.findIndex(step => step.name === 'Smoke-test packaged desktop app');
+  assert.ok(smokeIndex > steps.findIndex(step => step.name === 'Verify packaged updater and release metadata'));
+  assert.ok(smokeIndex < steps.findIndex(step => step.name === 'Stage allowlisted final files and their checksums'));
+  assert.match(steps[smokeIndex].run, /xvfb-run -a/);
+  assert.match(steps[smokeIndex].run, /smoke_app.cjs "\$TARGET_PLATFORM" "\$TARGET_ARCH" "\$DISTRIBUTION" --disposable-runner --screenshot/);
+  assert.equal(steps[smokeIndex].env.DISTRIBUTION, '${{ inputs.mode }}');
+  const screenshot = steps.find(step => step.name === 'Upload successful app smoke screenshot');
+  assert.equal(screenshot.if, 'success()');
+  assert.match(screenshot.with.name, /^app-smoke-/);
+  assert.match(screenshot.with.path, /^\$\{\{ runner.temp \}\}\/app-smoke-/);
+  const downloads = release.jobs.draft.steps.filter(step => step.uses?.startsWith('actions/download-artifact@'));
+  assert.deepEqual(downloads.map(step => step.with.pattern || step.with.name), ['desktop-*', 'python-dist']);
+  for (const workflow of [native, release]) {
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps || []) {
+        if (step.uses) assert.match(step.uses, /@[a-f0-9]{40}$/);
+      }
+    }
+  }
 });
