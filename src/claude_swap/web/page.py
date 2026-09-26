@@ -46,7 +46,7 @@ PAGE_HTML = r"""<!doctype html>
     <ol class="guide-steps">
       <li><strong>Set up a provider.</strong> Sign in through Claude Code's CLI or Codex's Desktop app or CLI, using its official setup guide. Then return here and choose Check again.</li>
       <li><strong>Save the current login.</strong> Add existing login saves that provider's current local credentials for switching later. It doesn't start a new sign-in. Codex keyring-only and API-key logins aren't supported.</li>
-      <li><strong>Add another account when you're ready.</strong> Sign in to a different account in that provider, then add that login here. Switch by hand, or try Dry run before enabling live auto-switch.</li>
+      <li><strong>Add another account when you're ready.</strong> Sign in to a different account in that provider, then add that login here. Switch by hand, or preview automatic switching before choosing Start.</li>
     </ol>
     <p class="guide-boundary" id="guide-boundary">The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
     <p class="hint">Paid-credit accounts remain manual-only; auto-switch never chooses them. After switching, follow any provider restart notice shown below.</p>
@@ -61,12 +61,12 @@ PAGE_HTML = r"""<!doctype html>
   <div id="claude-group" role="group" aria-label="Claude">
   <section class="provider" aria-labelledby="claude-heading"><h2 id="claude-heading">Claude Code<span id="claude-count"></span></h2><p class="notice" id="claude-switch-notice">CLI only. Claude desktop, including the Code tab, has a separate sign-in and is not switched here.</p><div id="claude-actions" class="actions"></div><div id="claude"></div><details id="claude-auto" class="auto-panel"></details></section>
   <section class="provider" id="claude-desktop-panel" aria-labelledby="claude-desktop-heading" hidden>
-    <h2 id="claude-desktop-heading">Profiles <span>Beta · Claude Desktop</span></h2>
+    <h2 id="claude-desktop-heading">Claude Desktop <span>Profiles · Beta</span></h2>
     <p class="notice">Separate local spaces for Claude Desktop. Open one, then sign in there.</p>
     <details class="profile-about"><summary>About profiles</summary>
       <p id="claude-desktop-notice"></p>
-      <p>Profiles are local app data, not verified accounts. Names are your labels; last opened does not verify an active identity. Confirm the selected account in Claude. Signed-in persistence on Mac and Code/Cowork are not fully verified. Relocated profiles disable local Claude-in-Chrome pairing.</p>
-      <p>Fully quit Claude before opening another profile. The Dock normally opens the usual default profile. No CLI token import, cookie copying, forced quit, deletion, or auto-switching is provided.</p>
+      <p>Profiles are local app data, not verified accounts. Names and optional email labels are entered by you; they do not verify a signed-in identity. Confirm the selected account in Claude. Signed-in persistence on Mac and Code/Cowork are not fully verified. Relocated profiles disable local Claude-in-Chrome pairing.</p>
+      <p>Fully quit Claude before opening or deleting a profile. The Dock normally opens the usual default profile, which cannot be renamed or deleted here. No CLI token import, cookie copying, forced quit, or automatic profile switching is provided.</p>
     </details>
     <p class="notice" id="claude-desktop-status" role="status"></p>
     <div class="actions" id="claude-desktop-actions"></div>
@@ -239,15 +239,35 @@ function toast(message, ember, persistent = false) {
 }
 
 function duration(seconds) {
-  if (!seconds || seconds <= 0) return null;
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  if (seconds < 60) return "<1m";
   const d = Math.floor(seconds / 86400), h = Math.floor((seconds % 86400) / 3600);
   if (d) return `${d}d ${h}h`;
   const m = Math.floor((seconds % 3600) / 60);
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
+function quotaTiming(w, allowPace = true) {
+  const now = Date.now() / 1000;
+  const numeric = (value) => typeof value === "number" && Number.isFinite(value);
+  let date = numeric(w.resetAt) && w.resetAt > 0 ? new Date(w.resetAt * 1000) : null;
+  if (date && !Number.isFinite(date.getTime())) date = null;
+  if (date && numeric(w.observedAt) && numeric(w.windowSeconds) && w.windowSeconds > 0 && w.resetAt - w.observedAt > w.windowSeconds) date = null;
+  const remaining = date ? w.resetAt - now : null;
+  let pace = "Pace unavailable";
+  let hint = "Even-pace guidance needs a usage report from the last five minutes, a known window length, and a reset time within that window. It is not a forecast or a switching rule.";
+  const elapsed = w.observedAt - (w.resetAt - w.windowSeconds);
+  if (allowPace && date && remaining > 0 && numeric(w.observedAt) && w.observedAt > 0 && now >= w.observedAt && now - w.observedAt <= 300 && numeric(w.windowSeconds) && w.windowSeconds > 0 && elapsed > 0 && elapsed < w.windowSeconds && numeric(w.usedPercent) && w.usedPercent >= 0 && w.usedPercent <= 100) {
+    const even = elapsed / w.windowSeconds * 100;
+    const difference = w.usedPercent - even;
+    pace = Math.abs(difference) <= 5 ? "Near even pace" : difference > 0 ? "Above even pace" : "Below even pace";
+    hint = `${w.usedPercent}% used after ${Math.round(even)}% of this window had elapsed at the last report. Within five percentage points is near even pace. This is a simple guide, not a forecast or a switching rule.`;
+  }
+  return {date, remaining, pace, hint};
+}
+
 function headroom(a) {
-  const ws = (a.windows || []).filter((w) => typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent));
+  const ws = (a.windows || []).filter((w) => w.scope !== "model" && typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent));
   if (ws.length) return Math.max(0, Math.min(...ws.map((w) => 100 - w.usedPercent)));
   return (typeof a.percent === "number" && Number.isFinite(a.percent)) ? Math.max(0, Math.min(100, 100 - a.percent)) : null;
 }
@@ -276,29 +296,47 @@ function tile(name, data) {
     v.textContent = left + "%"; v.appendChild(el("small", null, "left"));
     if (left <= 0) v.classList.add("ember");
     t.appendChild(v);
-    const limiting = (active.windows || []).filter((w) => typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent)).sort((a, b) => b.usedPercent - a.usedPercent)[0];
-    const r = duration(limiting?.resetAfterSeconds);
-    t.appendChild(el("div", "sub", (active.email || "") + (r ? ` · ${limiting.label} limit resets in ${r}` : "")));
+    const limiting = (active.windows || []).filter((w) => w.scope !== "model" && typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent)).sort((a, b) => b.usedPercent - a.usedPercent)[0];
+    const timing = limiting ? quotaTiming(limiting) : null;
+    const r = duration(timing?.remaining);
+    const reset = r ? `${limiting.label} limit resets in ${r}` : timing?.date ? `${limiting.label} reset passed · refresh usage` : "Reset time unavailable";
+    const detail = el("div", "sub", (active.email || "") + " · " + reset);
+    detail.title = timing?.date ? "Reported reset: " + timing.date.toLocaleString(undefined, {dateStyle: "full", timeStyle: "long"}) : reset;
+    t.appendChild(detail);
   }
   return t;
 }
 
-function meter(w) {
+function meter(w, allowPace = true) {
   const left = typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent) ? Math.max(0, Math.min(100, 100 - w.usedPercent)) : null;
   const m = el("div", "meter" + (left === null ? " unknown" : ""));
   m.appendChild(el("span", "label", `${w.label} window`));
   const num = el("span", "num" + (left === null ? "" : left <= 0 ? " out" : left <= 20 ? " low" : ""));
   num.textContent = left === null ? "Not reported" : `${left}% left`;
-  const r = duration(w.resetAfterSeconds);
-  if (r) num.appendChild(el("span", null, ` · resets ${r}`));
-  m.title = `${w.label} window: ${left === null ? "not reported" : left + "% left"}${r ? " · resets in " + r : ""}`;
-  m.setAttribute("aria-label", m.title);
+  const timing = quotaTiming(w, allowPace);
+  const r = duration(timing.remaining);
+  m.setAttribute("aria-label", `${w.label} window: ${left === null ? "not reported" : left + "% left"}${r ? " · resets in " + r : ""}`);
   m.appendChild(num);
   const track = el("div", "track");
   const fill = el("div", "fill" + (left <= 0 ? " out" : ""));
   fill.style.width = (left ?? 0) + "%";
   track.appendChild(fill);
   m.appendChild(track);
+  const reset = el("div", "quota-reset");
+  if (timing.date) {
+    reset.appendChild(el("span", null, timing.remaining > 0 ? "Resets " : "Reported reset "));
+    const time = el("time", null, timing.date.toLocaleString(undefined, {month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short"}));
+    time.dateTime = timing.date.toISOString();
+    time.title = timing.date.toLocaleString(undefined, {dateStyle: "full", timeStyle: "long"});
+    reset.appendChild(time);
+    if (timing.remaining <= 0) reset.appendChild(el("span", "reset-passed", "Refresh usage for the new window."));
+  } else {
+    reset.textContent = "Reset time unavailable";
+  }
+  const pace = el("span", "quota-pace", timing.pace);
+  pace.title = timing.hint;
+  m.append(reset, pace);
+  if (w.scope === "model") m.appendChild(el("span", "quota-scope", "Model-specific · separate from overall headroom"));
   return m;
 }
 
@@ -321,7 +359,7 @@ function card(provider, a, data) {
   const ws = a.windows || [];
   if (ws.length) {
     const ms = el("div", "meters");
-    ws.forEach((w) => ms.appendChild(meter(w)));
+    ws.forEach((w) => ms.appendChild(meter(w, !a.error && !a.sentinel && !a.onCredits)));
     c.appendChild(ms);
   }
 
@@ -423,9 +461,12 @@ const desktopProfileUI = {};
 function setupDesktopProfiles() {
   const actions = $("claude-desktop-actions");
   desktopProfileUI.create = actionButton("New profile", () => createDesktopProfile(desktopProfileUI.create));
-  desktopProfileUI.default = actionButton("Open usual Claude (default)", () => openDesktopProfile("default", "usual Claude (default)", desktopProfileUI.default));
-  desktopProfileUI.refresh = actionButton("Check again", () => refreshUsage(desktopProfileUI.refresh));
-  actions.append(desktopProfileUI.create, desktopProfileUI.default, desktopProfileUI.refresh);
+  desktopProfileUI.create.className = "profile-create";
+  desktopProfileUI.create.dataset.profileFocus = "new";
+  desktopProfileUI.default = actionButton("Open Claude", () => openDesktopProfile("default", "Claude with your usual profile", desktopProfileUI.default));
+  desktopProfileUI.default.setAttribute("aria-label", "Open Claude Desktop with the usual default profile");
+  desktopProfileUI.refresh = actionButton("Refresh", () => refreshUsage(desktopProfileUI.refresh));
+  actions.append(desktopProfileUI.default, desktopProfileUI.refresh);
 }
 
 function renderDesktopProfiles(data) {
@@ -438,8 +479,8 @@ function renderDesktopProfiles(data) {
     : !data.available ? "Opening Claude Desktop profiles is unavailable."
     : "";
   const processStatus = !data.supported || !data.installed ? ""
-    : data.running === true ? "Claude is running. Fully quit Claude Desktop (⌘Q on Mac), then choose Check again. Closing its window is not enough."
-    : data.running !== false ? "Claude process status is unknown. Opening is blocked until a check confirms it is quit. Choose Check again to retry."
+    : data.running === true ? "Claude is running. Fully quit Claude Desktop (⌘Q on Mac), then choose Refresh. Closing its window is not enough."
+    : data.running !== false ? "Claude process status is unknown. Opening is blocked until a check confirms it is quit. Choose Refresh to retry."
     : data.available ? "Claude is quit; you can open a profile." : "";
   const openBlocked = !data.available || data.running !== false;
   const openReason = [unavailable, data.error, processStatus].filter(Boolean).join(" ");
@@ -451,30 +492,51 @@ function renderDesktopProfiles(data) {
   block(desktopProfileUI.default, openBlocked);
   desktopProfileUI.default.title = openBlocked ? openReason : "";
   desktopProfileUI.default.setAttribute("aria-describedby", "claude-desktop-status");
+  const canManage = data.canManage ?? data.canCreate ?? data.available;
+  document.querySelectorAll("[data-action]").forEach((button) => {
+    if (button.dataset.profileDelete === undefined) return;
+    const exists = (data.profiles || []).some((profile) => profile.id === button.dataset.profileDelete);
+    const previousReason = button.title;
+    block(button, !data.canDelete || !exists);
+    button.title = !exists ? "This profile is no longer in the saved list." : !data.canDelete ? data.deleteError || "Fully quit Claude Desktop, then Refresh before deleting a profile." : "";
+    if (button === $("dialog-submit") && !busy && ($("dialog-feedback").hidden || $("dialog-feedback").textContent === previousReason)) {
+      $("dialog-feedback").textContent = button.title;
+      $("dialog-feedback").hidden = !button.disabled;
+    }
+  });
   const host = $("claude-desktop-profiles");
-  const signature = JSON.stringify([data.profiles, openBlocked, openReason]);
+  const signature = JSON.stringify([data.profiles, openBlocked, openReason, canManage]);
   if (desktopProfileUI.signature === signature) return;
   desktopProfileUI.signature = signature;
-  const focused = host.contains(document.activeElement) ? document.activeElement.dataset.profileId : null;
+  const focused = host.contains(document.activeElement) ? document.activeElement.dataset.profileFocus : null;
   host.replaceChildren();
   const profiles = Array.isArray(data.profiles) ? data.profiles : [];
-  if (!profiles.length) host.appendChild(el("div", "empty", "No named profiles yet. Creating one makes an empty profile; sign in through Claude after opening it."));
+  if (!profiles.length) host.appendChild(el("p", "notice", "No named profiles yet. Add one below, then open it and sign in inside Claude."));
   profiles.forEach((profile) => {
-    const card = el("div", "card");
+    const card = el("div", "card profile-card");
     const row = el("div", "top");
-    row.appendChild(el("span", "name", profile.name));
-    row.appendChild(el("span", "grow"));
+    const details = actionButton("", () => manageDesktopProfile(profile.id, details));
+    details.className = "profile-details";
+    details.setAttribute("aria-label", `Manage Claude Desktop profile ${profile.name}`);
+    details.dataset.profileFocus = "details:" + profile.id;
+    details.append(el("span", "name", profile.name), el("span", "account-meta", profile.emailLabel ? "Email label · " + profile.emailLabel : "Profile settings"));
+    block(details, !canManage);
+    row.appendChild(details);
     const open = actionButton("Open", () => openDesktopProfile(profile.id, profile.name, open));
     open.setAttribute("aria-label", `Open Claude Desktop profile ${profile.name}`);
     open.dataset.profileId = profile.id;
+    open.dataset.profileFocus = "open:" + profile.id;
     block(open, openBlocked);
     open.title = openBlocked ? openReason : "";
     open.setAttribute("aria-describedby", "claude-desktop-status");
     row.appendChild(open);
     card.appendChild(row);
     host.appendChild(card);
-    if (focused === profile.id && !open.disabled) open.focus({preventScroll: true});
+    if (focused === details.dataset.profileFocus && !details.disabled) details.focus({preventScroll: true});
+    if (focused === open.dataset.profileFocus && !open.disabled) open.focus({preventScroll: true});
   });
+  host.appendChild(desktopProfileUI.create);
+  if (focused === "new" && !desktopProfileUI.create.disabled) desktopProfileUI.create.focus({preventScroll: true});
 }
 
 function desktopConsent(host) {
@@ -488,27 +550,96 @@ function desktopConsent(host) {
   host.appendChild(check);
 }
 
+function desktopProfileFields(host, profile = {}) {
+  const label = el("label", "field", "Profile name");
+  const name = el("input");
+  Object.assign(name, {type: "text", required: true, maxLength: 64, autocomplete: "off", value: profile.name || ""});
+  name.dataset.lock = "";
+  label.appendChild(name);
+  const emailField = el("label", "field", "Email label (optional)");
+  const email = el("input");
+  Object.assign(email, {type: "email", maxLength: 320, autocomplete: "off", value: profile.emailLabel || ""});
+  email.dataset.lock = "";
+  emailField.appendChild(email);
+  host.append(label, emailField, el("p", "hint", "Labels are entered by you, not read from Claude. An email label does not verify which account is signed in."));
+  return {name, email};
+}
+
 function createDesktopProfile(opener) {
   if (!(state.claudeDesktop?.canCreate ?? state.claudeDesktop?.available)) return;
-  let name;
+  let fields;
   confirmAction({
     title: "Create an empty Claude Desktop profile?", description: desktopProfileWarning + " Creation does not launch Claude or sign you in.",
     label: "Create profile", opener, kind: "profile",
     fields: (host) => {
-      const field = el("label", "field", "Profile label (up to 64 characters)");
-      name = el("input");
-      Object.assign(name, {type: "text", required: true, maxLength: 64, autocomplete: "off"});
-      name.dataset.lock = "";
-      field.appendChild(name);
-      host.append(field);
+      fields = desktopProfileFields(host);
       desktopConsent(host);
     },
     submit: async (button) => {
-      const label = name.value.trim();
+      const label = fields.name.value.trim(), emailLabel = fields.email.value.trim();
       if (!label || label.length > 64 || !(state.claudeDesktop?.canCreate ?? state.claudeDesktop?.available)) return false;
+      if (emailLabel.length > 320 || !fields.email.reportValidity()) return false;
       if (!await saveProfileConsent()) return false;
-      const success = await act("/api/claude-desktop/create", {name: label, confirm: true}, button, "creating…");
+      const success = await act("/api/claude-desktop/create", {name: label, ...(emailLabel ? {emailLabel} : {}), confirm: true}, button, "creating…");
       if (success) toast("Empty profile created; sign in through Claude after choosing Open on the new profile. Nothing has launched.", false, true);
+      return success;
+    },
+  });
+}
+
+function manageDesktopProfile(profileId, opener) {
+  const data = state.claudeDesktop;
+  const profile = data?.profiles?.find((item) => item.id === profileId);
+  if (!profile || !(data.canManage ?? data.canCreate ?? data.available)) return;
+  let fields;
+  confirmAction({
+    title: "Profile details", description: "Manage this local Claude Desktop profile. Check the signed-in account inside Claude itself.",
+    label: "Save changes", opener, kind: "profile",
+    fields: (host) => {
+      fields = desktopProfileFields(host, profile);
+      const danger = el("div", "profile-danger");
+      const remove = actionButton("Delete profile…", () => deleteDesktopProfile(profileId, opener));
+      remove.className = "danger";
+      remove.dataset.profileDelete = profileId;
+      block(remove, !data.canDelete);
+      remove.title = !data.canDelete ? data.deleteError || "Fully quit Claude Desktop, then Refresh before deleting a profile." : "";
+      danger.append(el("p", "hint", "Deleting removes this profile’s local Claude data. Your usual profile and provider account are not deleted."), remove);
+      host.appendChild(danger);
+    },
+    submit: async (button) => {
+      const current = state.claudeDesktop;
+      const name = fields.name.value.trim(), emailLabel = fields.email.value.trim();
+      if (!(current?.canManage ?? current?.canCreate ?? current?.available) || !current.profiles?.some((item) => item.id === profileId)) return false;
+      if (!name || name.length > 64 || emailLabel.length > 320 || !fields.email.reportValidity()) return false;
+      const success = await act("/api/claude-desktop/update", {profileId, name, emailLabel, confirm: true}, button, "Saving…");
+      if (success) dialogOpener = Array.from(document.querySelectorAll("[data-action]")).find((item) => item.dataset.profileFocus === "details:" + profileId) || desktopProfileUI.refresh;
+      return success;
+    },
+  });
+}
+
+function deleteDesktopProfile(profileId, opener) {
+  const data = state.claudeDesktop;
+  const profile = data?.profiles?.find((item) => item.id === profileId);
+  if (!profile || data.canDelete !== true) return;
+  confirmAction({
+    title: `Delete ${profile.name}?`,
+    description: "This removes this profile and deletes its local Claude data, including its local sign-in and session data. It does not delete your Claude account, cloud data, or the usual default profile. This cannot be undone here.",
+    label: "Delete profile", opener, kind: "profile", replace: true, danger: true,
+    fields: (host) => {
+      $("dialog-submit").dataset.profileDelete = profileId;
+      const check = el("label", "check");
+      const input = el("input");
+      Object.assign(input, {type: "checkbox", required: true});
+      input.dataset.lock = "";
+      check.append(input, el("span", null, "Delete this profile’s local data."));
+      host.appendChild(check);
+    },
+    submit: async (button) => {
+      if (state.claudeDesktop?.canDelete !== true || !state.claudeDesktop.profiles?.some((item) => item.id === profileId)) return false;
+      const success = await act("/api/claude-desktop/delete", {profileId, confirm: true}, button, "Deleting…");
+      dialogOpener = desktopProfileUI.create;
+      if (!state.claudeDesktop?.profiles?.some((item) => item.id === profileId)) block(button, true);
       return success;
     },
   });
@@ -557,26 +688,30 @@ function setupProvider(id) {
   ui.status = el("span", "pill", "unavailable");
   heading.appendChild(ui.status);
   auto.appendChild(heading);
-  ui.lifecycle = el("p", "hint", automationLifecycle());
+  auto.appendChild(el("p", "auto-purpose", "Automatically switch accounts as quota runs low. This limit uses the most-used quota window."));
+  ui.lifecycle = el("p", "hint auto-lifecycle", automationLifecycle());
   auto.appendChild(ui.lifecycle);
   const field = el("div", "threshold-field");
-  const label = el("label", "hint", "Session threshold (% used)");
+  const label = el("label", "hint", "Switch at");
   label.htmlFor = id + "-threshold";
   ui.threshold = el("input");
   Object.assign(ui.threshold, {id: id + "-threshold", type: "number", min: "50", max: "99.9", step: "0.1", value: "90", required: true});
   ui.threshold.dataset.lock = "";
-  ui.threshold.oninput = () => { ui.dirty = true; };
-  ui.apply = actionButton("Apply threshold", () => setAuto(id, ui.mode, ui.apply));
-  field.append(label, ui.threshold, ui.apply);
+  ui.threshold.oninput = () => { ui.dirty = true; renderAutoControls(id); };
+  field.append(label, ui.threshold, el("span", "hint", "% of quota used"));
   auto.appendChild(field);
-  const actions = el("div", "actions");
+  const actions = el("div", "actions auto-actions");
   ui.modes = {};
-  for (const [mode, text] of [["dry-run", "Dry run"], ["live", "Start live"], ["stopped", "Stop"]]) {
+  for (const [mode, text] of [["live", "Start"], ["stopped", "Stop"], ["dry-run", "Start preview"]]) {
     const button = actionButton(text, () => setAuto(id, mode, button, mode === "stopped"));
     ui.modes[mode] = button;
-    actions.appendChild(button);
+    if (mode !== "dry-run") actions.appendChild(button);
   }
+  ui.modes.live.className = "primary";
   auto.appendChild(actions);
+  const preview = el("details", "auto-preview");
+  preview.append(el("summary", null, "Preview without switching"), el("p", "hint", "See which account would be chosen without switching accounts. Usage checks still run and may refresh credentials. Stop ends the preview."), ui.modes["dry-run"]);
+  auto.appendChild(preview);
   ui.error = el("p", "auto-error");
   ui.error.setAttribute("role", "status");
   auto.appendChild(ui.error);
@@ -625,6 +760,21 @@ function renderAccounts(id, data, force = false) {
   }
 }
 
+function renderAutoControls(id) {
+  const ui = providerUI[id];
+  const available = ui.autoAvailable;
+  ui.status.textContent = available ? {stopped: "Stopped", live: "Running", "dry-run": "Previewing"}[ui.mode] : "Unavailable";
+  ui.status.className = "pill" + (available && ui.mode === "live" ? " soft" : available && ui.mode === "dry-run" ? " solid" : "");
+  ui.threshold.dataset.blocked = String(!available);
+  ui.threshold.disabled = busy || !available;
+  ui.modes.live.textContent = ui.mode === "live" && ui.dirty ? "Save threshold" : "Start";
+  ui.modes["dry-run"].textContent = ui.mode === "dry-run" && ui.dirty ? "Update preview" : "Start preview";
+  Object.entries(ui.modes).forEach(([mode, button]) => {
+    block(button, !available || (mode === ui.mode && (mode === "stopped" || !ui.dirty)));
+    button.setAttribute("aria-pressed", String(available && mode === ui.mode));
+  });
+}
+
 function updateProvider(id, data, force = false) {
   const ui = providerUI[id];
   const n = (data.accounts || []).length;
@@ -637,21 +787,14 @@ function updateProvider(id, data, force = false) {
   ui.lifecycle.textContent = automationLifecycle();
   const auto = data.auto || {};
   const available = supports(data, "auto");
+  ui.autoAvailable = available;
   ui.mode = ["dry-run", "live", "stopped"].includes(auto.mode) ? auto.mode : "stopped";
-  ui.status.textContent = available ? ui.mode : "unavailable";
-  ui.status.className = "pill" + (available && ui.mode === "live" ? " solid" : "");
   if (!ui.dirty && document.activeElement !== ui.threshold && typeof auto.threshold === "number") ui.threshold.value = String(auto.threshold);
-  ui.threshold.dataset.blocked = String(!available);
-  ui.threshold.disabled = busy || !available;
-  block(ui.apply, !available);
-  Object.entries(ui.modes).forEach(([mode, button]) => {
-    block(button, !available || mode === ui.mode);
-    button.setAttribute("aria-pressed", String(available && mode === ui.mode));
-  });
+  renderAutoControls(id);
   ui.error.textContent = auto.error || "";
   ui.error.hidden = !auto.error;
   const events = (auto.events || []).slice(-20);
-  ui.reason.textContent = available ? (events.length ? events[events.length - 1].message : "No auto-switch events yet.") : isDesktop() ? "Auto-switch is not available for this provider in the app." : "Auto-switch is not available from this provider/server.";
+  ui.reason.textContent = available ? (events.length ? events[events.length - 1].message : "No auto-switch events yet.") : isDesktop() ? "Auto-switch is not available for this provider in the app." : "Auto-switch is unavailable from this provider/server.";
   ui.events.replaceChildren();
   events.forEach((event) => {
     const item = el("li");
@@ -757,19 +900,23 @@ async function act(path, payload, button, pending) {
   }
 }
 
-function confirmAction({title, description, label, opener, submit, fields, kind = "action"}) {
-  if (busy || codexFlow || $("action-dialog").open) return;
+function confirmAction({title, description, label, opener, submit, fields, kind = "action", replace = false, danger = false}) {
+  if (busy || codexFlow || ($("action-dialog").open && !replace)) return;
   dialogKind = kind;
   dialogOpener = opener;
   dialogAction = submit;
   $("dialog-title").textContent = title;
   $("dialog-description").textContent = description;
   $("dialog-submit").textContent = label;
+  $("dialog-submit").className = danger ? "primary danger" : "primary";
+  $("dialog-submit").title = "";
+  delete $("dialog-submit").dataset.profileDelete;
+  block($("dialog-submit"), false);
   $("dialog-feedback").hidden = true;
   $("dialog-feedback").textContent = "";
   $("dialog-fields").replaceChildren();
   if (fields) fields($("dialog-fields"));
-  $("action-dialog").showModal();
+  if (!$("action-dialog").open) $("action-dialog").showModal();
   $("dialog-cancel").focus();
 }
 
@@ -778,10 +925,15 @@ function setAuto(id, mode, opener, stop = false) {
   if (busy || (!stop && !ui.threshold.reportValidity())) return;
   const payload = {provider: id, mode};
   if (!stop) payload.threshold = Number(ui.threshold.value);
-  const submit = (button) => act("/api/auto", payload, button, "saving…");
+  const submit = async (button) => {
+    const success = await act("/api/auto", payload, button, "Saving…");
+    renderAutoControls(id);
+    return success;
+  };
   if (mode === "live") {
     payload.confirm = true;
-    confirmAction({title: `Start live auto-switch for ${providers[id]}?`, description: `This can change the active CLI account automatically, using a ${payload.threshold}% used-quota threshold. ${automationLifecycle()}`, label: "Confirm live mode", opener, submit});
+    const updating = ui.mode === "live";
+    confirmAction({title: updating ? `Update the ${providers[id]} switching threshold?` : `Start automatic switching for ${providers[id]}?`, description: `This can change the active ${providers[id]} account automatically, using a ${payload.threshold}% used-quota threshold. ${automationLifecycle()}`, label: updating ? "Save threshold" : "Start auto-switch", opener, submit});
   } else {
     submit(opener);
   }
