@@ -157,6 +157,37 @@ test('shutdown waits for actual exit and is idempotent', async () => {
   assert.equal(finished, true);
 });
 
+test('update shutdown requires a graceful successful process exit', async () => {
+  const { backend, child } = fixture();
+  const ready = backend.start(); child.ready(); await ready;
+  const stopped = backend.stopForUpdate();
+  assert.equal(backend.cleanExit, false);
+  assert.deepEqual(child.lines.at(-1), { type: 'shutdown' });
+  child.emit('exit', 0);
+  await stopped;
+  assert.equal(backend.cleanExit, true);
+  assert.deepEqual(child.signals, []);
+});
+
+for (const [code, signal] of [[1, null], [null, 'SIGTERM'], [null, 'SIGKILL']]) {
+  test(`update shutdown rejects exit ${code}/${signal}`, async () => {
+    const { backend, child } = fixture();
+    const ready = backend.start(); child.ready(); await ready;
+    const stopped = backend.stopForUpdate();
+    child.emit('exit', code, signal);
+    await assert.rejects(stopped, { code: 'shutdown_failed' });
+    assert.equal(backend.cleanExit, false);
+  });
+}
+
+test('update shutdown never accepts timeout or force kill as graceful exit', async () => {
+  const { backend, child } = fixture();
+  const ready = backend.start(); child.ready(); await ready;
+  await assert.rejects(backend.stopForUpdate(), { code: 'shutdown_failed' });
+  assert.deepEqual(child.signals, ['SIGKILL']);
+  assert.equal(backend.cleanExit, false);
+});
+
 test('shutdown failure is bounded even when process exit is not reported', async () => {
   const { backend, child } = fixture(new Child({ hangs: true }));
   const ready = backend.start();

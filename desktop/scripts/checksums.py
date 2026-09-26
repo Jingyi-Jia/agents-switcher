@@ -9,7 +9,10 @@ def main() -> None:
     output = Path(__file__).resolve().parents[1] / "release"
     artifacts = sorted(
         path for path in output.iterdir()
-        if path.is_file() and path.name.endswith((".dmg", ".zip", ".exe", ".AppImage", ".deb", ".tar.gz"))
+        if path.is_file() and (
+            path.name.endswith((".dmg", ".zip", ".exe", ".AppImage", ".deb", ".tar.gz", ".blockmap"))
+            or (path.name.startswith("latest") and path.name.endswith(".yml"))
+        )
     )
     if not artifacts:
         raise SystemExit("No desktop artifacts were produced")

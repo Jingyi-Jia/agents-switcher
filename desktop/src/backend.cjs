@@ -51,6 +51,8 @@ class Backend extends EventEmitter {
     this.killTimer = null;
     this.finalTimer = null;
     this.stopPromise = null;
+    this.cleanExit = false;
+    this.killRequested = false;
   }
 
   start() {
@@ -85,7 +87,7 @@ class Backend extends EventEmitter {
         this.fail('launch_failed');
         if (!this.child.pid) this.exited();
       });
-      this.child.once('exit', () => this.exited());
+      this.child.once('exit', (code, signal) => this.exited(code, signal));
       this.child.stdout.once('end', () => {
         if (this.state === 'starting' || this.state === 'running') this.fail('unexpected_exit');
       });
@@ -135,8 +137,9 @@ class Backend extends EventEmitter {
     if (previous === 'running') this.emit('failure', error);
   }
 
-  exited() {
+  exited(code, signal) {
     const previous = this.state;
+    this.cleanExit = previous === 'stopping' && code === 0 && !signal && !this.killRequested;
     this.state = 'stopped';
     clearTimeout(this.startupTimer);
     clearTimeout(this.killTimer);
@@ -170,9 +173,15 @@ class Backend extends EventEmitter {
 
   forceKill() {
     if (!this.child || this.state === 'stopped') return;
+    this.killRequested = true;
     try {
       this.child.kill('SIGKILL');
     } catch {}
+  }
+
+  async stopForUpdate() {
+    await this.stop();
+    if (!this.cleanExit) throw new BackendError('shutdown_failed');
   }
 }
 
