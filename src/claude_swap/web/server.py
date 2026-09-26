@@ -29,6 +29,8 @@ import json
 import logging
 import re
 import secrets
+import select
+import socket
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -438,14 +440,22 @@ def _make_handler(state: DashboardState, token: str):
             self.close_connection = True
             self._json(status, payload)
             self.wfile.flush()
+            try:
+                self.connection.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
             if self._body_started:
                 return
+            deadline = time.monotonic() + REJECTION_DRAIN_TIMEOUT_S
             try:
                 remaining = self._content_length()
             except ProviderActionError:
+                self._discard_rejected_transport(deadline, MAX_BODY_BYTES)
                 return
             self._body_started = True
-            deadline = time.monotonic() + REJECTION_DRAIN_TIMEOUT_S
+            self._discard_declared_body(remaining, deadline)
+
+        def _discard_declared_body(self, remaining: int, deadline: float) -> None:
             try:
                 while remaining:
                     timeout = deadline - time.monotonic()
@@ -453,6 +463,24 @@ def _make_handler(state: DashboardState, token: str):
                         break
                     self.connection.settimeout(timeout)
                     chunk = self.rfile.read1(remaining)
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except OSError:
+                pass
+
+        def _discard_rejected_transport(self, deadline: float, remaining: int) -> None:
+            if not isinstance(self.connection, socket.socket):
+                return
+            try:
+                while remaining:
+                    timeout = deadline - time.monotonic()
+                    if timeout <= 0:
+                        break
+                    readable, _, _ = select.select([self.connection], [], [], timeout)
+                    if not readable:
+                        break
+                    chunk = self.connection.recv(min(remaining, 8192))
                     if not chunk:
                         break
                     remaining -= len(chunk)
