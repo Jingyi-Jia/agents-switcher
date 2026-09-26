@@ -99,6 +99,7 @@ test('Windows Authenticode errors, malformed output and publisher mismatches are
     assert.equal(options.timeout, 25000);
     assert.match(args.at(-1), /\$s.Status -ne 'Valid'/);
     assert.match(args.at(-1), /-LiteralPath \$env:AGENT_SWITCH_UPDATE_FILE/);
+    assert.match(args.at(-1), /\[Console\]::OutputEncoding=\[System.Text.UTF8Encoding\]::new\(\$false\)/);
     assert.equal(args.join(' ').includes(file), false);
     return { stdout: JSON.stringify({ path: file, name: names[0] }) };
   }, env: {} });
@@ -139,6 +140,14 @@ test('Linux supports only a writable directly mounted AppImage, never a deb or t
 
 test('native Windows verification accepts a signed system file with the isolated module path', { skip: process.platform !== 'win32' }, async () => {
   await verifyWindowsSignature(path.join(process.env.SystemRoot, 'System32', 'cmd.exe'), ['Microsoft Windows', 'Microsoft Corporation']);
+});
+
+test('native Windows signature verification preserves Unicode and literal file paths', { skip: process.platform !== 'win32' }, async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-switch-signature-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "签名 preview ['literal'].exe");
+  fs.copyFileSync(path.join(process.env.SystemRoot, 'System32', 'cmd.exe'), file);
+  await verifyWindowsSignature(file, ['Microsoft Windows', 'Microsoft Corporation']);
 });
 
 test('native Windows verification rejects an unsigned file without executing it', { skip: process.platform !== 'win32' }, async t => {

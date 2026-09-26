@@ -17,7 +17,7 @@ function publisherNames(config) {
 
 async function verifyWindowsSignature(file, names, { run = promisify(execFile), env = process.env } = {}) {
   const powershell = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const script = "$ErrorActionPreference='Stop'; $s=Get-AuthenticodeSignature -LiteralPath $env:AGENT_SWITCH_UPDATE_FILE; if ($s.Status -ne 'Valid' -or $null -eq $s.SignerCertificate) { exit 1 }; [ordered]@{path=$s.Path;subject=$s.SignerCertificate.Subject;name=$s.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false)} | ConvertTo-Json -Compress";
+  const script = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $s=Get-AuthenticodeSignature -LiteralPath $env:AGENT_SWITCH_UPDATE_FILE; if ($s.Status -ne 'Valid' -or $null -eq $s.SignerCertificate) { exit 1 }; [ordered]@{path=$s.Path;subject=$s.SignerCertificate.Subject;name=$s.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false)} | ConvertTo-Json -Compress";
   const { stdout } = await run(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
     shell: false, windowsHide: true, timeout: 25000, maxBuffer: 16384,
     env: { ...env, PSModulePath: '', AGENT_SWITCH_UPDATE_FILE: file },

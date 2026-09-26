@@ -18,6 +18,12 @@ for (const [platform, arch, channel, metadata] of [
 ]) {
   test(`pinned real updater resolves ${metadata} and returns explicit availability`, async t => {
     assert.equal(require('electron-updater/package.json').version, '6.8.9');
+    const originalArch = process.env.TEST_UPDATER_ARCH;
+    process.env.TEST_UPDATER_ARCH = arch;
+    t.after(() => {
+      if (originalArch === undefined) delete process.env.TEST_UPDATER_ARCH;
+      else process.env.TEST_UPDATER_ARCH = originalArch;
+    });
     const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-switch-provider-'));
     t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }));
     const updater = new NsisUpdater(null, { version: '1.0.0', isPackaged: true, userDataPath, whenReady: async () => {} });

@@ -26,7 +26,7 @@ from tests.test_tui import FakeSwitcher, _FakeEngine, make_account, make_entry, 
 
 def save_render(app, tmp_path, name):
     svg = app.export_screenshot(title=f"Agent Switch · synthetic {name}")
-    (tmp_path / f"{name}.svg").write_text(svg)
+    (tmp_path / f"{name}.svg").write_text(svg, encoding="utf-8")
     root = ElementTree.fromstring(svg)
     return " ".join(root.itertext()).replace("\u00a0", " ")
 
@@ -135,6 +135,7 @@ async def test_narrow_dashboard_can_scroll_notices_and_all_actions(design_switch
         assert overview.styles.padding.left == 2
         await pilot.press("tab", "end")
         await settle(pilot)
+        await pilot.wait_for_scheduled_animations()
         assert overview.has_focus
         assert overview.scroll_y > 0
         assert overview.scroll_y == overview.max_scroll_y
@@ -143,6 +144,7 @@ async def test_narrow_dashboard_can_scroll_notices_and_all_actions(design_switch
         assert app.screen.query_one("#claude-client-notice").region.bottom <= overview.region.bottom
         await pilot.press("shift+tab", *(["down"] * 8))
         await settle(pilot)
+        await pilot.wait_for_scheduled_animations()
         menu = app.screen.query_one("#menu", ListView)
         assert menu.has_focus
         assert menu.index == len(menu.children) - 1
