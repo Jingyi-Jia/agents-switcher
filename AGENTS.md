@@ -117,13 +117,16 @@ From the repository root:
 ```bash
 uv sync --locked
 uv run agent-switch --help
-uv run pytest
+uv run pytest -m "not native_process"
+uv run pytest -n 0 -m native_process
 npm test --prefix desktop
 ```
 
 `uv sync` installs the default dev group. The Python suite uses pytest-asyncio
-and pytest-xdist; parallelism defaults to `-n auto --dist loadgroup`. For a small
-focused run, override it explicitly:
+and pytest-xdist; parallelism defaults to `-n auto --dist loadgroup`. Run both
+test phases: native process probes must run serially after the other tests
+have exited, so their real process-table reads cannot race test-created children.
+For a small focused run, override parallelism explicitly:
 
 ```bash
 uv run pytest -n 0 tests/test_codex_switcher.py tests/test_codex_login_recovery.py
@@ -141,7 +144,8 @@ For the desktop runtime, use native target OS/architecture builds:
 ```bash
 uv sync --locked --python 3.12 --group desktop-build
 npm ci --prefix desktop
-uv run --no-sync pytest -o faulthandler_timeout=600
+uv run --no-sync pytest -m "not native_process" -o faulthandler_timeout=600
+uv run --no-sync pytest -n 0 -m native_process -o faulthandler_timeout=600
 npm test --prefix desktop
 uv run --no-sync python desktop/scripts/build_backend.py
 ```
@@ -243,6 +247,9 @@ are in [desktop/README.md](desktop/README.md) and
   on disposable macOS CI, never on a developer's workstation. Normalize signed
   Mac UIDs before comparing ownership. Skip only confirmed zombies; missing
   commands on live rows must still block launch.
+  Codex readiness accepts macOS's `?` scheduling state and its known modifiers,
+  but still requires native identity metadata for current-user processes. It
+  never treats an unknown scheduling state or the exiting `E` flag as a zombie.
   Packaging CI runs `--check-processes` on the frozen and bundled helper even
   when provider apps are not installed, so installation detection cannot hide a
   scan failure. It checks strict Codex readiness on all three platforms and
