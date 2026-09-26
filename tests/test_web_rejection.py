@@ -293,6 +293,33 @@ def test_consumed_body_rejection_finish_discards_unread_extra_bytes(rejected_pos
     assert rejected_post.state.mock_calls == []
 
 
+@pytest.mark.parametrize("failure", [TimeoutError(), OSError()])
+@pytest.mark.parametrize("length", [8, server.MAX_BODY_BYTES])
+def test_failed_body_read_reserves_its_budget_before_transport_cleanup(rejected_post, monkeypatch, failure, length):
+    handler = rejected_post.handler
+    handler.headers["X-Auth-Token"] = "test-web-auth"
+    handler.headers.replace_header("Content-Length", str(length))
+    handler.rfile.read.side_effect = failure
+    handler.connection.recv.return_value = b""
+    ready = Mock(return_value=([handler.connection], [], []))
+    monkeypatch.setattr(server.select, "select", ready)
+
+    handler.do_POST()
+
+    assert handler._reject_transport_remaining == server.MAX_BODY_BYTES - length
+    handler.finish()
+
+    assert handler._json.call_args.args[0] == 400
+    handler.rfile.read.assert_called_once_with(length)
+    handler.rfile.read1.assert_not_called()
+    if length == server.MAX_BODY_BYTES:
+        ready.assert_not_called()
+        handler.connection.recv.assert_not_called()
+    else:
+        handler.connection.recv.assert_called_once_with(8192)
+    assert rejected_post.state.mock_calls == []
+
+
 def test_content_type_rejection_drains_without_parsing(rejected_post, monkeypatch):
     handler = rejected_post.handler
     handler.headers["X-Auth-Token"] = "test-web-auth"
