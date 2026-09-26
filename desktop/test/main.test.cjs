@@ -235,6 +235,33 @@ test('the native update menu opens Settings and checks only on deliberate select
   app.quit(); await settle();
 });
 
+test('community release viewing opens the verified browser link without stopping the backend', async () => {
+  const url = 'https://github.com/Jingyi-Jia/agents-switcher/releases/tag/v1.2.0';
+  let checks = 0;
+  const { state, app, invoke } = harness({ runtime: { checkRelease: async () => {
+    checks += 1;
+    return { version: '1.2.0', url };
+  } } });
+  await settle();
+  assert.equal(checks, 0);
+  assert.equal((await invoke('state')).mode, 'manual');
+  await invoke('view-release');
+  assert.deepEqual(state.external, []);
+  await invoke('check');
+  assert.equal(checks, 1);
+  assert.deepEqual(state.external, []);
+  await invoke('view-release');
+  assert.deepEqual(state.external, [url]);
+  await invoke('download'); await invoke('install');
+  assert.equal(state.backends[0].stops, 0);
+  assert.equal(state.backends[0].updateStopCalled, undefined);
+  assert.equal(state.dialogs.length, 0);
+  assert.deepEqual(state.exits, []);
+  app.quit(); await settle();
+  assert.equal(state.backends[0].stops, 1);
+  assert.deepEqual(state.exits, [0]);
+});
+
 test('closing the last window quits and stops the backend', async () => {
   const { state } = harness();
   await settle();

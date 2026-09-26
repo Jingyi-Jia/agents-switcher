@@ -225,14 +225,28 @@ not enable trusted release signing. The workflow uses `pull_request`, never
 
 The maintainer workflow `.github/workflows/release.yml` is displayed as
 **Prepare desktop release**. It is a `workflow_dispatch` with a
-`distribution` input of `community` or `signed`, defaulting to `community`. It
-builds the reviewed `main` commit natively, produces desktop artifacts and the
+`distribution` input of `community` or `signed`, defaulting to `community`, and
+a required `source_sha` containing the full reviewed commit. Select `main` when
+dispatching; the workflow refuses a SHA that differs from that run's main ref.
+It builds that exact commit natively, produces desktop artifacts and the
 Python distributions, and generates SHA256 checksums and provenance attestations
 inside the actual build jobs. It then stages matching assets in a private draft;
 the maintainer publishes only after reviewing the artifacts and attestations and
 completing native installation checks. Keep Python and desktop package versions
 aligned for each release; a package version or private preview is not evidence
 that a public release exists.
+
+The packaged-app smoke can also be run locally on Linux after packaging:
+
+```bash
+xvfb-run -a node desktop/scripts/smoke_app.cjs linux x64 community
+```
+
+Use `preview` or `signed` for those build modes. On disposable macOS/Windows
+runners, use the native platform/architecture and `--disposable-runner`; never
+use that acknowledgement to run against a personal workstation's credential
+store. `--screenshot FILE.png` captures the isolated Settings screen. This test
+opens no provider login or update link and never installs an update.
 
 Community releases upload no `latest*.yml` feed files and no `.blockmap` files.
 The signed pipeline retains verified feeds, blockmaps, signature gates, clean

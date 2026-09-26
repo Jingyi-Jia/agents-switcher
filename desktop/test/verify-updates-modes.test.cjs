@@ -20,7 +20,7 @@ async function packaged(t, platform, arch, flags) {
     : path.join(directory, platform === 'win' ? 'win-unpacked' : 'linux-unpacked', 'resources');
   fs.mkdirSync(resources, { recursive: true });
   const input = path.join(directory, 'input');
-  for (const file of ['src/preload.cjs', 'src/updater.cjs', 'src/updater-runtime.cjs', 'node_modules/electron-updater/out/main.js']) {
+  for (const file of ['src/preload.cjs', 'src/updater.cjs', 'src/updater-runtime.cjs', 'src/community-updates.cjs', 'node_modules/electron-updater/out/main.js']) {
     fs.mkdirSync(path.dirname(path.join(input, file)), { recursive: true });
     fs.writeFileSync(path.join(input, file), '');
   }
@@ -75,6 +75,14 @@ test('default packaged verification requires an explicitly preview manifest', as
   verifyPackagedConfig(options);
   assert.throws(() => verifyPackagedConfig({ ...options, releaseBuild: true }));
   assert.throws(() => verifyPackagedConfig({ ...options, communityBuild: true }), /release capability/);
+});
+
+test('packaged verification requires the manual checker even in preview builds', async t => {
+  const options = await packaged(t, 'linux', 'x64', { agentSwitchRelease: false, agentSwitchCommunityRelease: false });
+  verifyPackagedConfig(options);
+  fs.unlinkSync(path.join(options.directory, 'input', 'src/community-updates.cjs'));
+  await options.write();
+  assert.throws(() => verifyPackagedConfig(options));
 });
 
 test('community verification rejects conflicting flags, unsupported targets, and unstable versions', async t => {

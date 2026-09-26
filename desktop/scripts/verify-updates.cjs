@@ -109,7 +109,7 @@ function verifyPackagedConfig({ directory, platform, arch, version, releaseBuild
     || manifest.dependencies?.['electron-updater'] !== require('../package.json').dependencies['electron-updater']) {
     throw new Error('Packaged version, updater, or release capability differs from the build');
   }
-  for (const file of ['src/preload.cjs', 'src/updater.cjs', 'src/updater-runtime.cjs', 'node_modules/electron-updater/out/main.js']) {
+  for (const file of ['src/preload.cjs', 'src/updater.cjs', 'src/updater-runtime.cjs', 'src/community-updates.cjs', 'node_modules/electron-updater/out/main.js']) {
     asar.statFile(path.join(resources, 'app.asar'), path.normalize(file));
   }
 }

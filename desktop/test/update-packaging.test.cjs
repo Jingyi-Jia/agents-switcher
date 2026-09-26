@@ -86,7 +86,7 @@ test('packaged ASAR includes the isolated bridge and pinned updater with the cor
   const input = path.join(options.directory, 'input'), resources = path.join(options.directory, 'win-unpacked', 'resources');
   const manifest = { version: options.version, agentSwitchRelease: true, agentSwitchCommunityRelease: false,
     dependencies: { 'electron-updater': require('../package.json').dependencies['electron-updater'] } };
-  for (const file of ['src/preload.cjs', 'src/updater.cjs', 'src/updater-runtime.cjs', 'node_modules/electron-updater/out/main.js']) {
+  for (const file of ['src/preload.cjs', 'src/updater.cjs', 'src/updater-runtime.cjs', 'src/community-updates.cjs', 'node_modules/electron-updater/out/main.js']) {
     fs.mkdirSync(path.dirname(path.join(input, file)), { recursive: true }); fs.writeFileSync(path.join(input, file), '');
   }
   fs.mkdirSync(resources, { recursive: true });

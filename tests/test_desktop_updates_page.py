@@ -4,19 +4,20 @@ from tests.test_web_page_actions import node, run_page
 UPDATER = r"""
 const updateCalls = [];
 let updateListener, updateUnsubscribed = false;
-let nativeUpdate = {schemaVersion: 1, supported: true, status: 'idle', currentVersion: '1.1.0', availableVersion: null, progress: null, message: 'Check for a newer version.'};
+let nativeUpdate = {schemaVersion: 1, supported: true, mode: 'install', status: 'idle', currentVersion: '1.1.0', availableVersion: null, progress: null, message: 'Check for a newer version.'};
 const emitUpdate = patch => { nativeUpdate = {...nativeUpdate, ...patch}; updateListener(nativeUpdate); };
 const updateHandlers = {
   check: async () => { emitUpdate({status: 'available', availableVersion: '1.2.0', message: 'An update is available.'}); return nativeUpdate; },
   download: async () => { emitUpdate({status: 'downloaded', message: 'Ready to install.'}); return nativeUpdate; },
   cancel: async () => { emitUpdate({status: 'available', message: 'Download cancelled.'}); return nativeUpdate; },
   install: async () => nativeUpdate,
+  viewRelease: async () => nativeUpdate,
 };
 window.agentSwitchUpdater = {
   getState: async () => { updateCalls.push('getState'); return nativeUpdate; },
   onState: callback => { updateListener = callback; return () => { updateUnsubscribed = true; }; },
 };
-for (const action of ['check', 'download', 'cancel', 'install']) window.agentSwitchUpdater[action] = async (...args) => {
+for (const action of ['check', 'viewRelease', 'download', 'cancel', 'install']) window.agentSwitchUpdater[action] = async (...args) => {
   assert.equal(args.length, 0); updateCalls.push(action); return updateHandlers[action]();
 };
 """
@@ -138,3 +139,108 @@ assert.equal($('update-check').disabled, true);
 assert.match($('update-status').textContent, /unavailable/);
 assert.equal($('view-settings').hidden, false);
 """, setup="window.agentSwitchUpdater = {getState: async () => ({})};")
+
+
+def test_community_release_only_offers_explicit_checks_and_a_native_release_link(node):
+    run_page(node, r"""
+await navigate('settings');
+assert.match($('update-kind').textContent, /Community release.*manual updates/);
+assert.match($('update-policy').textContent, /never downloads or installs community updates/);
+assert.deepEqual(updateCalls, ['getState']);
+assert.equal($('update-check').disabled, false);
+assert.equal($('update-view-release').hidden, true);
+await $('update-check').click();
+assert.equal($('update-view-release').hidden, false);
+assert.equal($('update-view-release').disabled, false);
+assert.match($('update-version').textContent, /Available version 1.2.0/);
+for (const action of ['download', 'cancel', 'install']) {
+  assert.equal($('update-' + action).hidden, true);
+  assert.equal($('update-' + action).disabled, true);
+  await $('update-' + action).click();
+}
+await $('update-view-release').click();
+assert.deepEqual(updateCalls, ['getState', 'check', 'viewRelease']);
+assert.equal(posts().length, 0);
+assert(!calls.some(call => call.path.includes('update')));
+""", setup=UPDATER + "nativeUpdate.mode = 'manual';")
+
+
+def test_community_check_is_not_repeated_by_polling_or_navigation(node):
+    run_page(node, r"""
+await navigate('settings'); await load(); await settle();
+assert.deepEqual(updateCalls, ['getState']);
+let finishCheck;
+updateHandlers.check = async () => {
+  emitUpdate({status: 'checking', message: 'Checking the release…'});
+  return new Promise(resolve => { finishCheck = resolve; });
+};
+const checking = $('update-check').click();
+await settle();
+assert.equal($('update-check').disabled, true);
+assert.equal($('update-view-release').hidden, true);
+await $('update-check').click();
+assert.deepEqual(updateCalls, ['getState', 'check']);
+emitUpdate({status: 'not-available', message: 'No newer release is available.'});
+finishCheck(nativeUpdate); await checking;
+assert.equal($('update-check').disabled, false);
+assert.equal($('update-view-release').hidden, true);
+assert.match($('update-kind').textContent, /Community release/);
+assert.equal($('update-progress').hidden, true);
+""", setup=UPDATER + "nativeUpdate.mode = 'manual';")
+
+
+def test_community_errors_and_missing_release_never_offer_executable_actions(node):
+    run_page(node, r"""
+for (const status of ['error', 'not-available']) {
+  emitUpdate({status, message: status === 'error' ? 'Try checking later.' : 'No published release is available yet.'});
+  assert.equal($('update-check').disabled, false);
+  assert.equal($('update-view-release').hidden, true);
+  for (const action of ['download', 'cancel', 'install']) {
+    assert.equal($('update-' + action).hidden, true);
+    assert.equal($('update-' + action).disabled, true);
+  }
+}
+emitUpdate({status: 'available', availableVersion: '1.2.0', url: 'https://foreign.example/token'});
+await $('update-view-release').click();
+assert.deepEqual(updateCalls, ['getState', 'viewRelease']);
+assert.doesNotMatch($('app-updates').textContent, /foreign.example/);
+assert.equal(nodes('app-updates').find(node => node.tagName === 'A').href,
+  'https://github.com/Jingyi-Jia/agents-switcher/releases');
+""", setup=UPDATER + "nativeUpdate.mode = 'manual';")
+
+
+def test_invalid_modes_and_community_install_states_fail_closed(node):
+    run_page(node, r"""
+for (const patch of [{mode: undefined}, {mode: 'other'}, {mode: 'manual', status: 'downloaded'},
+  {mode: 'manual', status: 'downloading', progress: {percent: 50}}, {mode: 'manual', status: 'installing'}]) {
+  updateListener({...nativeUpdate, ...patch});
+  assert.equal($('update-check').disabled, true);
+  for (const action of ['download', 'cancel', 'install']) assert.equal($('update-' + action).hidden, true);
+  assert.equal($('update-view-release').hidden, true);
+  assert.equal($('update-progress').hidden, true);
+  assert.match($('update-status').textContent, /unavailable/);
+}
+""", setup=UPDATER)
+
+
+def test_community_release_opening_respects_busy_state_and_hides_bridge_errors(node):
+    run_page(node, r"""
+await $('update-check').click();
+busy = true; syncBusy();
+await $('update-view-release').click();
+assert.deepEqual(updateCalls, ['getState', 'check']);
+busy = false; syncBusy();
+let finishOpen;
+updateHandlers.viewRelease = () => new Promise(resolve => { finishOpen = resolve; });
+const opening = $('update-view-release').click(); await settle();
+assert.equal($('update-view-release').disabled, true);
+await $('update-view-release').click();
+assert.deepEqual(updateCalls, ['getState', 'check', 'viewRelease']);
+finishOpen(nativeUpdate); await opening;
+assert.equal($('update-view-release').disabled, false);
+updateHandlers.viewRelease = async () => { throw new Error('PRIVATE browser path'); };
+await $('update-view-release').click();
+assert.doesNotMatch($('app-updates').textContent, /PRIVATE browser path/);
+assert.equal($('update-view-release').hidden, true);
+assert.equal($('update-install').hidden, true);
+""", setup=UPDATER + "nativeUpdate.mode = 'manual';")
