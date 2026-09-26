@@ -10,14 +10,15 @@ login.
 
 ## Downloads and installation
 
-Use the assets on the [GitHub Releases page](https://github.com/jingyi-jia/agents-switcher/releases),
-when desktop installers are available. Match both your operating system and CPU:
+Use the assets on the [GitHub Releases page](https://github.com/jingyi-jia/agents-switcher/releases)
+when a release is published. Draft artifacts and package versions are not
+published downloads. Match both your operating system and CPU:
 
 | Platform | Requirement | Download and install |
 | --- | --- | --- |
 | macOS, Apple Silicon | macOS 13 or newer, M-series Mac | `Agent-Switch-<version>-mac-arm64.dmg`; open it and drag **Agent Switch** to Applications. A `.zip` of the same app is also provided. |
 | macOS, Intel | macOS 13 or newer, Intel Mac | `Agent-Switch-<version>-mac-x64.dmg`; open it and drag **Agent Switch** to Applications. |
-| Windows | Windows 10 or newer, x64 | `Agent-Switch-<version>-win-x64.exe`; run the installer, then launch **Agent Switch** from Start. Windows ARM is not a native build target. |
+| Windows | Windows 10 or newer, x64 | `Agent-Switch-<version>-win-x64.exe`; run the unsigned NSIS installer, then launch **Agent Switch** from Start. A no-install ZIP is deferred. Windows ARM is not a native build target. |
 | Linux | x64 desktop, Ubuntu 22.04 or newer as the build baseline | Use the `.deb` on Debian/Ubuntu, or the `.AppImage` on compatible distributions. A `.tar.gz` fallback contains the unpacked application. |
 
 On Ubuntu/Debian, install the downloaded `.deb` with your graphical package
@@ -29,53 +30,77 @@ working graphical session and Chromium's system libraries/sandbox support;
 bundling Python does not make the app independent of the OS. Other Linux
 distributions are not yet validated.
 
-**Public macOS releases must be Developer ID signed and notarized; public Windows
-releases must be code signed.** Signing credentials are not included in this
-repository, and configuration alone does not establish release trust. PR and
-manual-workflow artifacts are developer previews, not recommended downloads for
-nontechnical users. Both macOS architectures use ad-hoc signatures to seal the
-modified app bundle; these signatures do not identify an Apple-trusted developer
-and are not notarization. Other preview platforms remain unsigned. Gatekeeper or
-SmartScreen may still block previews. Do not disable these protections; wait for
-a trusted release or build in a disposable development environment. Windows
-reputation warnings can still occur for newly signed apps.
+The public community distribution does not require paid Apple or Windows signing
+credentials. Both macOS architectures use free ad-hoc signatures to seal the
+modified app bundle, with the existing hardened-runtime entitlements; these
+signatures do not identify an Apple-trusted developer and are not notarization.
+Community Windows releases are unsigned NSIS installers. Linux retains the
+AppImage, deb, and tar formats. A separate signed distribution remains optional
+and future: it requires Developer ID signing and notarization on macOS and
+Authenticode signing on Windows. Signing credentials are not included in this
+repository, and an explicitly signed build must fail rather than silently fall
+back to an unsigned artifact when credentials are missing.
+
+PR and manual-workflow artifacts remain developer previews, not recommended
+downloads for nontechnical users. Fresh native first-launch and installation
+testing is required for public community releases; CI helper checks are not
+proof of a working native package. Gatekeeper or SmartScreen may still block
+community downloads. Do not disable OS protections; use a disposable development
+environment for preview testing.
 
 Older Mac previews skipped bundle signing and can report that Agent Switch
 "is damaged and can't be opened." Use a newer build rather than removing
-quarantine attributes or re-signing the downloaded app yourself. CI now verifies
-the app's signatures in the build directory, extracted ZIP, and mounted DMG.
-For a verified preview from this repository, an unidentified-developer warning
-can still require an explicit **System Settings → Privacy & Security → Open
-Anyway** approval. Only approve a preview if you trust its source and intend to
-test it; see [Apple's guidance](https://support.apple.com/en-us/102445).
+quarantine attributes or re-signing the downloaded app yourself. CI verifies
+the ad-hoc signature and existing hardened-runtime entitlements, but that is not
+notarization or proof of safe code. If Gatekeeper offers it, follow [Apple's
+official Open Anyway instructions](https://support.apple.com/en-us/102445) only
+after choosing to trust the verified official download. Windows may show
+SmartScreen; where offered, choose **More info → Run anyway** only after choosing
+to trust the verified official download. Warnings can recur, and SmartScreen,
+Smart App Control (SAC), Windows Defender Application Control, or enterprise
+policy can fully block an app with no per-app override. Never disable Gatekeeper,
+antivirus, SmartScreen, or Application Control, and never remove quarantine. A
+damaged, malware, or
+unexpected-signature alert needs investigation, not bypass instructions.
 
 ### In-app updates
 
-Official stable releases include an updater in **Settings → App updates**.
-**Help → Check for Updates** opens Settings and checks the public stable releases
-of `Jingyi-Jia/agents-switcher`. Checking, downloading, and installing are separate
-user actions: no background checks, automatic downloads, or installation on normal
-Quit. Settings shows the running version, available version, download progress,
-and safe error messages. Downloads can be cancelled. **Install and restart** asks
-for native confirmation, then waits for a successful backend shutdown before
-handing control to the installer. A forced or failed shutdown blocks installation.
-The new version is confirmed only when the replacement app starts; handing off to
-an installer is not proof that an update succeeded.
+Community releases expose a manual check in **Settings → App updates**.
+**Help → Check for Updates** opens Settings and checks the fixed public
+`Jingyi-Jia/agents-switcher` repository. If a newer release exists, **View
+release** opens that corresponding GitHub release in the browser. It never
+downloads an executable or self-installs, even when an IPC caller asks it to, and
+it never performs automatic checks. A normal app quit never installs an update.
+
+The runtime has three states: `manual` for a community release, `install` for a
+signed release that passed all native gates, and `unsupported` for previews and
+development builds. Community builds embed `agentSwitchRelease: false` and
+`agentSwitchCommunityRelease: true`; signed builds embed the reverse. Defaults
+are both `false`, so previews and development builds remain explicitly
+unsupported. The community state exposes only a sanitized release link and safe
+status; it accepts no renderer URL, feed, executable, token, or credential. There
+is no HTTP update endpoint.
 
 | Installed format | In-app update support |
 | --- | --- |
-| macOS, arm64 or x64 | Official Developer ID-signed app in Applications. The updater downloads the matching ZIP; macOS verifies its signature during the explicit install. Apps running from a DMG, ad-hoc previews, and modified bundles are unsupported. |
-| Windows, x64 | Signed NSIS installation with the original publisher metadata. Both the updater's publisher verification and an additional fail-closed Authenticode check must pass. Missing/broken verification never permits installation. |
-| Linux, x64 | A directly launched, writable `.AppImage` in a writable directory. Symlinked, extracted, read-only, DEB, and tar installations are unsupported; use your package installer or replace the file manually. |
-| Development and CI previews | In-app updates are disabled, even if the version number matches a release. Install an official stable release first. |
+| Community macOS, arm64 or x64 | Manual release-page installation of the matching ad-hoc-signed DMG/ZIP. Ad-hoc signing is not Developer ID signing or notarization. |
+| Community Windows, x64 | Manual release-page installation of the unsigned NSIS installer. No-install ZIP is deferred. |
+| Community Linux, x64 | Manual release-page installation of the AppImage, deb, or tar package. |
+| Future signed macOS | Explicit download and install only for a Developer ID-signed, notarized app in Applications; architecture-specific feeds remain separate. |
+| Future signed Windows | Explicit download and install only for a signed NSIS installation after publisher and fail-closed Authenticode checks pass. |
+| Development and CI previews | Updates are unsupported, even if the version number matches a release. |
 
-The updater never selects prereleases or downgrades, accepts no custom feed, and
-needs no GitHub token. Downloads use HTTPS and SHA-512 metadata integrity checks;
-Linux does not gain macOS/Windows code-signature guarantees. If the latest release
-is still building or has no desktop metadata, the check reports an error rather
-than claiming the app is current. **Help → Download updates manually** remains
-available for unsupported installations and recovery. Versions predating this
-updater need one manual installation of an updater-enabled official release.
+The signed path is retained as an optional future capability. It may download and
+install only after explicit user action, strict signature verification, native
+confirmation, and a confirmed clean backend shutdown; missing credentials or
+verification must fail closed, never silently falling back to community behavior.
+Its feeds remain fixed, architecture-specific where required, and free of
+renderer-controlled URLs or credentials. A successful handoff to an installer is
+not proof that the replacement app started; clean-machine installation and first
+launch must be checked after publication.
+
+Versions predating the community release flow need one manual installation from
+the GitHub Releases page. No update mode installs during ordinary Quit.
 
 Quitting the application, including closing its only window, stops its backend and
 session-owned auto-switching. It does not stop independently started CLI
@@ -144,9 +169,12 @@ npm run dist -- --win --x64
 ```
 
 `dist` always passes `--publish never`: local packaging cannot publish a release.
-The default build also embeds `agentSwitchRelease: false`, so it cannot offer
-in-app updates. The public-release workflow enables this capability only after
-requiring its signing inputs; do not set it on unsigned or ad-hoc preview builds.
+The default build embeds `agentSwitchRelease: false` and
+`agentSwitchCommunityRelease: false`, so previews and development builds cannot
+offer update actions. The community release workflow explicitly enables only
+`agentSwitchCommunityRelease`; the optional signed workflow enables only
+`agentSwitchRelease` after requiring its signing inputs. Do not set the signed
+flag on unsigned or ad-hoc builds.
 After packaging, verify the native target, for example:
 
 ```bash
@@ -154,9 +182,10 @@ node scripts/verify-updates.cjs linux x64
 ```
 
 Use `mac arm64`, `mac x64`, or `win x64` on those native build machines. The
-`--release` option verifies that a release build has the enabled capability, and
-requires Windows publisher metadata. It does not sign an app or bypass any
-signature gate.
+`--release` option verifies the selected release capability on the native target.
+It does not sign an app or bypass any signature gate. Keep exact workflow and
+builder internals in the workflow and tests rather than treating this local
+verification as proof of a published release.
 
 Outputs are in `desktop/release/`. A local macOS build can discover your own
 signing identity; for a preview without using that identity, run
@@ -174,48 +203,65 @@ built on a newer glibc may not run on the baseline even if Electron does.
 `macos-15-intel` (x64), `windows-2022` (x64), and `ubuntu-22.04` (x64).
 It tests the Python suite and Electron shell, builds and smoke-tests the frozen
 helper, packages installers, then smoke-tests the helper again from the actual
-application resources. macOS jobs also verify bundle signatures in the packaged
-app and both distributed formats before uploading. Each job verifies the packaged
-version and updater capability, public feed, artifact sizes and SHA-512 hashes,
-and external or embedded blockmaps. It uploads only installers, update metadata,
-blockmaps, and SHA-256 checksums, not unpacked workspaces or accounts. CI has no display-driven installer test;
-clean-machine installation and first-run checks remain a release prerequisite.
+application resources. Community packaging retains ad-hoc macOS signing on
+arm64 and x64, existing hardened-runtime entitlements, an unsigned Windows NSIS
+installer, and Linux AppImage/deb/tar outputs. CI has no display-driven installer
+test; clean-machine installation and first-run checks remain a release
+prerequisite.
 
-PR path changes and **Run workflow** produce preview artifacts in the workflow
-run's Artifacts section. Neither path receives signing secrets or release write
-permission. The macOS preview step explicitly enables the builder's PR signing
-path only for an ad-hoc identity (`-`), with certificate discovery disabled and
-certificate inputs removed from the environment. This seals the modified bundle without using a private
-key; it does not enable trusted release signing for PRs. The workflow uses
-`pull_request`, never `pull_request_target`, and does not check out a different
-branch during the build.
+The packaged-app startup smoke uses an isolated app and
+the loopback debug protocol. That smoke checks renderer startup, the release
+mode, normal quit, and screenshots; it does not approve browser quarantine,
+Gatekeeper, SmartScreen, or installer UI behavior. Those OS approval prompts and
+clean-machine installer checks still require fresh native testing.
 
-A maintainer publishing an existing stable GitHub release triggers the release
-build from that tag; the tag must be `v` followed by the desktop package version.
-Prerelease publication is not supported by this stable-release workflow.
-The workflow never creates tags or releases. All native builds
-must pass before a separate, narrowly permissioned job attaches their artifacts
-to that existing release. Re-running a release replaces matching artifact names.
-Maintainers must review the tagged source and align Python and desktop package
-versions before publishing. Published releases are the trusted trigger: restrict
-who can create releases and protect release tags.
+PR path changes and the existing **Desktop installers** workflow remain
+preview-only. Neither path receives signing secrets or release write permission.
+The macOS preview step explicitly enables the builder's ad-hoc identity (`-`),
+with certificate discovery disabled and certificate inputs removed from the
+environment. This seals the modified bundle without using a private key; it does
+not enable trusted release signing. The workflow uses `pull_request`, never
+`pull_request_target`, and does not check out a different branch during the build.
 
-The update assets are `latest.yml` for Windows, `latest-linux.yml` for AppImage,
-and `latest-arm64-mac.yml` / `latest-x64-mac.yml` for macOS. Separate macOS channels
-prevent architecture jobs from overwriting the other's metadata. Windows NSIS
-and macOS ZIP/DMG artifacts include `.blockmap` companions; the AppImage has an
-embedded blockmap. DEB and tar files remain manual downloads. The upload job
-attaches installers and blockmaps first, then the verified metadata, so clients
-cannot be directed to an artifact that has not been uploaded. Build steps have
-no release-write token; the narrowly scoped upload job is the only publisher.
+The maintainer workflow `.github/workflows/release.yml` is displayed as
+**Prepare desktop release**. It is a `workflow_dispatch` with a
+`distribution` input of `community` or `signed`, defaulting to `community`. It
+builds the reviewed `main` commit natively, produces desktop artifacts and the
+Python distributions, and generates SHA256 checksums and provenance attestations
+inside the actual build jobs. It then stages matching assets in a private draft;
+the maintainer publishes only after reviewing the artifacts and attestations and
+completing native installation checks. Keep Python and desktop package versions
+aligned for each release; a package version or private preview is not evidence
+that a public release exists.
 
-Before enabling a public download, test an actual signed upgrade on disposable
-native machines: check and download a higher stable version, cancel a download,
-quit with a downloaded update (it must not install), and explicitly install and
-restart. Confirm the new version after relaunch, that the old backend exited,
-that saved accounts remain unchanged, and that unsigned/wrong-publisher updates
-are rejected. Unit tests and a packaging verifier cannot establish those native
-installation results without signed artifacts.
+Community releases upload no `latest*.yml` feed files and no `.blockmap` files.
+The signed pipeline retains verified feeds, blockmaps, signature gates, clean
+shutdown requirements, Developer ID/notarization checks, and Authenticode
+verification. It must fail closed when an explicitly signed build lacks its
+credentials; it must not silently become a community build. Neither workflow
+configuration nor a draft artifact means that a public release has already been
+published.
+
+GitHub attestations are available without a paid plan. Verify each downloaded
+file against the expected workflow and source, for example:
+
+```bash
+gh attestation verify Agent-Switch-<version>-linux-x86_64.AppImage \
+  --repo Jingyi-Jia/agents-switcher
+```
+
+An attestation proves claimed provenance, not safe code or reproducible native
+binaries. SHA256 checksums detect changes but do not establish publisher identity.
+
+Before publishing a public download, install and launch every native artifact on
+the target OS and architecture. For signed builds, also test an actual signed
+upgrade on disposable native machines: check and download a higher stable
+version, cancel a download, quit with a downloaded update (it must not install),
+and explicitly install and restart. Confirm the new version after relaunch, that
+the old backend exited, that saved accounts remain unchanged, and that
+unsigned/wrong-publisher updates are rejected. Unit tests and a packaging
+verifier cannot establish those native installation results without signed
+artifacts.
 
 ### Signing configuration
 
@@ -231,26 +277,28 @@ Add these **GitHub Actions secrets**, never files in the source tree:
 | `WINDOWS_CERTIFICATE_PFX` | Base64-encoded exportable code-signing certificate and private key (`.pfx`), supplied as `CSC_LINK`. |
 | `WINDOWS_CERTIFICATE_PASSWORD` | Password for the Windows certificate, supplied as `CSC_KEY_PASSWORD`. |
 
-These secrets are optional for preview builds and required for a published-release
-build: missing credentials fail the macOS/Windows release jobs rather than
-silently distributing unsigned installers. macOS release builds enable hardened
-runtime and notarization, sign the embedded backend, and verify the app signature
-and notarization staple. Windows release builds require signing through
-electron-builder's supported certificate options and verify Authenticode on the
-app, backend and installer. The installed app's generated `app-update.yml` must
-contain its certificate-derived `publisherName`; absent metadata disables the
-updater rather than bypassing signature verification. Keep the signing identity
-compatible across upgrades. Organizations with hardware-
+These secrets are optional for community builds and required for the optional
+signed distribution: missing credentials fail the signed macOS/Windows jobs
+rather than silently distributing unsigned installers or changing the requested
+mode. Signed macOS builds retain hardened runtime and notarization, sign the
+embedded backend, and verify the app signature and notarization staple. Signed
+Windows builds require signing through electron-builder's supported certificate
+options and verify Authenticode on the app, backend, and installer. The installed
+signed app's generated `app-update.yml` must contain its certificate-derived
+`publisherName`; absent metadata disables signed installation rather than
+bypassing signature verification. Keep the signing identity compatible across
+upgrades. Organizations with hardware-
 backed certificates should adapt that step to electron-builder's supported Azure
 Trusted Signing or custom signing service, rather than trying to export a
 non-exportable private key. No Windows cloud-signing tenant is preconfigured.
 
-**A nontechnical public launch is not ready until credentials are provisioned,
+**A signed self-updating release is not ready until credentials are provisioned,
 all signed native CI builds pass, and the actual downloads are installed and
 opened on clean target machines.** This includes verifying the nested helper's
 signature/loading on macOS and Windows, provider CLI detection, and all installer
-formats. The workflow cannot claim any of those signing results without running
-with real authorized credentials.
+formats. Community releases do not require these paid signing credentials. The
+workflow cannot claim signed results without running with real authorized
+credentials.
 
 ### Pinned action provenance
 
@@ -264,24 +312,28 @@ the macOS 13 minimum follows [Electron 44's release notes](https://www.electronj
 Updater behavior and supported installer formats follow the
 [official updater guide](https://www.electron.build/auto-update.html) and
 [AppUpdater API](https://www.electron.build/electron-updater.Class.AppUpdater.html).
-The app deliberately restricts Linux support to AppImage and disables the
-library's automatic download and install-on-quit defaults.
+The self-installing update path deliberately restricts Linux support to AppImage
+and disables the library's automatic download and install-on-quit defaults;
+community manual release checks support AppImage, deb, and tar downloads.
 
 ### Private renderer bridge
 
 The sandboxed, context-isolated preload exposes only `window.agentSwitchUpdater`:
-zero-argument `getState()`, `check()`, `download()`, `cancel()`, and `install()`
-return promises of a state snapshot. `onState(callback)` returns an unsubscribe
-function. A snapshot contains `schemaVersion: 1`, `supported`, `status`,
-`currentVersion`, `availableVersion`, `message`, and optional `progress`
-(`percent`, `transferred`, `total`, `bytesPerSecond`). `status` is one of
-`unsupported`, `idle`, `checking`, `available`, `not-available`, `downloading`,
-`cancelling`, `downloaded`, `installing`, or `error`; missing version/progress
-values are `null`. There is no bridge in the regular browser dashboard.
+zero-argument `getState()`, `check()`, `viewRelease()`, `download()`, `cancel()`,
+and `install()` return promises of a state snapshot. `onState(callback)` returns
+an unsubscribe function. A snapshot contains `schemaVersion: 1`, `supported`,
+`mode` (`manual`, `install`, or `unsupported`), `status`, `currentVersion`,
+`availableVersion`, `message`, and optional `progress` (`percent`, `transferred`,
+`total`, `bytesPerSecond`). Community builds use `mode: "manual"`; their
+download and install operations remain unavailable even if invoked through IPC.
+Signed builds use `mode: "install"` only after all native gates pass. Development
+and preview defaults are `mode: "unsupported"`. There is no bridge in the
+regular browser dashboard.
 
-All five IPC handlers accept only the current owned dashboard's main frame, and
+All six IPC handlers accept only the current owned dashboard's main frame, and
 reject arguments, foreign windows, subframes, and other URLs. State events strip
 native IPC events and contain no release HTML, filesystem paths, backend token,
-or raw updater errors. Neither renderer nor backend can choose an update feed,
-executable, command, or file to install. This is a private UI contract, not a
-public updater SDK.
+or raw updater errors. `viewRelease()` joins the existing zero-argument methods;
+it resolves the fixed repository release in the browser and accepts no renderer
+URL. Neither renderer nor backend can choose an update feed, executable, command,
+or file to install. This is a private UI contract, not a public updater SDK.
