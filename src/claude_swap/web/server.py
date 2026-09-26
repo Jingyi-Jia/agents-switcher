@@ -511,8 +511,8 @@ def _make_handler(state: DashboardState, token: str):
                 raise ProviderActionError("Content-Type must be application/json")
             self.connection.settimeout(10)
             self._body_started = True
+            self._record_rejected_body_bytes(length)
             raw = self.rfile.read(length)
-            self._record_rejected_body_bytes(len(raw))
             if len(raw) != length:
                 raise ProviderActionError("Incomplete JSON body")
 
