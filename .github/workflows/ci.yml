@@ -1,115 +1,111 @@
-name: CI
+name: Rejected HTTP shutdown comparison
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  # Lets CI be run on demand for any ref, e.g. a branch that has no PR yet.
   workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact production candidate commit to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-
+  compare:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: old-handler-windows-control
+            baseline: true
+          - os: windows-latest
+            label: corrected-windows-current-a
+            baseline: false
+          - os: windows-latest
+            label: corrected-windows-current-b
+            baseline: false
+          - os: windows-2022
+            label: corrected-windows-installer
+            baseline: false
+          - os: macos-15
+            label: corrected-macos
+            baseline: false
+          - os: ubuntu-22.04
+            label: corrected-linux
+            baseline: false
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-
-      # uv (not pip) so the PEP 735 dev dependency-group — pytest,
-      # pytest-asyncio — installs from the committed lockfile, same as local
-      # development.
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          version: '0.12.3'
           python-version: '3.12'
-
-      - name: Install Node for dashboard runtime tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+          enable-cache: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: "24.18.0"
+          node-version: '24.18.0'
           package-manager-cache: false
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Run tests
+      - name: Install locked dependencies
+        run: uv sync --locked --group desktop-build
+      - name: Verify the exact candidate revision
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git log -1 --oneline
+      - name: Restore the old server for the negative control
+        if: matrix.baseline
+        run: git restore --source=c26f53172e06d1983a167f9999ebfcc0b1982dbf -- src/claude_swap/web/server.py
+      - name: Prove the old handler fails the raw teardown regression
+        if: matrix.baseline
+        run: |
+          set +e
+          uv run --no-sync pytest -n 0 tests/test_web_rejection.py::test_malformed_framing_finish_discards_late_raw_transport_without_http_body_read --junitxml=control.xml
+          result=$?
+          set -e
+          test "$result" -eq 1
+          uv run --no-sync python - <<'PY'
+          from xml.etree import ElementTree
+          root = ElementTree.parse('control.xml').getroot()
+          assert len(root.findall('.//failure')) == 1
+          assert not root.findall('.//error')
+          print('OLD_HANDLER_NEGATIVE_CONTROL=confirmed')
+          PY
+      - name: Run focused rejection and authenticated-action safety tests
+        if: matrix.baseline == false
+        run: uv run --no-sync pytest -n 0 tests/test_web_rejection.py tests/test_web_actions.py tests/test_claude_desktop.py tests/test_claude_desktop_page.py -o faulthandler_timeout=600
+      - name: Run five fixed replicas of malformed-header rejection tests
+        env:
+          BASELINE: ${{ matrix.baseline }}
+        run: |
+          failures=0
+          for attempt in 1 2 3 4 5; do
+            echo "Malformed-header replica $attempt of 5"
+            if uv run --no-sync pytest -n 0 tests/test_web_actions.py -k test_body_length_and_content_type_are_bounded; then
+              echo "REJECTION_REPLICA_$attempt=passed"
+            else
+              failures=$((failures + 1))
+              echo "REJECTION_REPLICA_$attempt=failed"
+            fi
+          done
+          echo "REJECTION_REPLICA_FAILURES=$failures"
+          if [ "$BASELINE" = false ]; then test "$failures" -eq 0; fi
+      - name: Run the complete main phase
+        if: matrix.baseline == false
         timeout-minutes: 15
-        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600
-
-      - name: Run native process probes without competing test workers
-        timeout-minutes: 15
-        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
-
-  test-windows:
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install Node for dashboard runtime tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Run tests
-        # Includes the TUI tests: the Textual TUI (unlike the old curses one)
-        # runs on stock Windows, and this job is the proof.
-        timeout-minutes: 15
-        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600
-
-      - name: Run native process probes without competing test workers
-        timeout-minutes: 15
-        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
-
-  # The id stays `macos-keychain` although the job now runs everything: it is
-  # the name branch protection matches on, and renaming it silently drops the
-  # required check.
-  macos-keychain:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install Node for dashboard runtime tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-
-      - name: Install dependencies
-        run: uv sync --locked
-
-      - name: Run the main suite (not only the Keychain files)
-        # THE NARROW SELECTION WAS A BLIND SPOT, not a saving. Three cases
-        # failed on macOS -- one asserting the Linux XDG layout, two because a
-        # usable Keychain takes the write and leaves no `.enc` to chmod --
-        # while every job stayed green, because this job never ran them. A merge that
-        # restores a two-file selection here re-opens that hole invisibly:
-        # those cases pass now, they would simply stop running.
-        #
-        # faulthandler dumps every thread's stack past the budget, the only
-        # clue when a `security` call blocks on an invisible SecurityAgent
-        # dialog. While pyproject sets no faulthandler keys this `-o` is the
-        # only thing setting the budget and the dump does not abort; PR 287
-        # adds them repo-wide at the same 600, after which this is a no-op
-        # and the dump aborts the worker. `timeout-minutes` is the backstop
-        # that holds under either ordering.
-        timeout-minutes: 15
-        run: uv run pytest -m "not native_process" -o faulthandler_timeout=600
-
-      - name: Run native process probes without competing test workers
-        timeout-minutes: 15
-        run: uv run pytest -n 0 -m native_process -o faulthandler_timeout=600
+        run: uv run --no-sync pytest -m 'not native_process' -o faulthandler_timeout=600
+      - name: Run serial native process probes
+        if: matrix.baseline == false
+        run: uv run --no-sync pytest -n 0 -m native_process -o faulthandler_timeout=600
