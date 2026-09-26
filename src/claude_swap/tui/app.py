@@ -28,7 +28,7 @@ from claude_swap.tui.autoview import AutoScreen
 from claude_swap.tui.dashboard import DashboardScreen, WatchScreen
 from claude_swap.tui.data import ActionResult, SnapshotSource, format_duration, run_action
 from claude_swap.tui.modals import AddTokenModal, ConfirmModal, OutputModal, TokenForm
-from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT, CSWAP_MONO_DARK, CSWAP_MONO_LIGHT
+from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT
 
 
 class CswapApp(App):
@@ -36,6 +36,8 @@ class CswapApp(App):
 
     TITLE = "agent-switch"
     CSS_PATH = "cswap.tcss"
+    HORIZONTAL_BREAKPOINTS = [(0, "-compact"), (96, "-wide")]
+    VERTICAL_BREAKPOINTS = [(0, "-short"), (32, "-tall")]
     # No command palette: actions live in the dashboard's nested menu, in
     # their own context — not in a global searchable list.
     ENABLE_COMMAND_PALETTE = False
@@ -91,17 +93,12 @@ class CswapApp(App):
             self._theme_name = load_ui_settings(self._settings_root).theme
         except Exception:
             self._theme_name = "auto"
-
-    def on_mount(self) -> None:
         self.register_theme(CSWAP_DARK)
         self.register_theme(CSWAP_LIGHT)
-        # This fork's look. The warm pair stays registered so upstream's theme
-        # tests keep meaning something; only the NAME assigned below changes.
-        self.register_theme(CSWAP_MONO_DARK)
-        self.register_theme(CSWAP_MONO_LIGHT)
+        self.theme = f"cswap-mono-{self._resolved_theme()}"
+
+    def on_mount(self) -> None:
         resolved = self._resolved_theme()
-        # We own the theme; $TEXTUAL_THEME is intentionally not honoured.
-        self.theme = f"cswap-mono-{resolved}"
         printer.set_theme(resolved)
         if self.switcher is None:
             from claude_swap.tui.providers import ProviderScreen

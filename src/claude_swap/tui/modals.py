@@ -35,9 +35,9 @@ class ConfirmModal(ModalScreen[bool]):
         self._yes_label = yes_label
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="modal-box"):
+        with VerticalScroll(classes="modal-box"):
             yield Label(self._title, classes="modal-title")
-            yield Static(self._message, classes="modal-body")
+            yield Static(self._message, classes="modal-body", markup=False)
             with Horizontal(classes="modal-buttons"):
                 yield Button(self._yes_label, id="yes")
                 yield Button("Cancel", id="no")
@@ -45,6 +45,9 @@ class ConfirmModal(ModalScreen[bool]):
                 f"← → · enter  ·  y {self._yes_label.lower()}  ·  n / esc cancel",
                 classes="modal-hint",
             )
+
+    def on_mount(self) -> None:
+        self.query_one("#yes", Button).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")
@@ -80,7 +83,7 @@ class AddTokenModal(ModalScreen["TokenForm | None"]):
     ]
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="modal-box"):
+        with VerticalScroll(classes="modal-box"):
             yield Label("Add account from token", classes="modal-title")
             yield Static(
                 "OAuth setup-token (sk-ant-oat…) or managed API key "
@@ -98,6 +101,9 @@ class AddTokenModal(ModalScreen["TokenForm | None"]):
                 "enter add  ·  tab next field  ·  esc cancel",
                 classes="modal-hint",
             )
+
+    def on_mount(self) -> None:
+        self.query_one("#token", Input).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":
