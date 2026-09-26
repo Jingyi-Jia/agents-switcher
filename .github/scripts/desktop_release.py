@@ -162,6 +162,11 @@ def verify_group(directory, platform, arch, version, mode, source_sha):
     return [directory / name for name in all_names]
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        return None
+
+
 class GitHub:
     def request(self, method, path, data=None, missing_ok=False):
         request = urllib.request.Request(
@@ -171,7 +176,7 @@ class GitHub:
                      "Content-Type": "application/json", "X-GitHub-Api-Version": "2022-11-28"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.build_opener(NoRedirect()).open(request, timeout=60) as response:
                 body = response.read()
                 return json.loads(body) if body else None
         except urllib.error.HTTPError as error:
