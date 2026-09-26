@@ -6,6 +6,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const yaml = require('js-yaml');
 const { stableVersion } = require('./updater.cjs');
+const { checkCommunityRelease } = require('./community-updates.cjs');
 
 const FEED = Object.freeze({ provider: 'github', owner: 'Jingyi-Jia', repo: 'agents-switcher', private: false, releaseType: 'release' });
 
@@ -38,15 +39,20 @@ function checkAppImage({ env, execPath, io }) {
   io.accessSync(path.dirname(env.APPIMAGE), fs.constants.W_OK | fs.constants.X_OK);
 }
 
-async function createUpdateRuntime({ app, releaseBuild, platform = process.platform, arch = process.arch,
+async function createUpdateRuntime({ app, releaseBuild, communityBuild, platform = process.platform, arch = process.arch,
   env = process.env, resourcesPath = process.resourcesPath, execPath = process.execPath, io = fs,
   run = promisify(execFile), library = () => require('electron-updater') }) {
   if (!app.isPackaged) return { reason: 'Updates are unavailable in development. Install an official desktop release.' };
-  if (releaseBuild !== true || !stableVersion(app.getVersion())) {
+  const signed = releaseBuild === true && (communityBuild === false || communityBuild === undefined);
+  const community = releaseBuild === false && communityBuild === true;
+  if ((!signed && !community) || !stableVersion(app.getVersion())) {
     return { reason: 'This is a preview or unofficial build. Install an official stable release to enable updates.' };
   }
   if (!['darwin', 'win32', 'linux'].includes(platform) || (arch !== 'x64' && !(platform === 'darwin' && arch === 'arm64'))) {
     return { reason: 'In-app updates are not supported on this operating system or architecture.' };
+  }
+  if (community) {
+    return { checkRelease: ({ signal } = {}) => checkCommunityRelease({ platform, arch, signal }) };
   }
   let config;
   const channel = platform === 'darwin' ? `latest-${arch}` : 'latest';

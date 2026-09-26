@@ -22,6 +22,7 @@ function fixture(options = {}) {
 
 test('checks, downloads and installation are separate explicit actions', async () => {
   const { controller, updater, calls } = fixture();
+  assert.equal(controller.getState().mode, 'install');
   assert.equal(controller.getState().status, 'idle');
   assert.deepEqual(calls, []);
   for (const flag of ['autoDownload', 'autoInstallOnAppQuit', 'allowPrerelease', 'allowDowngrade', 'forceDevUpdateConfig']) assert.equal(updater[flag], false);
@@ -41,10 +42,19 @@ test('checks, downloads and installation are separate explicit actions', async (
 
 test('unsupported builds never call the library', async () => {
   const controller = new UpdateController({ currentVersion: '1.0.0', reason: 'Use an installed release.' });
-  for (const action of ['getState', 'check', 'download', 'cancel', 'install']) {
+  for (const action of ['getState', 'check', 'viewRelease', 'download', 'cancel', 'install']) {
     const state = await controller[action]();
-    assert.equal(state.supported, false); assert.equal(state.status, 'unsupported');
+    assert.equal(state.mode, 'unsupported'); assert.equal(state.supported, false); assert.equal(state.status, 'unsupported');
   }
+});
+
+test('signed update states cannot invoke the manual release opener', async () => {
+  const { controller } = fixture({ openRelease: () => assert.fail('signed update opened a manual release') });
+  await controller.viewRelease();
+  await controller.check(); await controller.viewRelease();
+  await controller.download(); await controller.viewRelease();
+  assert.equal(controller.getState().mode, 'install');
+  assert.equal(controller.getState().status, 'downloaded');
 });
 
 test('no compatible release and a disabled library are reported honestly', async () => {
