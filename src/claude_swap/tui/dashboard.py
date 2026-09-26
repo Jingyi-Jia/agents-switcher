@@ -1,4 +1,4 @@
-"""Dashboard: static account overview on top, a nested action menu below.
+"""Responsive account overview with a keyboard-driven action rail.
 
 The accounts panel is the monitor (active account full-size, others as
 one-line minis); the arrow keys drive the *menu*, not the accounts. Anything
@@ -22,12 +22,13 @@ from typing import TYPE_CHECKING, Callable
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, ListView, Static
 
 from claude_swap.models import AccountsSnapshot
 from claude_swap.providers import PROVIDERS
-from claude_swap.tui.widgets import AccountItem, AccountsPanel, MenuItem
+from claude_swap.tui.widgets import AccountItem, AccountsPanel, AppHeader, MenuItem
 
 if TYPE_CHECKING:
     from claude_swap.tui.app import CswapApp
@@ -44,7 +45,7 @@ class DashboardScreen(Screen):
     status_id = None
 
     BINDINGS = [
-        Binding("s", "open_switch", "Switch accounts"),
+        Binding("s", "open_switch", "Switch"),
         Binding("w", "open_watch", "Watch"),
         Binding("p", "app.open_providers", "Providers"),
         Binding("escape,left", "menu_back", "Back", show=False),
@@ -68,21 +69,35 @@ class DashboardScreen(Screen):
         return self.app
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            PROVIDERS[self.provider].switch_notice,
-            id="claude-client-notice" if self.provider == "claude" else "codex-notice",
-            classes="provider-notice", markup=False,
-        )
-        yield AccountsPanel(source=self.controller, id="accounts-panel")
-        yield Static("", id="menu-title")
-        yield ListView(id="menu")
+        yield AppHeader(self.provider)
+        with Horizontal(id="dashboard-body"):
+            with Vertical(id="action-panel"):
+                yield Static("", id="menu-title")
+                yield ListView(id="menu")
+                yield Static(
+                    "↑ ↓ navigate · Enter select\nTab focus · p providers",
+                    classes="navigation-hint",
+                )
+                yield Static(
+                    "↑↓ select · Enter open · Tab details", classes="compact-hint",
+                )
+            with VerticalScroll(id="overview"):
+                yield Static("■  Your accounts", classes=f"section-heading {self.provider}")
+                yield Static("Usage windows · percentages used", classes="section-caption")
+                yield AccountsPanel(source=self.controller, id="accounts-panel")
+                yield Static(
+                    PROVIDERS[self.provider].switch_notice,
+                    id="claude-client-notice" if self.provider == "claude" else "codex-notice",
+                    classes="provider-notice", markup=False,
+                )
         if self.status_id:
-            yield Static("", id=self.status_id, markup=False)
+            with VerticalScroll(id="status-panel"):
+                yield Static("", id=self.status_id, markup=False)
         yield Footer()
 
     async def on_mount(self) -> None:
         self.query_one("#menu", ListView).focus()
-        await self._push_menu("menu", self._root_entries())
+        await self._push_menu("Actions", self._root_entries())
 
     def on_screen_resume(self) -> None:
         self.app._claude_active = self.provider == "claude"
@@ -269,7 +284,10 @@ class AccountListScreen(Screen):
         return self._source if self._source is not None else self.app
 
     def compose(self) -> ComposeResult:
+        yield AppHeader(getattr(self.source, "provider", "claude"))
         yield Static("", id="list-title")
+        yield Static("Usage windows · percentages used", classes="list-caption")
+        yield Static("", id="list-empty", classes="empty-state", markup=False)
         yield ListView(id="accounts")
         yield Footer()
 
@@ -277,15 +295,30 @@ class AccountListScreen(Screen):
         self.watch(self.source, "snapshot", self._on_snapshot)
 
     async def _on_snapshot(self, snap: AccountsSnapshot | None) -> None:
-        if snap is None:
-            return
         listview = self.query_one("#accounts", ListView)
+        empty = self.query_one("#list-empty", Static)
+        empty.display = snap is None or not snap.accounts
+        listview.display = not empty.display
+        if snap is None:
+            status = self.source.refresh_status
+            empty.update(
+                status if status.startswith("Could not") else "Loading accounts…"
+            )
+            return
+        if not snap.accounts:
+            empty.update(
+                "◇  No managed accounts yet.\n"
+                "Return to the dashboard and choose Add account."
+            )
         numbers = [acc.number for acc in snap.accounts]
         if numbers != self._numbers:
             first_build = not self._numbers
             previous = listview.index
             await listview.clear()
-            await listview.extend(AccountItem(acc) for acc in snap.accounts)
+            await listview.extend(
+                AccountItem(acc, provider=getattr(self.source, "provider", "claude"))
+                for acc in snap.accounts
+            )
             self._numbers = numbers
             listview.index = (
                 self._index_after_build(snap, first_build, previous)
@@ -445,7 +478,7 @@ class WatchScreen(AccountListScreen):
         self._set_selecting(not self._selecting)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if not self._selecting:
+        if not self._selecting or not self.query_one("#accounts", ListView).display:
             return  # e.g. a stray click while just watching
         item = event.item
         if isinstance(item, AccountItem):
@@ -456,8 +489,9 @@ class WatchScreen(AccountListScreen):
         self.source.action_refresh_full()
 
     def action_select_highlighted(self) -> None:
-        if self._selecting:
-            self.query_one("#accounts", ListView).action_select_cursor()
+        listview = self.query_one("#accounts", ListView)
+        if self._selecting and listview.display:
+            listview.action_select_cursor()
 
     def action_back(self) -> None:
         if self._selecting:
