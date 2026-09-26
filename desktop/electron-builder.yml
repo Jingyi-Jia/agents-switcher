@@ -4,6 +4,7 @@ artifactName: Agent-Switch-${version}-${os}-${arch}.${ext}
 extraMetadata:
   homepage: https://github.com/jingyi-jia/agents-switcher
   agentSwitchRelease: false
+  agentSwitchCommunityRelease: false
 directories:
   output: release
   buildResources: assets
