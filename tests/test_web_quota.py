@@ -198,3 +198,113 @@ for (const flags of [{error: 'Unavailable'}, {sentinel: 'stale'}, {onCredits: tr
   assert.doesNotMatch(account.textContent, /Below even pace/);
 }
 """)
+
+
+def test_reported_model_limits_keep_their_own_weekly_reset(clock):
+    from claude_swap.oauth import build_usage_result
+
+    source = build_usage_result({
+        "five_hour": {"utilization": 12},
+        "seven_day": {"utilization": 30},
+        "limits": [{
+            "kind": "weekly_scoped", "group": "weekly", "percent": 96,
+            "scope": {"model": {"display_name": "Fable"}},
+            "resets_at": "2026-09-29T12:00:00Z",
+        }],
+    })
+    original = copy.deepcopy(source)
+    windows = _claude_windows(source, NOW)
+    assert windows[-1] == {
+        "label": "Fable · 7d", "scope": "model",
+        "usedPercent": 96, "windowSeconds": 604800, "resetAt": NOW + 345600,
+        "resetAfterSeconds": 345600, "observedAt": NOW,
+    }
+    assert [window["label"] for window in windows] == ["5h", "7d", "Fable · 7d"]
+    assert source == original
+
+
+@pytest.mark.parametrize("scoped", [None, {}, "Fable", [], [None], [{"name": "Fable"}], [{"name": "Fable", "pct": None}]])
+def test_missing_scoped_data_never_creates_a_fable_bar(clock, scoped):
+    windows = _claude_windows({"five_hour": {"pct": 25}, "scoped": scoped}, NOW)
+    assert [window["label"] for window in windows] == ["5h"]
+
+
+@pytest.mark.parametrize("value", [True, False, "42", None, -1, float("nan"), float("inf")])
+def test_invalid_scoped_utilization_cannot_break_other_quota_windows(clock, value):
+    windows = _claude_windows({
+        "seven_day": {"pct": 30},
+        "scoped": [{"name": "Fable", "pct": value}, {"name": "Sonnet", "pct": 20}],
+    }, NOW)
+    assert [window["label"] for window in windows] == ["7d", "Sonnet · 7d"]
+    json.dumps(windows, allow_nan=False)
+
+
+@pytest.mark.parametrize("name", [None, True, 42, {}, "", "   "])
+def test_model_name_must_be_nonempty_text(clock, name):
+    assert _claude_windows({"scoped": [{"name": name, "pct": 50}]}, NOW) == []
+
+
+@pytest.mark.parametrize("reset", [None, "invalid", "2026-09-29T12:00:00", "2026-10-03T12:00:01Z"])
+def test_scoped_reset_does_not_guess_missing_invalid_or_out_of_window_times(clock, reset):
+    window = _claude_windows({"scoped": [{"name": "Fable", "pct": 0, "resets_at": reset}]}, NOW)[0]
+    assert window["usedPercent"] == 0
+    assert window["resetAt"] is None
+
+
+def test_scoped_windows_do_not_change_collected_overall_quota_or_automation(clock):
+    claude = Claude()
+    usage = UsageEntry(last_good={
+        "five_hour": {"pct": 20}, "seven_day": {"pct": 30},
+        "scoped": [{"name": "Fable", "pct": 100}],
+    }, fetched_at=NOW)
+    claude.accounts = [SimpleNamespace(
+        usage=usage, number="1", email="sample@example.test", alias="Work", display_tag="Pro",
+        is_active=True, disabled=False, kind="oauth", switchable=True,
+    )]
+    state = DashboardState(claude)
+    try:
+        account = state._collect_claude()["accounts"][0]
+        assert account["percent"] == 30
+        assert account["windows"][-1]["usedPercent"] == 100
+        assert state.actions.auto.status("claude")["mode"] == "stopped"
+        assert claude.calls == []
+    finally:
+        state.close()
+
+
+def test_model_meter_is_visible_without_changing_overall_headroom_or_reset(node):
+    run_page(node, r"""
+const now = Date.now() / 1000;
+const account = {number: '1', active: true, email: 'sample@example.test', percent: 30, windows: [
+  {label: '5h', usedPercent: 20, windowSeconds: 18000, observedAt: now, resetAt: now + 9000},
+  {label: '7d', usedPercent: 30, windowSeconds: 604800, observedAt: now, resetAt: now + 345600},
+  {label: 'Fable · 7d', scope: 'model', usedPercent: 100, windowSeconds: 604800, observedAt: now, resetAt: now + 86400},
+]};
+assert.equal(headroom(account), 70);
+const data = {...apiState.claude, accounts: [account]};
+const hero = tile('Claude Code', data);
+assert.match(hero.textContent, /70%left/);
+assert.match(hero.textContent, /7d limit resets/);
+assert.doesNotMatch(hero.textContent, /Fable/);
+const rendered = card('claude', account, data);
+const fable = nodes(rendered).find(n => n.attributes['aria-label']?.startsWith('Fable · 7d window:'));
+assert(fable);
+assert.match(fable.textContent, /0% left.*Resets.*Above even pace.*Model-specific.*separate from overall headroom/);
+assert.equal(nodes(fable).find(n => n.tagName === 'TIME').dateTime, new Date((now + 86400) * 1000).toISOString());
+assert.equal(posts().length, 0);
+""")
+
+
+def test_model_only_quota_never_implies_overall_headroom_and_names_are_safe_text(node):
+    run_page(node, r"""
+const model = '<img src=x onerror=alert(1)>';
+const account = {number: '1', active: true, windows: [{label: model + ' · 7d', scope: 'model', usedPercent: 20}]};
+assert.equal(headroom(account), null);
+const data = {...apiState.claude, accounts: [account]};
+assert.match(tile('Claude Code', data).textContent, /Not reported/);
+const rendered = card('claude', account, data);
+assert(rendered.textContent.includes(model));
+assert.equal(nodes(rendered).filter(n => n.tagName === 'IMG').length, 0);
+assert.match(rendered.textContent, /Reset time unavailable.*Pace unavailable/);
+assert.equal(posts().length, 0);
+""")

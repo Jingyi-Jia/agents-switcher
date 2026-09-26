@@ -267,7 +267,7 @@ function quotaTiming(w, allowPace = true) {
 }
 
 function headroom(a) {
-  const ws = (a.windows || []).filter((w) => typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent));
+  const ws = (a.windows || []).filter((w) => w.scope !== "model" && typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent));
   if (ws.length) return Math.max(0, Math.min(...ws.map((w) => 100 - w.usedPercent)));
   return (typeof a.percent === "number" && Number.isFinite(a.percent)) ? Math.max(0, Math.min(100, 100 - a.percent)) : null;
 }
@@ -296,7 +296,7 @@ function tile(name, data) {
     v.textContent = left + "%"; v.appendChild(el("small", null, "left"));
     if (left <= 0) v.classList.add("ember");
     t.appendChild(v);
-    const limiting = (active.windows || []).filter((w) => typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent)).sort((a, b) => b.usedPercent - a.usedPercent)[0];
+    const limiting = (active.windows || []).filter((w) => w.scope !== "model" && typeof w.usedPercent === "number" && Number.isFinite(w.usedPercent)).sort((a, b) => b.usedPercent - a.usedPercent)[0];
     const timing = limiting ? quotaTiming(limiting) : null;
     const r = duration(timing?.remaining);
     const reset = r ? `${limiting.label} limit resets in ${r}` : timing?.date ? `${limiting.label} reset passed · refresh usage` : "Reset time unavailable";
@@ -336,6 +336,7 @@ function meter(w, allowPace = true) {
   const pace = el("span", "quota-pace", timing.pace);
   pace.title = timing.hint;
   m.append(reset, pace);
+  if (w.scope === "model") m.appendChild(el("span", "quota-scope", "Model-specific · separate from overall headroom"));
   return m;
 }
 

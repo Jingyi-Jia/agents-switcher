@@ -104,6 +104,10 @@ uses the report's elapsed-window fraction, only for samples at most five minutes
 old and not failed or credit-backed; within five percentage points is near even
 pace. This is a display-only comparison, never a forecast or an input to account
 selection, token refresh, or polling policy.
+Claude's normalized `scoped` model limits are separate weekly windows with
+`scope: "model"`. Render only reported, valid values; never infer a Fable quota
+from a plan name. Model windows do not determine overall headroom, its limiting
+reset, or the dashboard's automatic-switch policy.
 
 The private analytics surface is `GET /api/analytics?provider=codex|claude`, with
 optional `force=0|1`. It requires the header token, never query-token auth. Codex

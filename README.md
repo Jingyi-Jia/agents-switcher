@@ -124,6 +124,11 @@ The subtle even-pace hint compares quota used with the share of the window
 elapsed at the last report. It needs a report from the last five minutes and is
 only a guide, never a forecast or an automatic-switching input.
 
+When Claude reports a model-specific weekly limit, such as **Fable**, its account
+card shows a separate bar and reset time. This is that model's allowance, not the
+account's overall headroom; it does not change the dashboard's automatic-switch
+policy. No model bar is invented when the provider has not reported one.
+
 Open **Auto-switch**, enter a used-quota threshold for the most-used quota window,
 and choose **Start**. Starting requires confirmation; **Stop** stops
 that app/server session's automation. **Preview without switching** is optional:

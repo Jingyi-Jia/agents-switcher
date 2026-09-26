@@ -106,7 +106,7 @@ h1,h2,h3 { line-height:1.25; }
 .num { text-align:right; font-size:10px; color:var(--mid); font-variant-numeric:tabular-nums; }
 .num.low { color:var(--ink); font-weight:650; }
 .num.out,.state.out { color:var(--ember); }
-.quota-reset,.quota-pace { grid-column:1/-1; font-size:10px; color:var(--mid); line-height:1.6; overflow-wrap:anywhere; }
+.quota-reset,.quota-pace,.quota-scope { grid-column:1/-1; font-size:10px; color:var(--mid); line-height:1.6; overflow-wrap:anywhere; }
 .quota-reset { margin-top:3px; }
 .quota-reset time { color:var(--ink-soft); }
 .quota-pace { width:fit-content; border-bottom:1px dotted var(--hairline); cursor:help; }

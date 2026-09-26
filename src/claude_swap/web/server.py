@@ -27,6 +27,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import re
 import secrets
 import select
@@ -88,18 +89,25 @@ def _claude_windows(last_good: dict | None, observed_at: float | None = None) ->
     """
     from datetime import datetime
 
-    from claude_swap.tui.data import window_pct
-
     if not isinstance(last_good, dict):
         return []
+    definitions = [
+        ("5h", 18000, last_good.get("five_hour"), None),
+        ("7d", 604800, last_good.get("seven_day"), None),
+    ]
+    scoped = last_good.get("scoped")
+    if isinstance(scoped, list):
+        for block in scoped:
+            name = block.get("name") if isinstance(block, dict) else None
+            if isinstance(name, str) and name.strip():
+                definitions.append((f"{name.strip()} · 7d", 604800, block, name.strip()))
     windows = []
-    for key, label, seconds in (("five_hour", "5h", 18000), ("seven_day", "7d", 604800)):
-        percent = window_pct(last_good, key)
-        if percent is None:
+    for label, seconds, block, model in definitions:
+        percent = block.get("pct") if isinstance(block, dict) else None
+        if type(percent) not in (int, float) or not math.isfinite(percent) or percent < 0:
             continue
         stamp = None
-        block = last_good.get(key)
-        resets_at = block.get("resets_at") if isinstance(block, dict) else None
+        resets_at = block.get("resets_at")
         if isinstance(resets_at, str) and resets_at:
             try:
                 parsed = datetime.fromisoformat(resets_at.replace("Z", "+00:00"))
@@ -107,7 +115,10 @@ def _claude_windows(last_good: dict | None, observed_at: float | None = None) ->
                     stamp = parsed.timestamp()
             except (ValueError, OSError, OverflowError):
                 pass
-        windows.append(_quota_window(label, round(percent), seconds, stamp, None, observed_at))
+        window = _quota_window(label, round(percent), seconds, stamp, None, observed_at)
+        if model is not None:
+            window["scope"] = "model"
+        windows.append(window)
     return windows
 
 
