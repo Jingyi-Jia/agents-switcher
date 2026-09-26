@@ -1,0 +1,128 @@
+name: Upload verified 1.2.0 preview draft
+
+on:
+  push:
+    branches: [capy/upload-preview-1.2.0]
+    paths: [.github/workflows/upload-preview-1.2.0.yml]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: upload-preview-1.2.0
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 480fe80538dcd18cd2837d5a7e479e71260ec910
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          version: "0.12.3"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Rebuild the Python distributions from the merged source
+        run: uv build --out-dir "$RUNNER_TEMP/preview-assets"
+      - name: Retrieve and verify the exact reviewed native artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/Jingyi-Jia/agents-switcher/actions/runs/36230568206 --jq 'if .head_sha == "89e99199f08974a6553ddd5443a9d18cdcf9baa4" and .conclusion == "success" then .id else error("Unexpected native build provenance") end'
+          mkdir -p "$RUNNER_TEMP/preview-archives"
+          while read -r id digest; do
+            curl --fail --silent --show-error --location \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              "https://api.github.com/repos/Jingyi-Jia/agents-switcher/actions/artifacts/$id/zip" \
+              --output "$RUNNER_TEMP/preview-archives/$id.zip"
+            printf '%s  %s\n' "$digest" "$RUNNER_TEMP/preview-archives/$id.zip" | sha256sum --check --strict
+          done <<'ARCHIVES'
+          10902596467 91e045fe4d46caf64635659f620e47d55b417a81ff9c88b32b448a5191def65d
+          10902508234 2c2d958cf531a8469c4469982245fd9ab367c6768ef2f68aa7186b93db249fe6
+          10901918069 e18ef5fbb76b445722749a981296e1fb56f739fa693fabaad30f8c40a00cc029
+          10901668399 f01058b79270fbe04293936da3134c572feb212500ffa664e3cf20105971eede
+          ARCHIVES
+          cat > "$RUNNER_TEMP/preview-assets/SHA256SUMS.txt" <<'CHECKSUMS'
+          b97dcfc8aee043f745858967934cff1aadf79aa4621bf908ace151e1d6241764  Agent-Switch-1.2.0-linux-amd64.deb
+          b60ce7dcfe337fba41d46e63c366c1cb53d12a17a3fd442797d15c87b87afeb0  Agent-Switch-1.2.0-linux-x64.tar.gz
+          3a4eedeae50f9318123a9258e9e19960eb7ed41862e13f883ab31360079dc949  Agent-Switch-1.2.0-linux-x86_64.AppImage
+          575c79b2acb2787b97e95e0c542a68af196029f62715ee71b7aa5f3fb0258e77  Agent-Switch-1.2.0-mac-arm64.dmg
+          7d50bc8e7336897a3ec4765c5fbd12795da31b55c954e87b47eb3a19074a493c  Agent-Switch-1.2.0-mac-arm64.zip
+          55738b60f1b61e3c31a6a50677639a5063068c952e74fefebebc4371e005b519  Agent-Switch-1.2.0-mac-x64.dmg
+          a7863bd90fd4eaa759a5de141d81ec30cf4321699e9cef944397057953d4f3b6  Agent-Switch-1.2.0-mac-x64.zip
+          c32e9f9fa7ae2040d54f985b7fe560834b96cf2be8edcef6c6ee5ca1db659b47  Agent-Switch-1.2.0-win-x64.exe
+          0748d257fb5674c6328f08edd1827b14b918b01dfd7fa58a04caf9e98e7d2356  agents_switcher-1.2.0-py3-none-any.whl
+          7e7877f431e9421b5afcffc1a8f12c17ed000d4ae352c2966a6a517f3c121f57  agents_switcher-1.2.0.tar.gz
+          CHECKSUMS
+          uv run --no-project --python 3.12 python - <<'PY'
+          import os
+          import shutil
+          import zipfile
+          from pathlib import Path
+
+          root = Path(os.environ['RUNNER_TEMP'])
+          output = root / 'preview-assets'
+          expected = {line.split('  ', 1)[1] for line in (output / 'SHA256SUMS.txt').read_text().splitlines()}
+          native = {name for name in expected if name.startswith('Agent-Switch-')}
+          extracted = set()
+          for path in sorted((root / 'preview-archives').glob('*.zip')):
+              with zipfile.ZipFile(path) as archive:
+                  for entry in archive.infolist():
+                      if entry.filename not in native:
+                          continue
+                      assert entry.filename not in extracted
+                      assert entry.filename == Path(entry.filename).name
+                      with archive.open(entry) as source, (output / entry.filename).open('xb') as target:
+                          shutil.copyfileobj(source, target)
+                      extracted.add(entry.filename)
+          assert extracted == native
+          assert {path.name for path in output.iterdir()} == expected | {'SHA256SUMS.txt'}
+          PY
+          cd "$RUNNER_TEMP/preview-assets"
+          sha256sum --check --strict SHA256SUMS.txt
+      - name: Attach only verified packages to the existing private preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run --no-project --python 3.12 python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          repo = 'Jingyi-Jia/agents-switcher'
+          tag = 'v1.2.0-preview.1'
+          endpoint = f'repos/{repo}/releases/397168789'
+          output = Path(os.environ['RUNNER_TEMP']) / 'preview-assets'
+          expected = {}
+          for path in output.iterdir():
+              with path.open('rb') as stream:
+                  digest = 'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest()
+              expected[path.name] = (path.stat().st_size, digest)
+          for phase in ('before', 'after'):
+              release = json.loads(subprocess.check_output(['gh', 'api', endpoint]))
+              assert release['draft'] is True and release['prerelease'] is True
+              assert release['tag_name'] == tag
+              assert release['target_commitish'] == '480fe80538dcd18cd2837d5a7e479e71260ec910'
+              existing = set()
+              for asset in release['assets']:
+                  name = asset['name']
+                  assert name not in existing and name in expected
+                  assert asset['state'] == 'uploaded'
+                  assert (asset['size'], asset['digest']) == expected[name]
+                  existing.add(name)
+              missing = sorted(expected.keys() - existing)
+              if phase == 'after':
+                  assert not missing
+                  print(f'Verified {len(existing)} assets; release remains draft and prerelease.')
+              elif missing:
+                  subprocess.run(['gh', 'release', 'upload', tag, '--repo', repo, *[str(output / name) for name in missing]], check=True)
+          PY
