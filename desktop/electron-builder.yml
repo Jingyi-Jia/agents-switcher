@@ -3,6 +3,7 @@ productName: Agent Switch
 artifactName: Agent-Switch-${version}-${os}-${arch}.${ext}
 extraMetadata:
   homepage: https://github.com/jingyi-jia/agents-switcher
+  agentSwitchRelease: false
 directories:
   output: release
   buildResources: assets
@@ -20,8 +21,22 @@ extraResources:
       - "**/*"
 asar: true
 npmRebuild: false
-publish: null
+electronUpdaterCompatibility: ">=2.16"
+publish:
+  provider: github
+  owner: Jingyi-Jia
+  repo: agents-switcher
+  private: false
+  releaseType: release
+  channel: latest
 mac:
+  publish:
+    provider: github
+    owner: Jingyi-Jia
+    repo: agents-switcher
+    private: false
+    releaseType: release
+    channel: latest-${arch}
   category: public.app-category.developer-tools
   minimumSystemVersion: "13.0"
   hardenedRuntime: true
@@ -33,6 +48,7 @@ mac:
     - dmg
     - zip
 win:
+  verifyUpdateCodeSignature: true
   target:
     - nsis
 nsis:
@@ -50,3 +66,5 @@ linux:
     - AppImage
     - deb
     - tar.gz
+deb:
+  publish: null

@@ -49,18 +49,45 @@ can still require an explicit **System Settings → Privacy & Security → Open
 Anyway** approval. Only approve a preview if you trust its source and intend to
 test it; see [Apple's guidance](https://support.apple.com/en-us/102445).
 
-There is no auto-updater. Use **Help → Download updates** to visit Releases and install
-the newer version. Quitting the application, including closing its only window,
-stops its backend and session-owned auto-switching. It does not stop independently
-started CLI automation. Updating or uninstalling the app does not remove saved
-provider accounts or provider CLI credentials.
+### In-app updates
+
+Official stable releases include an updater in **Settings → App updates**.
+**Help → Check for Updates** opens Settings and checks the public stable releases
+of `Jingyi-Jia/agents-switcher`. Checking, downloading, and installing are separate
+user actions: no background checks, automatic downloads, or installation on normal
+Quit. Settings shows the running version, available version, download progress,
+and safe error messages. Downloads can be cancelled. **Install and restart** asks
+for native confirmation, then waits for a successful backend shutdown before
+handing control to the installer. A forced or failed shutdown blocks installation.
+The new version is confirmed only when the replacement app starts; handing off to
+an installer is not proof that an update succeeded.
+
+| Installed format | In-app update support |
+| --- | --- |
+| macOS, arm64 or x64 | Official Developer ID-signed app in Applications. The updater downloads the matching ZIP; macOS verifies its signature during the explicit install. Apps running from a DMG, ad-hoc previews, and modified bundles are unsupported. |
+| Windows, x64 | Signed NSIS installation with the original publisher metadata. Both the updater's publisher verification and an additional fail-closed Authenticode check must pass. Missing/broken verification never permits installation. |
+| Linux, x64 | A directly launched, writable `.AppImage` in a writable directory. Symlinked, extracted, read-only, DEB, and tar installations are unsupported; use your package installer or replace the file manually. |
+| Development and CI previews | In-app updates are disabled, even if the version number matches a release. Install an official stable release first. |
+
+The updater never selects prereleases or downgrades, accepts no custom feed, and
+needs no GitHub token. Downloads use HTTPS and SHA-512 metadata integrity checks;
+Linux does not gain macOS/Windows code-signature guarantees. If the latest release
+is still building or has no desktop metadata, the check reports an error rather
+than claiming the app is current. **Help → Download updates manually** remains
+available for unsupported installations and recovery. Versions predating this
+updater need one manual installation of an updater-enabled official release.
+
+Quitting the application, including closing its only window, stops its backend and
+session-owned auto-switching. It does not stop independently started CLI
+automation. Updating never changes accounts or provider credentials; updating or
+uninstalling does not remove them.
 
 ## Build locally
 
 Build on each target OS and CPU architecture. PyInstaller is not a cross-compiler;
 an x64 helper must not be placed in an arm64 Electron app. CI uses Python 3.12,
 Node.js 24.18.0, uv 0.12.3, and the locked PyInstaller 6.22.3, Electron 44.4.5,
-and electron-builder 26.15.3. The Python `desktop-build` dependency group is
+electron-builder 26.15.3, and electron-updater 6.8.9. The Python `desktop-build` dependency group is
 optional and separate from normal runtime dependencies.
 
 From the repository root:
@@ -116,6 +143,21 @@ npm run dist -- --mac --x64
 npm run dist -- --win --x64
 ```
 
+`dist` always passes `--publish never`: local packaging cannot publish a release.
+The default build also embeds `agentSwitchRelease: false`, so it cannot offer
+in-app updates. The public-release workflow enables this capability only after
+requiring its signing inputs; do not set it on unsigned or ad-hoc preview builds.
+After packaging, verify the native target, for example:
+
+```bash
+node scripts/verify-updates.cjs linux x64
+```
+
+Use `mac arm64`, `mac x64`, or `win x64` on those native build machines. The
+`--release` option verifies that a release build has the enabled capability, and
+requires Windows publisher metadata. It does not sign an app or bypass any
+signature gate.
+
 Outputs are in `desktop/release/`. A local macOS build can discover your own
 signing identity; for a preview without using that identity, run
 `CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist -- --mac --arm64 -c.mac.identity=- -c.mac.notarize=false`
@@ -133,8 +175,10 @@ built on a newer glibc may not run on the baseline even if Electron does.
 It tests the Python suite and Electron shell, builds and smoke-tests the frozen
 helper, packages installers, then smoke-tests the helper again from the actual
 application resources. macOS jobs also verify bundle signatures in the packaged
-app and both distributed formats before uploading. Each job uploads only
-installers and SHA-256 checksums, not unpacked workspaces or accounts. CI has no display-driven installer test;
+app and both distributed formats before uploading. Each job verifies the packaged
+version and updater capability, public feed, artifact sizes and SHA-512 hashes,
+and external or embedded blockmaps. It uploads only installers, update metadata,
+blockmaps, and SHA-256 checksums, not unpacked workspaces or accounts. CI has no display-driven installer test;
 clean-machine installation and first-run checks remain a release prerequisite.
 
 PR path changes and **Run workflow** produce preview artifacts in the workflow
@@ -146,13 +190,32 @@ key; it does not enable trusted release signing for PRs. The workflow uses
 `pull_request`, never `pull_request_target`, and does not check out a different
 branch during the build.
 
-A maintainer publishing an existing GitHub release triggers the release build
-from that tag. The workflow never creates tags or releases. All native builds
+A maintainer publishing an existing stable GitHub release triggers the release
+build from that tag; the tag must be `v` followed by the desktop package version.
+Prerelease publication is not supported by this stable-release workflow.
+The workflow never creates tags or releases. All native builds
 must pass before a separate, narrowly permissioned job attaches their artifacts
 to that existing release. Re-running a release replaces matching artifact names.
 Maintainers must review the tagged source and align Python and desktop package
 versions before publishing. Published releases are the trusted trigger: restrict
 who can create releases and protect release tags.
+
+The update assets are `latest.yml` for Windows, `latest-linux.yml` for AppImage,
+and `latest-arm64-mac.yml` / `latest-x64-mac.yml` for macOS. Separate macOS channels
+prevent architecture jobs from overwriting the other's metadata. Windows NSIS
+and macOS ZIP/DMG artifacts include `.blockmap` companions; the AppImage has an
+embedded blockmap. DEB and tar files remain manual downloads. The upload job
+attaches installers and blockmaps first, then the verified metadata, so clients
+cannot be directed to an artifact that has not been uploaded. Build steps have
+no release-write token; the narrowly scoped upload job is the only publisher.
+
+Before enabling a public download, test an actual signed upgrade on disposable
+native machines: check and download a higher stable version, cancel a download,
+quit with a downloaded update (it must not install), and explicitly install and
+restart. Confirm the new version after relaunch, that the old backend exited,
+that saved accounts remain unchanged, and that unsigned/wrong-publisher updates
+are rejected. Unit tests and a packaging verifier cannot establish those native
+installation results without signed artifacts.
 
 ### Signing configuration
 
@@ -174,7 +237,10 @@ silently distributing unsigned installers. macOS release builds enable hardened
 runtime and notarization, sign the embedded backend, and verify the app signature
 and notarization staple. Windows release builds require signing through
 electron-builder's supported certificate options and verify Authenticode on the
-app, backend and installer. Organizations with hardware-
+app, backend and installer. The installed app's generated `app-update.yml` must
+contain its certificate-derived `publisherName`; absent metadata disables the
+updater rather than bypassing signature verification. Keep the signing identity
+compatible across upgrades. Organizations with hardware-
 backed certificates should adapt that step to electron-builder's supported Azure
 Trusted Signing or custom signing service, rather than trying to export a
 non-exportable private key. No Windows cloud-signing tenant is preconfigured.
@@ -195,3 +261,27 @@ release tags: `actions/checkout` v7.0.1, `actions/setup-node` v7.0.0,
 release. PyInstaller 6.22.3 was verified against its PyPI release metadata.
 Signing options follow the [electron-builder documentation](https://www.electron.build/code-signing.html);
 the macOS 13 minimum follows [Electron 44's release notes](https://www.electronjs.org/blog/electron-44-0).
+Updater behavior and supported installer formats follow the
+[official updater guide](https://www.electron.build/auto-update.html) and
+[AppUpdater API](https://www.electron.build/electron-updater.Class.AppUpdater.html).
+The app deliberately restricts Linux support to AppImage and disables the
+library's automatic download and install-on-quit defaults.
+
+### Private renderer bridge
+
+The sandboxed, context-isolated preload exposes only `window.agentSwitchUpdater`:
+zero-argument `getState()`, `check()`, `download()`, `cancel()`, and `install()`
+return promises of a state snapshot. `onState(callback)` returns an unsubscribe
+function. A snapshot contains `schemaVersion: 1`, `supported`, `status`,
+`currentVersion`, `availableVersion`, `message`, and optional `progress`
+(`percent`, `transferred`, `total`, `bytesPerSecond`). `status` is one of
+`unsupported`, `idle`, `checking`, `available`, `not-available`, `downloading`,
+`cancelling`, `downloaded`, `installing`, or `error`; missing version/progress
+values are `null`. There is no bridge in the regular browser dashboard.
+
+All five IPC handlers accept only the current owned dashboard's main frame, and
+reject arguments, foreign windows, subframes, and other URLs. State events strip
+native IPC events and contain no release HTML, filesystem paths, backend token,
+or raw updater errors. Neither renderer nor backend can choose an update feed,
+executable, command, or file to install. This is a private UI contract, not a
+public updater SDK.

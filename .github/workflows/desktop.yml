@@ -61,6 +61,13 @@ jobs:
         run: |
           uv sync --locked --group desktop-build
           npm ci --prefix desktop
+      - name: Validate the stable release tag and version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          node -e 'const p = require("./desktop/package.json"); const s = require("./desktop/node_modules/semver"); if (process.env.RELEASE_PRERELEASE !== "false" || s.valid(p.version) !== p.version || s.prerelease(p.version) || process.env.RELEASE_TAG !== `v${p.version}`) throw new Error("Desktop updates require a stable release tag matching the desktop version");'
       - name: Test Python backend
         run: uv run --no-sync pytest -m "not native_process" -o faulthandler_timeout=600
         timeout-minutes: 15
@@ -106,8 +113,9 @@ jobs:
           umask 077
           printf '%s' "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY"
           unset APPLE_API_KEY_CONTENT
-          npm run dist -- --mac --${{ matrix.arch }} -c.forceCodeSigning=true -c.mac.notarize=true
+          npm run dist -- --mac --${{ matrix.arch }} -c.forceCodeSigning=true -c.mac.notarize=true -c.extraMetadata.agentSwitchRelease=true
           codesign --verify --deep --strict "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/Agent Switch.app"
+          codesign --verify --strict -R 'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/Agent Switch.app"
           xcrun stapler validate "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/Agent Switch.app"
       - name: Build signed Windows release
         if: github.event_name == 'release' && matrix.platform == 'win'
@@ -119,7 +127,7 @@ jobs:
           for name in CSC_LINK CSC_KEY_PASSWORD; do
             if [ -z "${!name}" ]; then echo "Required release signing secret is missing: $name" >&2; exit 1; fi
           done
-          npm run dist -- --win --x64 -c.forceCodeSigning=true
+          npm run dist -- --win --x64 -c.forceCodeSigning=true -c.extraMetadata.agentSwitchRelease=true
       - name: Verify Windows release signatures
         if: github.event_name == 'release' && matrix.platform == 'win'
         shell: pwsh
@@ -136,7 +144,7 @@ jobs:
       - name: Build Linux release
         if: github.event_name == 'release' && matrix.platform == 'linux'
         working-directory: desktop
-        run: npm run dist -- --linux --x64
+        run: npm run dist -- --linux --x64 -c.extraMetadata.agentSwitchRelease=true
       - name: Verify macOS app and distributed bundle signatures
         if: matrix.platform == 'mac'
         working-directory: desktop
@@ -167,6 +175,14 @@ jobs:
             linux) helper="desktop/release/linux-unpacked/resources/backend/agent-switch-backend" ;;
           esac
           uv run --no-sync python desktop/scripts/smoke_backend.py --disposable-runner --check-tls --check-processes --executable "$helper"
+      - name: Verify packaged updater and release metadata
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          RELEASE_BUILD: ${{ github.event_name == 'release' }}
+        run: |
+          args=(); if [ "$RELEASE_BUILD" = true ]; then args+=(--release); fi
+          node desktop/scripts/verify-updates.cjs "$TARGET_PLATFORM" "$TARGET_ARCH" "${args[@]}"
       - name: Generate artifact checksums
         run: |
           uv run --no-sync python desktop/scripts/checksums.py
@@ -185,6 +201,8 @@ jobs:
             desktop/release/*.AppImage
             desktop/release/*.deb
             desktop/release/*.tar.gz
+            desktop/release/*.blockmap
+            desktop/release/latest*.yml
             desktop/release/SHA256SUMS-*.txt
 
   upload-release:
@@ -199,11 +217,12 @@ jobs:
           pattern: desktop-*
           merge-multiple: true
           path: installers
-      - name: Attach installers to the existing published release
+      - name: Attach installers, then activate their verified update metadata
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release view "$RELEASE_TAG" --json isDraft --jq 'if .isDraft then error("Release is still a draft") else . end'
-          gh release upload "$RELEASE_TAG" installers/* --clobber
+          gh release view "$RELEASE_TAG" --json isDraft,isPrerelease --jq 'if .isDraft or .isPrerelease then error("A published stable release is required") else . end'
+          gh release upload "$RELEASE_TAG" installers/Agent-Switch-* installers/SHA256SUMS-*.txt --clobber
+          gh release upload "$RELEASE_TAG" installers/latest*.yml --clobber
