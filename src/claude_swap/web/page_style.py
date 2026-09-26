@@ -110,6 +110,7 @@ h1,h2,h3 { line-height:1.25; }
 .quota-reset { margin-top:3px; }
 .quota-reset time { color:var(--ink-soft); }
 .quota-pace { width:fit-content; border-bottom:1px dotted var(--hairline); cursor:help; }
+#update-progress { display:block; width:100%; height:8px; margin:16px 0 8px; accent-color:var(--accent); }
 .reset-passed { display:block; }
 .track { grid-column:1/-1; height:4px; background:var(--track); overflow:hidden; border-radius:1px; }
 .fill { height:100%; background:var(--accent); }

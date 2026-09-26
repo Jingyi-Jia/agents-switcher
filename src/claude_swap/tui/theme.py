@@ -1,12 +1,4 @@
-"""The "cswap-dark" Textual theme and shared color constants.
-
-A subtle modern dark theme: neutral charcoal backgrounds in the VS Code
-register, one warm terracotta accent (the same xterm-173 tone printer.py has
-always used for the CLI — a deliberate nod to Claude Code's orange, used
-sparingly), and desaturated severity colors so usage bars read calmly on a
-dark background. Deliberately *not* a wholesale copy of any other tool's
-palette.
-"""
+"""Desktop-aligned Textual themes and the palette for Rich renderables."""
 
 from __future__ import annotations
 
@@ -15,36 +7,37 @@ from typing import ClassVar
 
 from textual.theme import Theme
 
-# Core palette (single source of truth — widgets import these for rich
-# renderables, the Theme below maps them onto Textual's design tokens).
-ACCENT = "#d7875f"  # warm terracotta (xterm 173)
-FOREGROUND = "#e8e4de"  # soft, slightly warm off-white
-MUTED = "#8a8a8a"  # secondary text
-BACKGROUND = "#141414"
-SURFACE = "#1e1e1e"
-PANEL = "#262626"
+ACCENT = "#79e5e0"
+CLAUDE = "#bcabf4"
+FOREGROUND = "#ecf0f8"
+MUTED = "#9ba8bd"
+BACKGROUND = "#14171f"
+SURFACE = "#202531"
+PANEL = "#1a1e28"
+SEV_OK = ACCENT
+SEV_WARN = "#ebc078"
+SEV_CRIT = "#ff91a1"
+TRACK = "#323b4d"
 
-# Usage severity ramp (desaturated for dark backgrounds).
-SEV_OK = "#87af87"  # calm green: plenty of headroom
-SEV_WARN = "#d7af5f"  # amber: climbing (>= 70%)
-SEV_CRIT = "#d75f5f"  # soft red: near the limit (>= 90%)
-TRACK = "#3a3a3a"  # unfilled bar track
+ACCENT_LIGHT = "#007888"
+CLAUDE_LIGHT = "#7759c2"
+FOREGROUND_LIGHT = "#20283a"
+MUTED_LIGHT = "#59657b"
+BACKGROUND_LIGHT = "#edf1f7"
+SURFACE_LIGHT = "#ffffff"
+PANEL_LIGHT = "#f5f7fb"
+SEV_OK_LIGHT = ACCENT_LIGHT
+SEV_WARN_LIGHT = "#846017"
+SEV_CRIT_LIGHT = "#bb354e"
+TRACK_LIGHT = "#dce3ee"
 
-# Severity band edges. WARN mirrors where a user starts caring; CRIT mirrors
-# the auto-switch default threshold so bar color and switch behavior agree.
 WARN_PCT = 70.0
 CRIT_PCT = 90.0
 
 
 @dataclass(frozen=True)
 class Palette:
-    """Resolved colors for Rich renderables, keyed to a Textual theme.
-
-    Rich renderables bake color into styles at render time, so they can't read
-    Textual's ``$variables`` the way the .tcss layer does. A Palette carries the
-    active theme's colors so the same render code paints correctly in either
-    theme. Resolve from the Theme object (never App.theme_variables, which lags
-    the deferred CSS refresh)."""
+    """Resolve Rich colors directly from the theme, before deferred CSS refresh."""
 
     accent: str
     foreground: str
@@ -53,6 +46,7 @@ class Palette:
     sev_warn: str
     sev_crit: str
     track: str
+    active: str = ACCENT
 
     DARK: ClassVar["Palette"]
 
@@ -66,20 +60,22 @@ class Palette:
         return self.sev_ok
 
     @classmethod
-    def from_theme(cls, theme: Theme) -> "Palette":
+    def from_theme(cls, theme: Theme, provider: str | None = None) -> "Palette":
+        accent = theme.variables["claude-accent"] if provider == "claude" else theme.primary
         return cls(
-            accent=theme.primary,
+            accent=accent,
             foreground=theme.foreground,
             muted=theme.secondary,
-            sev_ok=theme.success,
+            sev_ok=accent if provider else theme.success,
             sev_warn=theme.warning,
             sev_crit=theme.error,
             track=theme.variables.get("track", TRACK),
+            active=theme.primary,
         )
 
 
 CSWAP_DARK = Theme(
-    name="cswap-dark",
+    name="cswap-mono-dark",
     primary=ACCENT,
     secondary=MUTED,
     accent=ACCENT,
@@ -92,29 +88,21 @@ CSWAP_DARK = Theme(
     error=SEV_CRIT,
     dark=True,
     variables={
-        # Footer keys pick up the accent instead of the default blue.
+        "footer-background": PANEL,
         "footer-key-foreground": ACCENT,
+        "footer-description-foreground": MUTED,
         "block-cursor-background": PANEL,
         "block-cursor-foreground": FOREGROUND,
         "block-cursor-text-style": "none",
         "track": TRACK,
+        "claude-accent": CLAUDE,
+        "accent-soft": "#203e44",
+        "active-border": "#52f3e3",
     },
 )
 
-# Light companion palette (same intent, tuned for a warm near-white base).
-ACCENT_LIGHT = "#954c2a"  # burnt sienna — deepened for AA on panel (worst-case row bg)
-FOREGROUND_LIGHT = "#2b2723"
-MUTED_LIGHT = "#635d55"
-BACKGROUND_LIGHT = "#faf7f2"
-SURFACE_LIGHT = "#efeae1"
-PANEL_LIGHT = "#e2dbcf"  # most-elevated = darkest (inverted from dark)
-SEV_OK_LIGHT = "#3d6b3d"  # forest green — deepened for AA on panel
-SEV_WARN_LIGHT = "#795911"  # deep ochre — deepened for AA on panel
-SEV_CRIT_LIGHT = "#ad3128"  # brick red — deepened for AA on panel
-TRACK_LIGHT = "#cec7ba"
-
 CSWAP_LIGHT = Theme(
-    name="cswap-light",
+    name="cswap-mono-light",
     primary=ACCENT_LIGHT,
     secondary=MUTED_LIGHT,
     accent=ACCENT_LIGHT,
@@ -127,86 +115,17 @@ CSWAP_LIGHT = Theme(
     error=SEV_CRIT_LIGHT,
     dark=False,
     variables={
+        "footer-background": PANEL_LIGHT,
         "footer-key-foreground": ACCENT_LIGHT,
+        "footer-description-foreground": MUTED_LIGHT,
         "block-cursor-background": PANEL_LIGHT,
         "block-cursor-foreground": FOREGROUND_LIGHT,
         "block-cursor-text-style": "none",
         "track": TRACK_LIGHT,
+        "claude-accent": CLAUDE_LIGHT,
+        "accent-soft": "#e1f6f8",
+        "active-border": "#009da9",
     },
 )
 
-Palette.DARK = Palette(
-    accent=ACCENT, foreground=FOREGROUND, muted=MUTED,
-    sev_ok=SEV_OK, sev_warn=SEV_WARN, sev_crit=SEV_CRIT, track=TRACK,
-)
-
-
-# -- Monochrome pair --------------------------------------------------------
-#
-# "Clinical blueprint": ink on paper, tonal steps instead of dividers, one red.
-# The same system as the web dashboard, so the two surfaces read as one tool.
-#
-# success and warning are BOTH plain ink on purpose. In this system a meter's
-# fill is always ink; what changes as quota runs down is the number's weight
-# and its label, not the bar's hue. error stays red because Palette.severity
-# maps it to the CRIT band, and CRIT mirrors the auto-switch threshold -- so
-# red here means exactly one thing: "the auto-switcher would fire at this
-# level", which is a state and not a decoration.
-
-MONO_INK = "#0a0a0a"
-MONO_MUTED = "#737373"
-MONO_CANVAS = "#f5f5f5"
-MONO_PAPER = "#ffffff"
-MONO_HAIRLINE = "#e5e5e5"
-MONO_EMBER = "#e7000b"
-
-CSWAP_MONO_LIGHT = Theme(
-    name="cswap-mono-light",
-    primary=MONO_INK,
-    secondary=MONO_MUTED,
-    accent=MONO_INK,
-    foreground=MONO_INK,
-    background=MONO_CANVAS,
-    surface=MONO_PAPER,
-    panel=MONO_HAIRLINE,
-    success=MONO_INK,
-    warning=MONO_INK,
-    error=MONO_EMBER,
-    dark=False,
-    variables={
-        "footer-key-foreground": MONO_INK,
-        "block-cursor-background": MONO_HAIRLINE,
-        "block-cursor-foreground": MONO_INK,
-        "block-cursor-text-style": "none",
-        "track": MONO_HAIRLINE,
-    },
-)
-
-MONO_INK_DARK = "#fafafa"
-MONO_MUTED_DARK = "#a3a3a3"
-MONO_CANVAS_DARK = "#0a0a0a"
-MONO_PAPER_DARK = "#171717"
-MONO_HAIRLINE_DARK = "#262626"
-MONO_EMBER_DARK = "#ff6b6b"  # lifted for contrast on the dark ground
-
-CSWAP_MONO_DARK = Theme(
-    name="cswap-mono-dark",
-    primary=MONO_INK_DARK,
-    secondary=MONO_MUTED_DARK,
-    accent=MONO_INK_DARK,
-    foreground=MONO_INK_DARK,
-    background=MONO_CANVAS_DARK,
-    surface=MONO_PAPER_DARK,
-    panel=MONO_HAIRLINE_DARK,
-    success=MONO_INK_DARK,
-    warning=MONO_INK_DARK,
-    error=MONO_EMBER_DARK,
-    dark=True,
-    variables={
-        "footer-key-foreground": MONO_INK_DARK,
-        "block-cursor-background": MONO_HAIRLINE_DARK,
-        "block-cursor-foreground": MONO_INK_DARK,
-        "block-cursor-text-style": "none",
-        "track": "#2a2a2a",
-    },
-)
+Palette.DARK = Palette.from_theme(CSWAP_DARK)

@@ -11,8 +11,8 @@ const { BackendError } = require('../src/backend.cjs');
 
 const main = path.resolve(__dirname, '../src/main.cjs');
 
-function harness({ singleInstance = true, startError } = {}) {
-  const state = { windows: [], backends: [], dialogs: [], external: [], exits: [], partitions: [] };
+function harness({ singleInstance = true, startError, runtime = {}, confirm = 1, stopForUpdate } = {}) {
+  const state = { windows: [], backends: [], dialogs: [], external: [], exits: [], partitions: [], ipc: new Map(), updates: [], nativeQuits: 0 };
   const app = new EventEmitter();
   Object.assign(app, {
     isPackaged: true,
@@ -22,7 +22,11 @@ function harness({ singleInstance = true, startError } = {}) {
     whenReady: () => Promise.resolve(),
     getVersion: () => '1.0.0',
     setAboutPanelOptions: () => {},
-    quit: () => app.emit('before-quit', { preventDefault() {} }),
+    quit: () => {
+      let prevented = false;
+      app.emit('before-quit', { preventDefault() { prevented = true; } });
+      if (!prevented) state.nativeQuits += 1;
+    },
     exit: (code) => state.exits.push(code),
   });
   class Backend extends EventEmitter {
@@ -39,6 +43,12 @@ function harness({ singleInstance = true, startError } = {}) {
       return `http://127.0.0.1:12345/?token=${'a'.repeat(64)}&desktop=1`;
     }
     async stop() { this.state = 'stopped'; this.stops += 1; }
+    async stopForUpdate() {
+      this.updateStopCalled = true;
+      if (stopForUpdate) await stopForUpdate();
+      await this.stop();
+      this.cleanExit = true;
+    }
     forceKill() { this.killed = true; }
   }
   class BrowserWindow extends EventEmitter {
@@ -48,9 +58,12 @@ function harness({ singleInstance = true, startError } = {}) {
       this.destroyed = false;
       this.webContents = new EventEmitter();
       this.webContents.setWindowOpenHandler = () => {};
+      this.webContents.isDestroyed = () => this.destroyed;
+      this.webContents.getURL = () => this.loadedURL;
+      this.webContents.mainFrame = { url: '', send: (channel, value) => state.updates.push({ channel, value }) };
       state.windows.push(this);
     }
-    async loadURL(url) { this.loadedURL = url; }
+    async loadURL(url) { this.loadedURL = url; this.webContents.mainFrame.url = url; }
     isDestroyed() { return this.destroyed; }
     isMinimized() { return false; }
     show() { this.shown = true; }
@@ -67,10 +80,11 @@ function harness({ singleInstance = true, startError } = {}) {
     Menu: { buildFromTemplate: (value) => value, setApplicationMenu: (value) => { state.menu = value; } },
     nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) },
     dialog: {
-      showMessageBox: async (options) => { state.dialogs.push(options); return { response: 1 }; },
+      showMessageBox: async (options) => { state.dialogs.push(options); return { response: options.title === 'Install Agent Switch update' ? confirm : 1 }; },
       showErrorBox: (title, message) => state.dialogs.push({ title, message }),
     },
     shell: { openExternal: async (url) => state.external.push(url) },
+    ipcMain: { handle: (channel, listener) => state.ipc.set(channel, listener) },
     session: { fromPartition: (partition, options) => {
       state.partitions.push({ partition, options });
       return Object.assign(new EventEmitter(), {
@@ -79,17 +93,22 @@ function harness({ singleInstance = true, startError } = {}) {
       });
     } },
   };
-  const process = Object.assign(new EventEmitter(), { platform: 'linux', resourcesPath: '/packaged/resources' });
+  const process = Object.assign(new EventEmitter(), { platform: 'linux', arch: 'x64', resourcesPath: '/packaged/resources' });
   const localRequire = createRequire(main);
   vm.runInNewContext(fs.readFileSync(main, 'utf8'), {
-    require: (name) => name === 'electron' ? electron : name === './backend.cjs' ? { Backend, BackendError } : localRequire(name),
+    require: (name) => name === 'electron' ? electron : name === './backend.cjs' ? { Backend, BackendError }
+      : name === './updater-runtime.cjs' ? { createUpdateRuntime: async () => runtime } : localRequire(name),
     process, __dirname: path.dirname(main), setTimeout, clearTimeout, AbortController, URL,
   });
-  return { ...state, app, state };
+  const invoke = method => {
+    const contents = state.windows.at(-1).webContents;
+    return state.ipc.get(`agent-switch:update:${method}`)({ sender: contents, senderFrame: contents.mainFrame });
+  };
+  return { ...state, app, state, invoke };
 }
 
 async function settle() {
-  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
 }
 
 test('packaged main creates only a sandboxed, isolated, non-privileged renderer', async () => {
@@ -100,7 +119,7 @@ test('packaged main creates only a sandboxed, isolated, non-privileged renderer'
   const prefs = window.options.webPreferences;
   for (const key of ['contextIsolation', 'sandbox', 'webSecurity']) assert.equal(prefs[key], true, key);
   for (const key of ['nodeIntegration', 'allowRunningInsecureContent', 'webviewTag', 'devTools']) assert.equal(prefs[key], false, key);
-  assert.equal(prefs.preload, undefined);
+  assert.equal(prefs.preload, path.resolve(__dirname, '../src/preload.cjs'));
   assert.equal(state.partitions[0].partition.startsWith('persist:'), false);
   assert.equal(state.partitions[0].options.cache, false);
   assert.equal(state.backends[0].options.isPackaged, true);
@@ -113,6 +132,107 @@ test('packaged main creates only a sandboxed, isolated, non-privileged renderer'
   assert.equal(state.backends[0].stops, 1);
   assert.equal(state.trayDestroyed, true);
   assert.deepEqual(state.exits, [0]);
+});
+
+function updateFixture() {
+  const updater = new EventEmitter();
+  const info = { version: '1.2.0', files: [{ url: 'Agent-Switch-1.2.0-linux-x86_64.AppImage', size: 123, sha512: Buffer.alloc(64).toString('base64') }] };
+  updater.checkForUpdates = async () => ({ isUpdateAvailable: true, updateInfo: info });
+  updater.downloadUpdate = async () => updater.emit('update-downloaded', info);
+  return updater;
+}
+
+test('install waits for clean service exit and lets the native updater quit normally', async () => {
+  let finishStop;
+  const updater = updateFixture();
+  const { state, invoke, app } = harness({ runtime: { updater }, confirm: 0,
+    stopForUpdate: () => new Promise(resolve => { finishStop = resolve; }) });
+  updater.quitAndInstall = (...args) => {
+    assert.equal(state.backends[0].cleanExit, true);
+    assert.deepEqual(args, [false, true]);
+    state.installs = (state.installs || 0) + 1;
+    app.quit();
+  };
+  await settle();
+  await invoke('check'); await invoke('download');
+  assert.equal(state.installs, undefined);
+  const install = invoke('install');
+  await settle();
+  assert.equal(state.backends[0].updateStopCalled, true);
+  assert.equal(state.installs, undefined);
+  assert.equal(state.dialogs[0].defaultId, 1);
+  finishStop(); await install;
+  assert.equal(state.installs, 1);
+  assert.equal(state.nativeQuits, 1);
+  assert.deepEqual(state.exits, []);
+  assert.equal(state.trayDestroyed, true);
+});
+
+test('cancelled install and ordinary quit never install a downloaded update', async () => {
+  const updater = updateFixture();
+  updater.quitAndInstall = () => assert.fail('surprise installation');
+  const { state, invoke, app } = harness({ runtime: { updater } });
+  await settle(); await invoke('check'); await invoke('download');
+  assert.equal((await invoke('install')).status, 'downloaded');
+  assert.equal(state.backends[0].stops, 0);
+  assert.equal(updater.autoInstallOnAppQuit, false);
+  app.quit(); await settle();
+  assert.equal(state.backends[0].stops, 1);
+  assert.deepEqual(state.exits, [0]);
+});
+
+test('failed clean shutdown refuses installation and safely closes the app', async () => {
+  const updater = updateFixture();
+  updater.quitAndInstall = () => assert.fail('unsafe installation');
+  const { state, invoke } = harness({ runtime: { updater }, confirm: 0,
+    stopForUpdate: async () => { throw new Error('SECRET shutdown diagnostic'); } });
+  await settle(); await invoke('check'); await invoke('download'); await invoke('install'); await settle();
+  assert.match(state.dialogs.at(-1).message, /could not finish safely/);
+  assert.equal(JSON.stringify(state.dialogs).includes('SECRET'), false);
+  assert.deepEqual(state.exits, [0]);
+  assert.equal(state.nativeQuits, 0);
+});
+
+test('quitting during the clean shutdown cancels the pending install', async () => {
+  let finishStop;
+  const updater = updateFixture();
+  updater.quitAndInstall = () => assert.fail('install after ordinary quit');
+  const { state, invoke, app } = harness({ runtime: { updater }, confirm: 0,
+    stopForUpdate: () => new Promise(resolve => { finishStop = resolve; }) });
+  await settle(); await invoke('check'); await invoke('download');
+  const installing = invoke('install');
+  await settle(); app.quit(); finishStop(); await installing; await settle();
+  assert.equal(state.nativeQuits, 0);
+  assert.deepEqual(state.exits, [0]);
+});
+
+test('native install errors do not claim an update applied or restart the backend', async () => {
+  const updater = updateFixture();
+  updater.quitAndInstall = () => updater.emit('error', new Error('SECRET update URL'));
+  const { state, invoke } = harness({ runtime: { updater }, confirm: 0 });
+  await settle(); await invoke('check'); await invoke('download'); await invoke('install'); await settle();
+  assert.equal(state.backends.length, 1);
+  assert.equal(state.nativeQuits, 0);
+  assert.equal(JSON.stringify(state.dialogs).includes('SECRET'), false);
+  assert.match(state.dialogs.at(-1).message, /no successful update has been confirmed/);
+  assert.deepEqual(state.exits, [0]);
+});
+
+test('the native update menu opens Settings and checks only on deliberate selection', async () => {
+  const updater = updateFixture();
+  const check = updater.checkForUpdates;
+  let checks = 0;
+  updater.checkForUpdates = () => { checks += 1; return check(); };
+  updater.downloadUpdate = () => assert.fail('menu selection must not download');
+  const { state, app } = harness({ runtime: { updater } });
+  await settle(); assert.equal(checks, 0);
+  state.menu.find(item => item.label === 'Help').submenu.find(item => item.label === 'Check for Updates…').click();
+  await settle();
+  assert.equal(checks, 1);
+  assert.equal(new URL(state.windows[0].loadedURL).hash, '#settings');
+  assert.equal(state.external.length, 0);
+  assert.equal(state.backends.length, 1);
+  app.quit(); await settle();
 });
 
 test('closing the last window quits and stops the backend', async () => {

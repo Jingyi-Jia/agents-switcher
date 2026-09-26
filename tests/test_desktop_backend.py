@@ -10,7 +10,9 @@ import re
 import secrets
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
 from unittest.mock import Mock
 
 import pytest
@@ -110,6 +112,69 @@ def test_bind_failure_closes_state_and_only_emits_safe_error(monkeypatch):
     assert desktop.run(lines(start_message()), status) == 1
     assert json.loads(status.getvalue()) == {"type": "error", "code": "startup-failed"}
     assert state.actions._closed
+
+
+@pytest.mark.parametrize("endpoint", ["profile", "analytics"])
+@pytest.mark.parametrize("finish", [b'{"type":"shutdown"}\n', b""])
+def test_shutdown_drains_profile_and_analytics_requests(monkeypatch, endpoint, finish):
+    ready, started, stopping, release = (threading.Event() for _ in range(4))
+    control = Queue()
+    token = secrets.token_urlsafe(32)
+    control.put(json.dumps(start_message(token)).encode() + b"\n")
+
+    class Status(io.StringIO):
+        def flush(self):
+            ready.set()
+
+    def perform(*args, **kwargs):
+        started.set()
+        assert release.wait(10)
+        return {"ok": True, "message": "Completed the request"}
+
+    state = desktop.DesktopState()
+    close = state.close
+
+    def close_state():
+        stopping.set()
+        close()
+
+    monkeypatch.setattr(state, "close", close_state)
+    monkeypatch.setattr(state.claude_desktop, "create", perform)
+    monkeypatch.setattr(state.analytics, "get", perform)
+    monkeypatch.setattr(desktop, "_build_state", lambda **_: state)
+    status = Status()
+
+    def request(port):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            headers = {"X-Auth-Token": token, "Content-Type": "application/json"}
+            if endpoint == "profile":
+                connection.request("POST", "/api/claude-desktop/create",
+                                   json.dumps({"name": "Synthetic", "confirm": True}), headers)
+            else:
+                connection.request("GET", "/api/analytics?provider=claude", headers=headers)
+            response = connection.getresponse()
+            assert response.status == 200
+            return json.loads(response.read())
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        backend = pool.submit(desktop.run, Mock(readline=lambda _: control.get(timeout=10)), status)
+        try:
+            assert ready.wait(10)
+            pending = pool.submit(request, json.loads(status.getvalue())["port"])
+            assert started.wait(10)
+            control.put(finish)
+            assert stopping.wait(10)
+            with pytest.raises(TimeoutError):
+                backend.result(timeout=0.2)
+        finally:
+            release.set()
+            control.put(b"")
+        assert pending.result(timeout=10)["ok"]
+        assert backend.result(timeout=10) == 0
+        assert state.actions._closed
 
 
 def test_desktop_metadata_is_not_added_to_browser_state(monkeypatch):

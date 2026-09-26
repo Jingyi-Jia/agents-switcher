@@ -31,6 +31,29 @@ _BAR_EMPTY = "─"
 _BAR_TICK = "┃"
 
 
+class AppHeader(Static):
+    def __init__(self, provider: str | None = None) -> None:
+        super().__init__(classes="app-header")
+        self.provider = provider
+
+    def on_mount(self) -> None:
+        self.watch(self.app, "theme", lambda _: self.refresh())
+
+    def render(self) -> Text:
+        palette = Palette.from_theme(self.app.current_theme, self.provider)
+        text = Text("▦  ", style=palette.active)
+        text.append("Agent Switch", style=f"bold {palette.foreground}")
+        if self.provider:
+            text.append("   /   ", style=palette.muted)
+            text.append(
+                "Claude Code" if self.provider == "claude" else "Codex",
+                style=palette.accent,
+            )
+        else:
+            text.append("   /   Accounts", style=palette.muted)
+        return text
+
+
 def bar_cells(
     pct: float | None,
     width: int,
@@ -183,14 +206,16 @@ def account_card_text(
         text.append(f" ({acc.email})", style=palette.foreground)
     else:
         text.append(acc.email, style=palette.foreground)
-    text.append(f"  [{acc.display_tag}]", style=palette.muted)
+    metadata = Text(f"[{acc.display_tag}]", style=palette.muted)
     if acc.is_active:
-        text.append("   ● active", style=f"bold {palette.accent}")
+        metadata.append("   ● active", style=f"bold {palette.active}")
     if acc.disabled:
-        text.append("   (disabled)", style=palette.muted)
+        metadata.append("   (disabled)", style=palette.muted)
     age = data.format_age(acc.usage.age_s)
     if age:
-        text.append(f"   {age}", style=palette.muted)
+        metadata.append(f"   {age}", style=palette.muted)
+    text.append("  " if text.cell_len + metadata.cell_len + 2 <= width else "\n    ")
+    text.append(metadata)
 
     sentinel = acc.usage.sentinel
     if sentinel is not None:
@@ -222,40 +247,55 @@ def account_card_text(
 
     stale = acc.usage.age_s is not None and acc.usage.age_s > STALE_OK_S
     label_width = max(len(label) for label, _pct, _suffix, _full in rows)
-    bar_width = max(12, min(30, width - 42 - label_width))
+    bar_width = (
+        max(4, min(24, width - 12 - label_width))
+        if width < 60 else max(12, min(30, width - 42 - label_width))
+    )
     # everything on a row except the suffix: indent, label, bar, " NNN%", gap
     row_overhead = 4 + label_width + 1 + bar_width + 5 + 2
     for label, pct, suffix, suffix_full in rows:
         # per-row: show the absolute clock only where it fits, so a long
         # spend row degrading doesn't cost the 5h/7d rows their clocks
-        if suffix_full != suffix and row_overhead + len(suffix_full) <= width:
+        if (
+            width >= 60 and suffix_full != suffix
+            and row_overhead + len(suffix_full) <= width
+        ):
             suffix = suffix_full
         text.append("\n    ")
         text.append(
             usage_bar(
                 f"{label:<{label_width}}",
                 pct,
-                suffix or None,
+                suffix if row_overhead + len(suffix) <= width else None,
                 bar_width,
                 stale=stale,
                 threshold=threshold,
                 palette=palette,
             )
         )
+        if suffix and row_overhead + len(suffix) > width:
+            text.append(f"\n    {suffix}", style=palette.muted)
     return text
 
 
+def _wrap_mini_details(text: Text, detail_start: int, width: int | None) -> Text:
+    if width is None or text.cell_len <= width:
+        return text
+    return text[:detail_start] + Text("\n    ") + text[detail_start + 3:]
+
+
 def mini_account_text(
-    acc: AccountSnapshot, now: float, *, palette: Palette = Palette.DARK
+    acc: AccountSnapshot, now: float, *, palette: Palette = Palette.DARK,
+    width: int | None = None,
 ) -> Text:
-    """One minimized line for an inactive account.
+    """Compact inactive account summary, wrapping details in narrow terminals.
 
     ``2  work@acme.dev [personal]   5h 92% · 7d 63%`` — pcts only, severity
     colored; a window at/over 100% brings its reset countdown along, and a
     maxed per-model window shows as ``Fable (!)``. Sentinel states show
     their label instead.
     """
-    text = Text(no_wrap=True, overflow="ellipsis")
+    text = Text()
     text.append(f"{acc.number:>2}  ", style=f"bold {palette.muted}")
     if acc.alias:
         text.append(acc.alias, style=f"bold {palette.accent}")
@@ -265,13 +305,14 @@ def mini_account_text(
     text.append(f"  [{acc.display_tag}]", style=palette.muted)
     if acc.disabled:
         text.append("  (disabled)", style=palette.muted)
+    detail_start = len(text)
     text.append("   ")
 
     sentinel = acc.usage.sentinel
     if sentinel is not None:
         style = palette.muted if sentinel == USAGE_API_KEY else palette.sev_warn
         text.append(data.sentinel_label(sentinel), style=style)
-        return text
+        return _wrap_mini_details(text, detail_start, width)
 
     last_good = acc.usage.last_good
     fetched_at = acc.usage.fetched_at
@@ -288,7 +329,7 @@ def mini_account_text(
                 text.append(f" ({suffix})", style=palette.muted)
         if not rows:
             text.append("usage unknown", style=palette.muted)
-        return text
+        return _wrap_mini_details(text, detail_start, width)
     parts = 0
     for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
         window = last_good.get(key) if isinstance(last_good, dict) else None
@@ -321,12 +362,12 @@ def mini_account_text(
         parts += 1
     if not parts:
         text.append("usage unknown", style=palette.muted)
-    return text
+    return _wrap_mini_details(text, detail_start, width)
 
 
 class AccountsPanel(Static):
     """Static account overview: the active account full-size, others as
-    one-line minis (in slot order, expanded in place). The dashboard's — and
+    compact minis (in slot order, expanded in place). The dashboard's — and
     with ``show_minis=False`` the auto screen's — always-visible monitor."""
 
     def __init__(self, *, source=None, show_minis: bool = True, id: str | None = None) -> None:
@@ -345,10 +386,15 @@ class AccountsPanel(Static):
 
     def render(self) -> Text:
         app: "CswapApp" = self.app  # type: ignore[assignment]
-        palette = Palette.from_theme(app.current_theme)
+        palette = Palette.from_theme(
+            app.current_theme, getattr(self.source, "provider", "claude"),
+        )
         snap = self.source.snapshot
         if snap is None:
-            return Text("loading…", style=palette.muted)
+            status = self.source.refresh_status
+            if status.startswith("Could not"):
+                return Text(status, style=palette.sev_crit)
+            return Text("Connecting to saved accounts…", style=palette.muted)
         if not snap.accounts:
             return Text(
                 getattr(self.source, "empty_message", "No managed accounts yet.\n"
@@ -357,7 +403,7 @@ class AccountsPanel(Static):
                 style=palette.muted,
             )
         now = time.time()
-        width = (self.size.width or 80) - 2
+        width = self.content_size.width or 80
         blocks: list[Text] = []
         for acc in snap.accounts:
             if acc.is_active:
@@ -368,7 +414,7 @@ class AccountsPanel(Static):
                     )
                 )
             elif self._show_minis:
-                blocks.append(mini_account_text(acc, now, palette=palette))
+                blocks.append(mini_account_text(acc, now, palette=palette, width=width))
         if not blocks:
             return Text("no active managed login", style=palette.muted)
         text = Text()
@@ -386,10 +432,17 @@ class AccountsPanel(Static):
 class AccountCard(Static):
     """One account rendered full-size (used by the switch screen's list)."""
 
-    def __init__(self, acc: AccountSnapshot, *, threshold: float | None = None) -> None:
+    def __init__(
+        self, acc: AccountSnapshot, *, threshold: float | None = None,
+        provider: str = "claude",
+    ) -> None:
         super().__init__()
         self._acc = acc
         self._threshold = threshold
+        self.provider = provider
+
+    def on_mount(self) -> None:
+        self.watch(self.app, "theme", lambda _: self.refresh(layout=True))
 
     def set_account(self, acc: AccountSnapshot) -> None:
         self._acc = acc
@@ -398,30 +451,40 @@ class AccountCard(Static):
     def render(self) -> Text:
         return account_card_text(
             self._acc, self.size.width or 80, threshold=self._threshold,
-            palette=Palette.from_theme(self.app.current_theme),
+            palette=Palette.from_theme(self.app.current_theme, self.provider),
         )
 
 
 class AccountItem(ListItem):
     """ListView row wrapping an :class:`AccountCard`; remembers its slot."""
 
-    def __init__(self, acc: AccountSnapshot) -> None:
-        super().__init__(AccountCard(acc))
+    def __init__(self, acc: AccountSnapshot, *, provider: str = "claude") -> None:
+        super().__init__(AccountCard(acc, provider=provider))
         self.number = acc.number
         self.email = acc.email
+        self.set_class(acc.is_active, "active-account")
+        self.set_class(acc.disabled, "disabled-account")
 
     def set_account(self, acc: AccountSnapshot) -> None:
         self.number = acc.number
         self.email = acc.email
+        self.set_class(acc.is_active, "active-account")
+        self.set_class(acc.disabled, "disabled-account")
         self.query_one(AccountCard).set_account(acc)
 
 
 class MenuItem(ListItem):
     """One menu row: a label plus an action id the screen dispatches on."""
 
-    def __init__(self, label: str, action_id: str, *, muted: bool = False) -> None:
+    def __init__(
+        self, label: str, action_id: str, *, muted: bool = False,
+        description: str = "",
+    ) -> None:
         item = Static(label, markup=False)
         if muted:
             item.add_class("menu-item-muted")
-        super().__init__(item)
+        children = [item]
+        if description:
+            children.append(Static(description, classes="menu-description", markup=False))
+        super().__init__(*children)
         self.action_id = action_id

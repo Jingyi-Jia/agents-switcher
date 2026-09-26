@@ -112,6 +112,7 @@ def run(control: BinaryIO, status: TextIO) -> int:
             use_native_tls()
             state = _build_state(state_class=DesktopState)
             server, _ = serve(state, host="127.0.0.1", port=0, token=initial["token"])
+            server.daemon_threads = False
             thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
             thread.start()
             _emit(status, {"type": "ready", "protocol": PROTOCOL_VERSION, "port": server.server_port})

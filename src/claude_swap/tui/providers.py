@@ -2,10 +2,11 @@
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, ListView, Static
 
-from claude_swap.tui.widgets import MenuItem
+from claude_swap.tui.widgets import AppHeader, MenuItem
 
 
 class ProviderScreen(Screen):
@@ -17,13 +18,27 @@ class ProviderScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Static("agent-switch", id="provider-title")
-        yield Static("Choose a provider", id="provider-prompt")
-        yield ListView(
-            MenuItem("Claude Code accounts", "claude"),
-            MenuItem("Codex accounts", "codex"),
-            id="providers",
-        )
+        yield AppHeader()
+        with Vertical(id="provider-content"):
+            yield Static("Your accounts, in reach.", id="provider-title")
+            yield Static(
+                "Choose a provider to view usage and manage logins.", id="provider-prompt",
+            )
+            yield ListView(
+                MenuItem(
+                    "■  Claude Code", "claude",
+                    description="CLI accounts · separate from Claude Desktop",
+                ),
+                MenuItem(
+                    "■  Codex", "codex",
+                    description="Shared auth.json · quit CLI and Desktop first",
+                ),
+                id="providers",
+            )
+            yield Static(
+                "↑ ↓ choose   Enter open   ·   c Claude / x Codex",
+                classes="navigation-hint",
+            )
         yield Footer()
 
     def on_mount(self) -> None:

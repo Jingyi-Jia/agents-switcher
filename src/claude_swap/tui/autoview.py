@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, RichLog, Static
 
@@ -35,7 +35,7 @@ from claude_swap.settings import SETTING_SPECS, load_settings, parse_model_names
 from claude_swap.tui import data
 from claude_swap.tui.modals import ConfirmModal
 from claude_swap.tui.theme import Palette
-from claude_swap.tui.widgets import AccountsPanel
+from claude_swap.tui.widgets import AccountsPanel, AppHeader
 
 if TYPE_CHECKING:
     from claude_swap.tui.app import CswapApp
@@ -77,13 +77,15 @@ class AutoView(Screen):
         return self.app
 
     def compose(self) -> ComposeResult:
-        yield AccountsPanel(source=self.source, show_minis=False, id="auto-active-panel")
-        with Vertical(id="auto-top"):
-            with Horizontal(id="auto-title-row"):
-                yield Static(" DRY-RUN ", id="mode-badge", classes="dry")
-                yield Static("", id="auto-summary")
-            yield Static("", id="candidates")
-        yield RichLog(id="event-log", highlight=False, markup=False, wrap=True)
+        yield AppHeader(getattr(self.source, "provider", "claude"))
+        with VerticalScroll(id="auto-overview"):
+            yield AccountsPanel(source=self.source, show_minis=False, id="auto-active-panel")
+            with Vertical(id="auto-top"):
+                with Horizontal(id="auto-title-row"):
+                    yield Static(" DRY-RUN ", id="mode-badge", classes="dry")
+                    yield Static("", id="auto-summary")
+                yield Static("", id="candidates")
+        yield RichLog(id="event-log", highlight=False, markup=False, wrap=True, min_width=1)
         yield Footer()
 
 
@@ -303,7 +305,7 @@ class AutoScreen(AutoView):
         """Switch targets ranked by remaining headroom (best first)."""
         # Same window set as the engine (autoswitch.model included), so the
         # displayed ranking can never disagree with the account it picks.
-        palette = Palette.from_theme(self.app.current_theme)
+        palette = Palette.from_theme(self.app.current_theme, "claude")
         models = parse_model_names(self._settings.model) if self._settings else ()
         ranked: list[tuple[float, str]] = []  # (sort key: pct used, number)
         lines: dict[str, Text] = {}

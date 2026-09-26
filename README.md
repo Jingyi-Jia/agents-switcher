@@ -16,7 +16,8 @@ Work developed in this repository includes:
 
 - **A standalone desktop app** with native menus, keyboard shortcuts, tray icons,
   and macOS, Windows, and Linux packaging. Its bundled runtime needs no separate
-  Python or Node.js installation.
+  Python or Node.js installation. Supported official releases include deliberate
+  check, download, and install-and-restart controls.
 - **A shared account workspace** across the desktop app, browser dashboard, and
   terminal UI, with manual account management and opt-in automatic switching.
 - **Codex account support** with rotation-safe credential handling, quota and
@@ -25,11 +26,16 @@ Work developed in this repository includes:
 - **A pixel-neon dashboard** with light/dark themes, readable usage charts,
   activity heatmaps, Codex account reports, and local Claude Code Overview and
   Models views. Unknown data stays unknown rather than appearing as zero.
+- **A matching terminal workspace** with mint/violet accents, light/dark themes,
+  clear current-account cards, and keyboard navigation that adapts to narrow
+  terminals without hiding provider warnings or confirmation controls.
 - **Experimental Claude Desktop profiles** for separate local workspaces on
   macOS/Linux, with consent and process checks. These remain separate from CLI
   account switching; signed-in persistence and Code/Cowork behavior are unverified.
 - **Shared safety infrastructure**, including cross-node-safe locking, serialized
   credential actions, native TLS trust, and packaged-backend checks.
+
+![Agent Switch dashboard with synthetic accounts and a separate Fable quota](https://api.capy.ai/pr-assets/UEoDb1vkRZ3aBJlDOseKiVqqgGHg2mevIGojk91yprU)
 
 To get started, [get the desktop app or a preview](#get-the-app), or
 [install the CLI from source](#install-the-cli-from-source). Sign in through your
@@ -54,11 +60,10 @@ readout and can incur per-token charges.
 
 ### Get the app
 
-**There is no published installer release yet.** The repository currently has
-only a draft `v1.0.0` release with no assets. The
+**There is no signed public installer release yet.** Draft releases and package
+version numbers are not published downloads. The
 [Releases page](https://github.com/jingyi-jia/agents-switcher/releases) is where
-future release downloads will appear; a version in package metadata is not a
-download announcement.
+verified release downloads will appear once signing and release checks pass.
 
 For developers, successful runs of
 [Desktop installers](https://github.com/jingyi-jia/agents-switcher/actions/workflows/desktop.yml)
@@ -76,7 +81,40 @@ The experimental Claude Desktop panel needs the official Claude Desktop app
 instead of a CLI installation.
 Public macOS/Windows release builds require signing credentials, and macOS also
 requires notarization. The workflow exists; a trusted signed release still needs
-successful builds and clean-machine installation checks. There is no auto-updater.
+successful builds and clean-machine installation checks. Preview builds do not
+enable in-app updating and never install themselves over a trusted release.
+
+### Update the standalone client
+
+In a supported official stable release, open **Settings → App updates** (or
+**Help → Check for Updates…**):
+
+1. Choose **Check for updates**. Checks use this project's stable GitHub releases;
+   they do not inspect provider accounts or request your GitHub credentials.
+2. Choose **Download update** if a newer compatible version is available. Progress
+   stays visible, and **Cancel download** stops the download without installing.
+3. Choose **Install and restart…** when ready, then confirm the native prompt.
+   Agent Switch requires its backend to exit cleanly before handing off to the
+   installer. Its own auto-switch session stops; your saved accounts and provider
+   apps are not removed or updated. Independently started CLI automation is not
+   stopped. Check the installed version after relaunch.
+
+Nothing downloads or installs automatically, including when you normally quit
+the app. A failed check, download, signature verification, or shutdown is shown
+as a failure, not as a successful update.
+
+| Installation | In-app update support |
+| --- | --- |
+| macOS | Official Developer ID-signed release installed in Applications; Apple Silicon and Intel use separate update metadata. Ad-hoc previews and apps run from a DMG are excluded. |
+| Windows | Official signed NSIS installation with a verified publisher; signature verification must succeed. |
+| Linux | Official, writable AppImage launched directly. DEB, tar, extracted, and read-only installations use manual replacement or their package manager. |
+| Browser launcher, CLI, or TUI | These do not update the standalone client. Update your source installation separately. |
+
+An older preview without an updater needs a **one-time manual installation** of
+the first supported stable release. The updater cannot add itself to an already
+installed old build. Until signed releases are available, use the clearly labeled
+preview artifacts above; a complete signed upgrade remains a release validation
+step, not something a unit test can prove.
 
 ### Install the CLI from source
 
@@ -102,6 +140,23 @@ agent-switch codex tui    # Codex accounts
 agent-switch web          # local browser dashboard; Ctrl-C stops its server
 agent-switch web --no-open
 ```
+
+The TUI uses the desktop's restrained pixel-neon palette, with a separate action
+rail in wide terminals and a stacked, scrollable layout in narrow ones. From the
+dashboard, use **↑/↓ and Enter** for actions, **s** to switch, **w** to watch,
+**p** to choose a provider, and **Ctrl+T** to change the theme. **Tab** moves focus
+between actions and account details; **Esc** goes back. Quota values remain
+percentages **used**, with unknown and error states kept distinct from zero.
+Use a UTF-8 terminal with true-color support for the full palette.
+
+<details>
+<summary>Terminal previews — synthetic accounts</summary>
+
+![Claude Code terminal workspace in the dark theme](https://api.capy.ai/pr-assets/ygQTBK3-6UtEc3ri4Kmc6h1hHv6g-Rs3HJdg1_pLLz4)
+
+![Codex terminal workspace in the light theme](https://api.capy.ai/pr-assets/zAqs7qAY_EXULGpnshS6gzx0JuV84ABnNyRo661yVTg)
+
+</details>
 
 `agent-switch app install` creates a shortcut that runs `agent-switch web`;
 it is **not** the standalone Electron app and still needs the CLI installation.

@@ -77,6 +77,21 @@ Both CLI and desktop startup initialize native TLS through
 [tls.py](src/claude_swap/tls.py) before provider clients or workers run. Preserve
 certificate and hostname verification, including when native trust is unavailable.
 
+Standalone updates use a sandboxed preload's zero-argument
+`window.agentSwitchUpdater` methods, never an HTTP update endpoint. Keep the
+feed fixed to this repository's public stable releases; never accept a renderer
+feed URL, executable, path, or credential. Checks, downloads, and installation are
+deliberate actions, and normal quit must never install a downloaded update.
+Validate the IPC sender and main frame; expose only sanitized state. Installation
+requires native confirmation and a confirmed clean backend exit. The desktop
+backend drains HTTP requests before exiting, including profile and
+analytics work outside the credential-action lock; do not restore daemon request
+threads for this helper. Retain signed macOS/Windows gates, strict signature
+checks, separate Mac architecture metadata,
+and the Linux writable-AppImage restriction. Development and preview builds must
+remain explicitly unsupported. A verified package or mocked updater test is not
+proof that a signed end-to-end upgrade or public release occurred.
+
 The experimental Desktop panel reads `claudeDesktop` in `/api/state`. Its private
 POST routes are `/api/claude-desktop/create` (`name`, optional `emailLabel`,
 `confirm: true`), `/api/claude-desktop/open` (`profileId`, `confirm: true`),

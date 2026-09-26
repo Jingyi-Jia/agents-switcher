@@ -2,9 +2,11 @@
 
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, session, shell, ipcMain } = require('electron');
 const { Backend, BackendError } = require('./backend.cjs');
 const { HELP_LINKS, secureSession, secureWebContents } = require('./security.cjs');
+const { UpdateController, registerUpdaterIPC } = require('./updater.cjs');
+const { createUpdateRuntime } = require('./updater-runtime.cjs');
 
 app.setName('Agent Switch');
 let window = null;
@@ -14,9 +16,11 @@ let quitting = false;
 let recovering = false;
 let starting = false;
 let dashboardAddress = null;
+let updates = null;
+let installing = false;
 
 function showWindow() {
-  if (!window || window.isDestroyed() || recovering || quitting) return;
+  if (!window || window.isDestroyed() || recovering || quitting || installing) return;
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
@@ -24,7 +28,7 @@ function showWindow() {
 
 function showView(view) {
   if (!['accounts', 'usage', 'settings'].includes(view) || !dashboardAddress
-    || !window || window.isDestroyed() || recovering || quitting) return;
+    || !window || window.isDestroyed() || recovering || quitting || installing) return;
   const target = new URL(dashboardAddress);
   target.hash = view;
   void window.loadURL(target.href).then(showWindow).catch(() => recover(new BackendError('backend_error')));
@@ -60,7 +64,8 @@ function installMenu() {
     { label: 'Help', submenu: [
       { label: 'Claude Code setup', click: () => openHelp(HELP_LINKS.claude) },
       { label: 'Codex setup', click: () => openHelp(HELP_LINKS.codex) },
-      { label: 'Download updates', click: () => openHelp(HELP_LINKS.releases) },
+      { label: 'Check for Updates…', click: () => { showView('settings'); void updates?.check(); } },
+      { label: 'Download updates manually', click: () => openHelp(HELP_LINKS.releases) },
       { label: 'Agent Switch on GitHub', click: () => openHelp(HELP_LINKS.project) },
     ] },
   );
@@ -84,7 +89,7 @@ function installTray() {
 }
 
 async function recover(error) {
-  if (quitting || recovering) return;
+  if (quitting || recovering || installing) return;
   recovering = true;
   dashboardAddress = null;
   if (window && !window.isDestroyed()) {
@@ -111,7 +116,7 @@ async function recover(error) {
 }
 
 async function startDashboard() {
-  if (quitting || starting) return;
+  if (quitting || starting || installing) return;
   starting = true;
   backend = new Backend({
     isPackaged: app.isPackaged,
@@ -136,6 +141,7 @@ async function startDashboard() {
       webPreferences: {
         nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
         allowRunningInsecureContent: false, webviewTag: false, devTools: !app.isPackaged,
+        preload: path.join(__dirname, 'preload.cjs'),
         session: isolatedSession,
       },
     });
@@ -158,12 +164,19 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', showWindow);
   app.on('activate', showWindow);
   app.on('window-all-closed', () => {
-    if (!recovering) app.quit();
+    if (!recovering && !quitting) app.quit();
   });
   app.on('before-quit', (event) => {
+    if (installing && updates?.installStarted && backend?.cleanExit) {
+      quitting = true;
+      updates.close();
+      if (tray) tray.destroy();
+      return;
+    }
     event.preventDefault();
     if (quitting) return;
     quitting = true;
+    updates?.close();
     if (window && !window.isDestroyed()) window.destroy();
     if (tray) {
       tray.setToolTip('Agent Switch — stopping the local service');
@@ -204,6 +217,36 @@ if (!app.requestSingleInstanceLock()) {
   process.on('SIGINT', () => app.quit());
   process.on('SIGTERM', () => app.quit());
   void app.whenReady().then(async () => {
+    const runtime = await createUpdateRuntime({ app, releaseBuild: require('../package.json').agentSwitchRelease });
+    if (quitting) return;
+    updates = new UpdateController({
+      ...runtime, currentVersion: app.getVersion(), platform: process.platform, arch: process.arch,
+      confirmInstall: async () => {
+        if (quitting || recovering || !window || window.isDestroyed()) return false;
+        const { response } = await dialog.showMessageBox({
+          type: 'question', title: 'Install Agent Switch update',
+          message: 'Install the downloaded update and restart Agent Switch?',
+          detail: 'The local service and this app’s auto-switching will stop first. Saved accounts and provider credentials are not changed. Independently started CLI automation is not stopped.',
+          buttons: ['Install and restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
+        });
+        return response === 0 && !quitting && !recovering && Boolean(window && !window.isDestroyed());
+      },
+      prepareInstall: async () => {
+        if (quitting || recovering || !backend) throw new Error();
+        installing = true;
+        await backend.stopForUpdate();
+        if (quitting) throw new Error();
+      },
+      installFailed: () => {
+        installing = false;
+        dialog.showErrorBox('Agent Switch update', 'The update could not finish safely. Agent Switch will close. Reopen it and check the version before retrying; no successful update has been confirmed.');
+        app.quit();
+      },
+    });
+    registerUpdaterIPC(ipcMain, updates, () => ({
+      contents: !quitting && !recovering && window && !window.isDestroyed() ? window.webContents : null,
+      origin: dashboardAddress ? new URL(dashboardAddress).origin : null,
+    }));
     installMenu();
     installTray();
     await startDashboard();
