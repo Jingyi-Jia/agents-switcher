@@ -89,6 +89,8 @@ def test_rejection_never_drains_ambiguous_or_unbounded_framing(rejected_post, he
     handler.rfile.read.assert_not_called()
     handler.rfile.read1.assert_not_called()
     handler.connection.settimeout.assert_not_called()
+    handler.connection.setblocking.assert_not_called()
+    handler.connection.recv.assert_not_called()
     assert handler.close_connection is True
     assert rejected_post.state.mock_calls == []
 
@@ -150,17 +152,18 @@ def test_rejection_still_succeeds_if_socket_timeout_cannot_be_set(rejected_post)
     handler.rfile.read1.assert_not_called()
 
 
-def test_malformed_framing_shutdown_discards_raw_transport_without_http_body_read(rejected_post):
+def test_malformed_framing_finish_discards_late_raw_transport_without_http_body_read(rejected_post):
     handler = rejected_post.handler
     handler.headers = HTTPMessage()
     handler.headers["Transfer-Encoding"] = "chunked"
     left, right = socket.socketpair()
     try:
-        right.sendall(b"8\r\nnot-json\r\n0\r\n\r\n")
-        right.shutdown(socket.SHUT_WR)
         handler.connection = left
 
         handler.do_POST()
+        right.sendall(b"8\r\nnot-json\r\n0\r\n\r\n")
+        right.shutdown(socket.SHUT_WR)
+        handler.finish()
 
         handler._json.assert_called_once_with(403, {"error": "bad or missing token"})
         handler.rfile.read.assert_not_called()
@@ -172,7 +175,7 @@ def test_malformed_framing_shutdown_discards_raw_transport_without_http_body_rea
         right.close()
 
 
-def test_malformed_framing_raw_discard_stops_on_peer_eof(rejected_post):
+def test_malformed_framing_finish_stops_on_peer_eof(rejected_post):
     handler = rejected_post.handler
     handler.headers = HTTPMessage()
     handler.headers["Transfer-Encoding"] = "chunked"
@@ -182,6 +185,7 @@ def test_malformed_framing_raw_discard_stops_on_peer_eof(rejected_post):
         handler.connection = left
 
         handler.do_POST()
+        handler.finish()
 
         handler.rfile.read.assert_not_called()
         handler.rfile.read1.assert_not_called()
@@ -190,69 +194,102 @@ def test_malformed_framing_raw_discard_stops_on_peer_eof(rejected_post):
         left.close()
 
 
-def test_malformed_framing_raw_discard_ignores_socket_errors(rejected_post, monkeypatch):
+def test_malformed_framing_finish_ignores_socket_errors(rejected_post, monkeypatch):
     handler = rejected_post.handler
     handler.headers = HTTPMessage()
     handler.headers["Transfer-Encoding"] = "chunked"
-    left, right = socket.socketpair()
-    try:
-        handler.connection = left
-        monkeypatch.setattr(server.select, "select", Mock(side_effect=OSError()))
+    handler.connection.recv.side_effect = OSError()
+    monkeypatch.setattr(server.select, "select", Mock(return_value=([handler.connection], [], [])))
 
-        handler.do_POST()
+    handler.do_POST()
+    handler.finish()
 
-        handler.rfile.read.assert_not_called()
-        handler.rfile.read1.assert_not_called()
-        assert rejected_post.state.mock_calls == []
-    finally:
-        left.close()
-        right.close()
+    handler.rfile.read.assert_not_called()
+    handler.rfile.read1.assert_not_called()
+    handler.connection.recv.assert_called_once_with(8192)
+    assert rejected_post.state.mock_calls == []
 
 
-def test_malformed_framing_raw_discard_shares_total_byte_budget(rejected_post):
+def test_malformed_framing_finish_handles_spurious_readiness(rejected_post, monkeypatch):
     handler = rejected_post.handler
     handler.headers = HTTPMessage()
     handler.headers["Transfer-Encoding"] = "chunked"
-    left, right = socket.socketpair()
-    try:
-        right.sendall(b"x" * (server.MAX_BODY_BYTES + 1))
-        right.shutdown(socket.SHUT_WR)
-        handler.connection = left
+    handler.connection.recv.side_effect = [BlockingIOError(), b"x", b""]
+    monkeypatch.setattr(server.select, "select", Mock(return_value=([handler.connection], [], [])))
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(monotonic=Mock(side_effect=[0.0, 0.05, 0.10, 0.15])),
+    )
 
-        handler.do_POST()
+    handler.do_POST()
+    handler.finish()
 
-        assert left.recv(1) == b"x"
-        handler.rfile.read.assert_not_called()
-        handler.rfile.read1.assert_not_called()
-        assert rejected_post.state.mock_calls == []
-    finally:
-        left.close()
-        right.close()
+    assert handler.connection.recv.call_args_list == [call(8192), call(8192), call(8192)]
+    handler.rfile.read.assert_not_called()
+    handler.rfile.read1.assert_not_called()
+    assert rejected_post.state.mock_calls == []
 
 
-def test_malformed_framing_raw_discard_shares_total_deadline(rejected_post, monkeypatch):
+def test_malformed_framing_finish_shares_total_deadline(rejected_post, monkeypatch):
     handler = rejected_post.handler
     handler.headers = HTTPMessage()
     handler.headers["Transfer-Encoding"] = "chunked"
-    left, right = socket.socketpair()
-    try:
-        right.sendall(b"x")
-        handler.connection = left
-        monkeypatch.setattr(
-            server, "time", SimpleNamespace(
-                monotonic=Mock(side_effect=[0.0, server.REJECTION_DRAIN_TIMEOUT_S + 0.01]),
-            ),
-        )
+    select_mock = Mock(return_value=([handler.connection], [], []))
+    monkeypatch.setattr(server.select, "select", select_mock)
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(
+            monotonic=Mock(side_effect=[0.0, server.REJECTION_DRAIN_TIMEOUT_S + 0.01]),
+        ),
+    )
 
-        handler.do_POST()
+    handler.do_POST()
+    handler.finish()
 
-        assert left.recv(1) == b"x"
-        handler.rfile.read.assert_not_called()
-        handler.rfile.read1.assert_not_called()
-        assert rejected_post.state.mock_calls == []
-    finally:
-        left.close()
-        right.close()
+    select_mock.assert_not_called()
+    handler.connection.recv.assert_not_called()
+    handler.rfile.read.assert_not_called()
+    handler.rfile.read1.assert_not_called()
+    assert rejected_post.state.mock_calls == []
+
+
+def test_declared_body_drain_and_finish_share_byte_budget(rejected_post, monkeypatch):
+    handler = rejected_post.handler
+    handler.headers.replace_header("Content-Length", "2")
+    handler.rfile.read1.return_value = b"ab"
+    handler.connection.recv.return_value = b"xyz"
+    monkeypatch.setattr(server, "MAX_BODY_BYTES", 5)
+    monkeypatch.setattr(server.select, "select", Mock(return_value=([handler.connection], [], [])))
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(monotonic=Mock(side_effect=[0.0, 0.01, 0.02])),
+    )
+
+    handler.do_POST()
+    handler.finish()
+
+    handler.rfile.read1.assert_called_once_with(2)
+    handler.connection.recv.assert_called_once_with(3)
+    assert handler._reject_transport_remaining == 0
+    assert rejected_post.state.mock_calls == []
+
+
+def test_consumed_body_rejection_finish_discards_unread_extra_bytes(rejected_post, monkeypatch):
+    handler = rejected_post.handler
+    handler.headers["X-Auth-Token"] = "test-web-auth"
+    handler.headers.replace_header("Content-Length", "1")
+    handler.rfile.read.return_value = b"{"
+    handler.connection.recv.side_effect = [b"extra", b""]
+    monkeypatch.setattr(server.select, "select", Mock(return_value=([handler.connection], [], [])))
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(monotonic=Mock(side_effect=[0.0, 0.01, 0.02])),
+    )
+
+    handler.do_POST()
+    handler.finish()
+
+    assert handler._json.call_args.args[0] == 400
+    handler.rfile.read.assert_called_once_with(1)
+    handler.rfile.read1.assert_not_called()
+    assert handler.connection.recv.call_args_list == [call(8192), call(8192)]
+    assert rejected_post.state.mock_calls == []
 
 
 def test_content_type_rejection_drains_without_parsing(rejected_post, monkeypatch):

@@ -444,21 +444,20 @@ def _make_handler(state: DashboardState, token: str):
                 self.connection.shutdown(socket.SHUT_WR)
             except OSError:
                 pass
+            self._reject_transport_deadline = time.monotonic() + REJECTION_DRAIN_TIMEOUT_S
+            self._reject_transport_remaining = max(
+                0, MAX_BODY_BYTES - getattr(self, "_rejected_body_bytes", 0),
+            )
             if self._body_started:
                 return
-            deadline = time.monotonic() + REJECTION_DRAIN_TIMEOUT_S
             try:
                 remaining = self._content_length()
             except ProviderActionError:
-                self._discard_rejected_transport(deadline, MAX_BODY_BYTES)
                 return
             self._body_started = True
-            self._discard_declared_body(remaining, deadline)
-
-        def _discard_declared_body(self, remaining: int, deadline: float) -> None:
             try:
                 while remaining:
-                    timeout = deadline - time.monotonic()
+                    timeout = self._reject_transport_deadline - time.monotonic()
                     if timeout <= 0:
                         break
                     self.connection.settimeout(timeout)
@@ -466,13 +465,22 @@ def _make_handler(state: DashboardState, token: str):
                     if not chunk:
                         break
                     remaining -= len(chunk)
+                    self._record_rejected_body_bytes(len(chunk))
             except OSError:
                 pass
 
-        def _discard_rejected_transport(self, deadline: float, remaining: int) -> None:
-            if not isinstance(self.connection, socket.socket):
+        def _record_rejected_body_bytes(self, count: int) -> None:
+            self._rejected_body_bytes = getattr(self, "_rejected_body_bytes", 0) + count
+            if hasattr(self, "_reject_transport_remaining"):
+                self._reject_transport_remaining = max(0, self._reject_transport_remaining - count)
+
+        def _finish_rejected_transport(self) -> None:
+            deadline = getattr(self, "_reject_transport_deadline", None)
+            remaining = getattr(self, "_reject_transport_remaining", 0)
+            if deadline is None or remaining <= 0:
                 return
             try:
+                self.connection.setblocking(False)
                 while remaining:
                     timeout = deadline - time.monotonic()
                     if timeout <= 0:
@@ -480,12 +488,22 @@ def _make_handler(state: DashboardState, token: str):
                     readable, _, _ = select.select([self.connection], [], [], timeout)
                     if not readable:
                         break
-                    chunk = self.connection.recv(min(remaining, 8192))
+                    try:
+                        chunk = self.connection.recv(min(remaining, 8192))
+                    except BlockingIOError:
+                        continue
                     if not chunk:
                         break
                     remaining -= len(chunk)
-            except OSError:
+                    self._reject_transport_remaining = remaining
+            except (OSError, TypeError, ValueError):
                 pass
+
+        def finish(self) -> None:
+            try:
+                super().finish()
+            finally:
+                self._finish_rejected_transport()
 
         def _body(self) -> dict:
             length = self._content_length()
@@ -494,6 +512,7 @@ def _make_handler(state: DashboardState, token: str):
             self.connection.settimeout(10)
             self._body_started = True
             raw = self.rfile.read(length)
+            self._record_rejected_body_bytes(len(raw))
             if len(raw) != length:
                 raise ProviderActionError("Incomplete JSON body")
 
@@ -558,6 +577,7 @@ def _make_handler(state: DashboardState, token: str):
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib hook
             self._body_started = False
+            self._rejected_body_bytes = 0
             parsed = urlparse(self.path)
             if not self._authorized({}):
                 self._reject(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
