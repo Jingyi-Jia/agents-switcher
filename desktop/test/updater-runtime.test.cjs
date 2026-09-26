@@ -45,6 +45,69 @@ test('development, preview, prerelease, and unsupported architectures never load
   }
 });
 
+test('community runtime supports every packaged native target without signed config or installation checks', async () => {
+  for (const [platform, arch, execPath, env] of [
+    ['darwin', 'arm64', '/Volumes/Agent Switch/Agent Switch.app/Contents/MacOS/Agent Switch', {}],
+    ['darwin', 'x64', '/Users/example/Desktop/Agent Switch.app/Contents/MacOS/Agent Switch', {}],
+    ['win32', 'x64', 'C:\\portable\\Agent Switch.exe', {}],
+    ['linux', 'x64', '/opt/Agent Switch/agent-switch-desktop', {}],
+    ['linux', 'x64', '/home/example/extracted/agent-switch-desktop', {}],
+    ['linux', 'x64', '/mount/app/agent-switch-desktop', { APPIMAGE: '/read-only/Agent-Switch.AppImage', APPDIR: '/mount/app' }],
+  ]) {
+    const forbid = () => assert.fail('community mode entered the signed updater path');
+    const { options } = fixture({ releaseBuild: false, communityBuild: true, platform, arch, execPath, env,
+      app: { isPackaged: true, getVersion: () => '1.2.0', isInApplicationsFolder: forbid },
+      io: { readFileSync: forbid, statSync: forbid, lstatSync: forbid, realpathSync: forbid, accessSync: forbid },
+      run: forbid, library: forbid });
+    const runtime = await createUpdateRuntime(options);
+    assert.deepEqual(Object.keys(runtime), ['checkRelease']);
+    assert.equal(typeof runtime.checkRelease, 'function');
+  }
+});
+
+test('release capability flags select exactly one explicit mode and malformed combinations fail closed', async () => {
+  for (const releaseBuild of [undefined, false, true, null, 'true', 'false', 0, 1]) {
+    for (const communityBuild of [undefined, false, true, null, 'true', 'false', 0, 1]) {
+      const { options, calls } = fixture({ releaseBuild, communityBuild });
+      const runtime = await createUpdateRuntime(options);
+      const signed = releaseBuild === true && (communityBuild === false || communityBuild === undefined);
+      const community = releaseBuild === false && communityBuild === true;
+      assert.equal(Boolean(runtime.updater), signed);
+      assert.equal(typeof runtime.checkRelease === 'function', community);
+      assert.equal(typeof runtime.reason === 'string', !signed && !community);
+      if (!signed) assert.deepEqual(calls, []);
+    }
+  }
+});
+
+test('community capability cannot enable development, prerelease or unsupported targets', async () => {
+  for (const change of [
+    { app: { isPackaged: false, getVersion: () => '1.2.0' } },
+    { app: { isPackaged: true, getVersion: () => '1.2.0-beta.1' } },
+    { app: { isPackaged: true, getVersion: () => 'PRIVATE' } },
+    { platform: 'freebsd' }, { platform: 'win32', arch: 'arm64' }, { platform: 'linux', arch: 'arm64' },
+    { platform: 'darwin', arch: 'ia32' },
+  ]) {
+    const { options, calls } = fixture({ releaseBuild: false, communityBuild: true, ...change });
+    const runtime = await createUpdateRuntime(options);
+    assert.equal(runtime.updater, undefined);
+    assert.equal(runtime.checkRelease, undefined);
+    assert.equal(typeof runtime.reason, 'string');
+    assert.equal(JSON.stringify(runtime).includes('PRIVATE'), false);
+    assert.deepEqual(calls, []);
+  }
+});
+
+test('signed update verification failure never falls back to community checking', async () => {
+  for (const communityBuild of [false, undefined]) {
+    const { options } = fixture({ communityBuild, run: async () => { throw new Error('PRIVATE signature failure'); } });
+    const runtime = await createUpdateRuntime(options);
+    assert.equal(runtime.updater, undefined);
+    assert.equal(runtime.checkRelease, undefined);
+    assert.equal(typeof runtime.reason, 'string');
+  }
+});
+
 test('Windows uses only the public fixed stable feed with no ambient GitHub auth', async () => {
   const { options, calls } = fixture();
   const runtime = await createUpdateRuntime(options);
