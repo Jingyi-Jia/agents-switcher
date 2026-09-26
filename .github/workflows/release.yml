@@ -1,0 +1,141 @@
+name: Prepare desktop release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full reviewed main commit SHA (must match the dispatched main ref)
+        required: true
+        type: string
+      distribution:
+        description: Community downloads or strictly signed self-updating builds
+        required: true
+        default: community
+        type: choice
+        options:
+          - community
+          - signed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: github.ref == 'refs/heads/main' && github.repository == 'Jingyi-Jia/agents-switcher'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          version: "0.12.3"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Validate source, versions, and existing release policy
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BUILD_MODE: ${{ inputs.distribution }}
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-project python .github/scripts/desktop_release.py preflight --mode "$BUILD_MODE" --source-sha "$SOURCE_SHA"
+
+  native:
+    needs: source
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/desktop-build.yml
+    with:
+      mode: ${{ inputs.distribution }}
+    secrets:
+      APPLE_CERTIFICATE_P12: ${{ inputs.distribution == 'signed' && secrets.APPLE_CERTIFICATE_P12 || '' }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ inputs.distribution == 'signed' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+      APPLE_API_KEY_P8: ${{ inputs.distribution == 'signed' && secrets.APPLE_API_KEY_P8 || '' }}
+      APPLE_API_KEY_ID: ${{ inputs.distribution == 'signed' && secrets.APPLE_API_KEY_ID || '' }}
+      APPLE_API_ISSUER: ${{ inputs.distribution == 'signed' && secrets.APPLE_API_ISSUER || '' }}
+      WINDOWS_CERTIFICATE_PFX: ${{ inputs.distribution == 'signed' && secrets.WINDOWS_CERTIFICATE_PFX || '' }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ inputs.distribution == 'signed' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+
+  python:
+    needs: source
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      BUILD_MODE: ${{ inputs.distribution }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          version: "0.12.3"
+          python-version: "3.12"
+          enable-cache: false
+      - name: Build the Python wheel and source distribution
+        run: |
+          uv build
+          uv run --no-project python .github/scripts/desktop_release.py stage --mode "$BUILD_MODE" --source-sha "$GITHUB_SHA" --platform python --arch any --input dist --output dist/python-artifacts
+      - name: Attest final Python distribution files
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: dist/python-artifacts/*
+          create-storage-record: false
+      - name: Retain and verify the Python build attestation
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "$ATTESTATION_BUNDLE" dist/python-artifacts/attestation-python-any.json
+          uv run --no-project python .github/scripts/desktop_release.py verify --mode "$BUILD_MODE" --source-sha "$GITHUB_SHA" --platform python --arch any --directory dist/python-artifacts
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: python-dist
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          path: dist/python-artifacts/*
+
+  draft:
+    needs: [source, native, python]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          version: "0.12.3"
+          python-version: "3.12"
+          enable-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: desktop-*
+          path: dist/release-assets
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: python-dist
+          path: dist/release-assets/python-dist
+      - name: Verify every attestation and attach only to a matching private draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BUILD_MODE: ${{ inputs.distribution }}
+        run: uv run --no-project python .github/scripts/desktop_release.py draft --mode "$BUILD_MODE" --source-sha "$SOURCE_SHA" --directory dist/release-assets

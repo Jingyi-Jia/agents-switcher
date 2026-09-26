@@ -22,6 +22,21 @@ function metadataName(platform, arch) {
   throw new Error('Unsupported update target');
 }
 
+function validateMode({ releaseBuild = false, communityBuild = false }) {
+  if (typeof releaseBuild !== 'boolean' || typeof communityBuild !== 'boolean' || (releaseBuild && communityBuild)) {
+    throw new Error('Conflicting or invalid release capabilities');
+  }
+}
+
+function installerNames(platform, arch, version) {
+  metadataName(platform, arch);
+  if (!stableVersion(version)) throw new Error('Installer artifacts require a stable version');
+  const stem = `Agent-Switch-${version}-${platform}`;
+  if (platform === 'mac') return [`${stem}-${arch}.dmg`, `${stem}-${arch}.zip`];
+  if (platform === 'win') return [`${stem}-x64.exe`];
+  return [`${stem}-x86_64.AppImage`, `${stem}-amd64.deb`, `${stem}-x64.tar.gz`];
+}
+
 function verifyBlockmap(content, size) {
   const blockmap = JSON.parse(content);
   if (blockmap.version !== '2' || !Array.isArray(blockmap.files) || blockmap.files.length !== 1) throw new Error('Invalid update blockmap');
@@ -33,8 +48,16 @@ function verifyBlockmap(content, size) {
     || part.sizes.reduce((total, value) => total + value, 0) !== size) throw new Error('Invalid update blockmap');
 }
 
-async function verifyArtifacts({ directory, platform, arch, version }) {
+async function verifyArtifacts({ directory, platform, arch, version, releaseBuild = false, communityBuild = false }) {
+  validateMode({ releaseBuild, communityBuild });
   if (!stableVersion(version)) throw new Error('Update artifacts require a stable version');
+  if (communityBuild) {
+    for (const name of installerNames(platform, arch, version)) {
+      const artifact = fs.lstatSync(path.join(directory, name));
+      if (!artifact.isFile() || artifact.size <= 0) throw new Error('Community installer is missing or invalid');
+    }
+    return;
+  }
   const info = yaml.load(fs.readFileSync(path.join(directory, metadataName(platform, arch)), 'utf8'));
   const extensions = { mac: ['zip', 'dmg'], win: ['exe'], linux: ['AppImage'] }[platform];
   const artifactArch = platform === 'linux' && arch === 'x64' ? 'x86_64' : arch;
@@ -68,7 +91,9 @@ async function verifyArtifacts({ directory, platform, arch, version }) {
   }
 }
 
-function verifyPackagedConfig({ directory, platform, arch, version, releaseBuild }) {
+function verifyPackagedConfig({ directory, platform, arch, version, releaseBuild = false, communityBuild = false }) {
+  validateMode({ releaseBuild, communityBuild });
+  installerNames(platform, arch, version);
   const resources = platform === 'mac'
     ? path.join(directory, arch === 'arm64' ? 'mac-arm64' : 'mac', 'Agent Switch.app', 'Contents', 'Resources')
     : path.join(directory, platform === 'win' ? 'win-unpacked' : 'linux-unpacked', 'resources');
@@ -80,6 +105,7 @@ function verifyPackagedConfig({ directory, platform, arch, version, releaseBuild
   if (platform === 'win' && releaseBuild) publisherNames(config);
   const manifest = JSON.parse(asar.extractFile(path.join(resources, 'app.asar'), 'package.json').toString('utf8'));
   if (manifest.version !== version || manifest.agentSwitchRelease !== releaseBuild
+    || manifest.agentSwitchCommunityRelease !== communityBuild
     || manifest.dependencies?.['electron-updater'] !== require('../package.json').dependencies['electron-updater']) {
     throw new Error('Packaged version, updater, or release capability differs from the build');
   }
@@ -88,18 +114,23 @@ function verifyPackagedConfig({ directory, platform, arch, version, releaseBuild
   }
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  if (args.length < 2 || args.length > 3 || (args[2] && args[2] !== '--release')) {
-    throw new Error('Usage: verify-updates.cjs mac|win|linux x64|arm64 [--release]');
+function parseArgs(args) {
+  if (args.length < 2 || args.length > 3 || (args.length === 3 && !['--release', '--community'].includes(args[2]))) {
+    throw new Error('Usage: verify-updates.cjs mac|win|linux x64|arm64 [--release|--community]');
   }
   const [platform, arch] = args;
-  const options = { directory: path.resolve(__dirname, '../release'), platform, arch,
-    version: require('../package.json').version, releaseBuild: args[2] === '--release' };
   metadataName(platform, arch);
+  return { platform, arch, releaseBuild: args[2] === '--release', communityBuild: args[2] === '--community' };
+}
+
+async function main() {
+  const options = { directory: path.resolve(__dirname, '../release'),
+    version: require('../package.json').version, ...parseArgs(process.argv.slice(2)) };
   verifyPackagedConfig(options);
   await verifyArtifacts(options);
-  console.log(`Verified ${platform}-${arch} updater configuration, artifacts, hashes, and blockmaps`);
+  console.log(options.communityBuild
+    ? `Verified ${options.platform}-${options.arch} community configuration and installers; update feeds are not for publication`
+    : `Verified ${options.platform}-${options.arch} updater configuration, artifacts, hashes, and blockmaps`);
 }
 
 if (require.main === module) void main().catch(() => {
@@ -107,4 +138,4 @@ if (require.main === module) void main().catch(() => {
   process.exitCode = 1;
 });
 
-module.exports = { verifyArtifacts, verifyPackagedConfig, metadataName, digest };
+module.exports = { verifyArtifacts, verifyPackagedConfig, metadataName, installerNames, digest, parseArgs };
