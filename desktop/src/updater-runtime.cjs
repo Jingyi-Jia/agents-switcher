@@ -68,7 +68,7 @@ async function createUpdateRuntime({ app, releaseBuild, platform = process.platf
         if (!app.isInApplicationsFolder()) throw new Error();
         await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '-R',
           'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists',
-          path.resolve(path.dirname(execPath), '..', '..')], { shell: false, timeout: 25000, maxBuffer: 16384 });
+          path.posix.resolve(path.posix.dirname(execPath), '..', '..')], { shell: false, timeout: 25000, maxBuffer: 16384 });
       };
     } else if (platform === 'win32') {
       const names = publisherNames(config);
