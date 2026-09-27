@@ -1717,7 +1717,7 @@ class TestGuards:
             denied_dir.chmod(0o500)
         import logging
 
-        with caplog.at_level(logging.DEBUG, logger="claude-swap"):
+        with caplog.at_level(logging.DEBUG, logger="agents-switcher"):
             try:
                 seeded_switcher._delete_session_profile(ACCOUNT_NUM, ACCOUNT_EMAIL)
             finally:
@@ -1767,7 +1767,7 @@ class TestGuards:
         if not marker_lands:
             session_dir.parent.chmod(0o500)
         try:
-            with caplog.at_level(logging.WARNING, logger="claude-swap"):
+            with caplog.at_level(logging.WARNING, logger="agents-switcher"):
                 seeded_switcher._write_account_credentials(
                     ACCOUNT_NUM, ACCOUNT_EMAIL, ROTATED_CREDS
                 )

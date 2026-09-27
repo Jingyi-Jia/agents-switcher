@@ -223,7 +223,7 @@ class TestFetchUsage:
 
     def test_http_error_logs_in_debug_mode(self, capsys):
         import logging
-        logger = logging.getLogger("claude-swap")
+        logger = logging.getLogger("agents-switcher")
         logger.setLevel(logging.DEBUG)
         handler = logging.StreamHandler()
         logger.addHandler(handler)
@@ -853,12 +853,12 @@ class TestFetchUsageForAccount:
         def boom(acct_num, acct_email, creds):
             raise RuntimeError("disk exploded")
 
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="agents-switcher"):
             oauth._persist(boom, "1", "test@example.com", "{}")
 
         warning_records = [
             r for r in caplog.records
-            if r.levelno == logging.WARNING and r.name == "claude-swap"
+            if r.levelno == logging.WARNING and r.name == "agents-switcher"
         ]
         assert len(warning_records) == 1
         msg = warning_records[0].getMessage()
@@ -984,7 +984,7 @@ class TestTryFetchUsageOutcome:
         )
         with (
             patch("agents_switcher.oauth.urllib.request.urlopen", side_effect=err),
-            caplog.at_level(logging.WARNING, logger="claude-swap"),
+            caplog.at_level(logging.WARNING, logger="agents-switcher"),
         ):
             outcome = oauth.try_fetch_usage_for_account(
                 "1", "a@b.c", self._make_credentials(), is_active=False,
@@ -1018,7 +1018,7 @@ class TestTryFetchUsageOutcome:
         )
         with (
             patch("agents_switcher.oauth.urllib.request.urlopen", side_effect=err),
-            caplog.at_level(logging.WARNING, logger="claude-swap"),
+            caplog.at_level(logging.WARNING, logger="agents-switcher"),
         ):
             outcome = oauth.try_fetch_usage_for_account(
                 "1", "a@b.c", self._make_credentials(), is_active=False,
@@ -1381,7 +1381,7 @@ class TestFetchOauthProfile:
         )
         with patch(
             "agents_switcher.oauth.urllib.request.urlopen", side_effect=err,
-        ), caplog.at_level(logging.WARNING, logger="claude-swap"):
+        ), caplog.at_level(logging.WARNING, logger="agents-switcher"):
             assert oauth.fetch_oauth_profile("sk-live") is None
         assert any(
             "401" in r.message and "pre-fix" in r.message

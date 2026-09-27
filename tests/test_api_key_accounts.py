@@ -467,7 +467,7 @@ class TestAnUnreadableGlobalConfigIsNotAnEmptyOne:
         cfg.chmod(0o000)
         try:
             caplog.clear()
-            with caplog.at_level(logging.WARNING, logger="claude-swap"):
+            with caplog.at_level(logging.WARNING, logger="agents-switcher"):
                 s._store._clear_managed_key()  # must not raise
         finally:
             cfg.chmod(0o600)
@@ -498,7 +498,7 @@ class TestAnUnreadableGlobalConfigIsNotAnEmptyOne:
             cfg.unlink()
 
         caplog.clear()
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="agents-switcher"):
             s._store._clear_managed_key()
 
         assert not cfg.exists(), "a genuinely absent config must not be created"

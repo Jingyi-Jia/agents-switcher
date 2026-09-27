@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
+from agents_switcher.codex import auth_file
 from agents_switcher.codex.auth_file import CodexAuthError, has_live_login, read_auth, write_auth
 from agents_switcher.codex.identity import (
     OPENAI_AUTH_CLAIM,
@@ -283,7 +284,7 @@ class CodexSwitcher:
     def _pending_imports(self) -> dict[str, str]:
         """Read the private save-only barrier; never confuse it with live state."""
         try:
-            data = read_auth(self.store.root / ".pending-enrollments.json")
+            data = auth_file.read_auth(self.store.root / ".pending-enrollments.json")
         except CodexAuthError:
             raise SwitchError("Codex enrollment metadata is unreadable; refusing to overwrite saved logins.") from None
         if data is None:
@@ -304,7 +305,7 @@ class CodexSwitcher:
             pending.pop(number, None)
         else:
             pending[number] = account_id
-        write_auth(pending, self.store.root / ".pending-enrollments.json")
+        auth_file.write_auth(pending, self.store.root / ".pending-enrollments.json")
 
     def _has_pending_import(self, account: CodexAccount) -> bool:
         return self._pending_imports().get(account.number) == account.account_id

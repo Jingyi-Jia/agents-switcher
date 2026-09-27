@@ -79,7 +79,7 @@ async function checkCodexFlow(flow) {
 }
 
 async function requestCodexSwitch(account, opener) {
-  if (busy || codexFlow || $("action-dialog").open || activeView !== "accounts") return;
+  if (busy || codexFlow || codexEnrollmentFlow || $("action-dialog").open || activeView !== "accounts") return;
   const flow = codexFlow = {generation: ++codexGeneration, number: account.number, label: account.alias || account.email || "account " + account.number, opener, phase: "checking", status: null, attempts: 0};
   $("codex-dialog-title").textContent = "Switch to " + flow.label + "?";
   $("codex-dialog-description").textContent = "Codex must be fully quit before its saved login can change. This prepares the next launch; it doesn't change the identity of a running app.";

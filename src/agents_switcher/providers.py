@@ -36,7 +36,7 @@ _COMMON_CAPABILITIES = ("switch", "add", "remove", "disable", "switch-best", "au
 PROVIDERS = {
     "claude": ProviderSpec((*_COMMON_CAPABILITIES, "token"), CLAUDE_SWITCH_NOTICE),
     "codex": ProviderSpec(
-        _COMMON_CAPABILITIES,
+        (*_COMMON_CAPABILITIES, "login"),
         "Switches Codex CLI credentials. Running Codex processes keep their previous "
         "account until restarted; automatic switching waits until they exit.",
     ),

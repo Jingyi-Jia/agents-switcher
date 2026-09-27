@@ -41,7 +41,7 @@ TOUCH_INTERVAL_S = 3.0
 #: Default bounded wait before giving up on a contended lock.
 DEFAULT_TIMEOUT_S = 9.0
 
-_logger = logging.getLogger("claude-swap")
+_logger = logging.getLogger("agents-switcher")
 
 
 class DirectoryLock:

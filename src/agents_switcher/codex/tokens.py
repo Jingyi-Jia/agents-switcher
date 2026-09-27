@@ -167,7 +167,8 @@ def refresh_tokens(tokens: dict, *, issuer: str = ISSUER) -> dict:
                 code = error_payload.get("code")
         if isinstance(code, str) and code.lower() in _REAUTH_ERROR_CODES:
             raise TokenRefreshError(
-                "Codex needs a fresh isolated login for this account. Run "
+                "Codex needs a fresh isolated login for this account. In Agent Switch, "
+                "open its account menu and choose Sign in again. Or run "
                 "'agent-switch codex login --account NUMBER --activate' with its saved slot number. "
                 "Quit Codex CLI and Desktop before activation; do not sign in over the current Codex home."
             ) from None

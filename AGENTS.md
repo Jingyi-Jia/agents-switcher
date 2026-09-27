@@ -9,14 +9,14 @@ Read the implementation and nearby tests before changing a provider's behavior.
 - Distribution: `agents-switcher`; executable: `agent-switch`; import package:
   `agents_switcher`. Do not restore upstream's `cswap`/`claude-swap` entry points,
   install a `claude_swap` compatibility package, or silently rename persisted
-  data paths. The Python namespace is separate from upstream; the historical
-  credential and backup namespaces intentionally remain unchanged.
+  data paths. Python imports, saved data, backup credentials, and logs use this
+  fork's independent namespace. Historical stores are read only through explicit
+  copy-only import; normal startup, removal, and purge never touch them.
   CLI release checks, upgrade commands, update caches and launchd services must
-  target this fork, never upstream's package or service. The saved Claude store
-  remains shared, and regular-file-lock upstream versions cannot coordinate with
-  this fork's directory locks. Do not promise concurrent cross-tool switching or
-  weaken cross-node locks to provide it; changing store ownership requires an
-  explicit migration design.
+  target this fork, never upstream's package or service. Provider-owned live
+  credentials remain shared when two tools target the same provider profile.
+  Do not promise concurrent cross-tool switching or weaken cross-node locks to
+  provide it. Copied credentials are not a synchronization mechanism.
 - Python 3.12+ with Hatchling; dependencies and pytest configuration live in
   [pyproject.toml](pyproject.toml), with versions locked in [uv.lock](uv.lock).
 - The current providers are Claude Code and file-backed Codex accounts. Codex CLI
@@ -37,6 +37,7 @@ Read the implementation and nearby tests before changing a provider's behavior.
 | CLI | [cli.py](src/agents_switcher/cli.py), [__main__.py](src/agents_switcher/__main__.py): entry point, provider dispatch, Claude commands and settings. |
 | Claude accounts | [switcher.py](src/agents_switcher/switcher.py), [credentials.py](src/agents_switcher/credentials.py), [oauth.py](src/agents_switcher/oauth.py), [macos_keychain.py](src/agents_switcher/macos_keychain.py): identities, capture, activation and refresh. |
 | Paths and persistence | [paths.py](src/agents_switcher/paths.py), [migrations.py](src/agents_switcher/migrations.py), [dirlock.py](src/agents_switcher/dirlock.py), [locking.py](src/agents_switcher/locking.py), [fsutil.py](src/agents_switcher/fsutil.py): platform paths, migrations, locks and atomic replacement. |
+| Historical account import | [legacy_import.py](src/agents_switcher/legacy_import.py), [storage_cli.py](src/agents_switcher/storage_cli.py): explicit fixed-source, copy-only import into an empty independent store. |
 | Claude automation | [autoswitch.py](src/agents_switcher/autoswitch.py), [settings.py](src/agents_switcher/settings.py), [usage_store.py](src/agents_switcher/usage_store.py), [poll_policy.py](src/agents_switcher/poll_policy.py): decisions, settings, freshness and polling. |
 | Claude sessions | [session.py](src/agents_switcher/session.py), [mappings.py](src/agents_switcher/mappings.py): experimental per-terminal profiles and directory mappings. |
 | Codex | [codex/](src/agents_switcher/codex/): separate CLI, roster, auth-file handling, identity, token refresh, process detection, quota/stats and automation. |
@@ -63,6 +64,8 @@ help before rejecting unknown arguments. Check dispatch and tests as well.
 | `agent-switch claude add`, `add-token`, `remove`, `disable`, `enable`, `alias`, `swap`, `move` | Claude account management. Do not assume every command accepts `--json`. `add-token` supports hidden input or stdin (`-`); never embed real secrets in examples. [cli.py](src/agents_switcher/cli.py). |
 | `agent-switch run`, `map`, `unmap` | Experimental Claude terminal sessions and directory mappings, not Desktop profiles. `run TARGET -- ...` forwards arguments to Claude; no API-key session support. [session.py](src/agents_switcher/session.py). |
 | `agent-switch codex status/list/add/switch/remove/enable/disable/alias/usage/stats` | Each accepts `--json`; identifiers are slot, email or alias where supported. Payloads are Codex-specific, not Claude's schema-v1 envelope. Errors are `{"error": "..."}`. [codex/cli.py](src/agents_switcher/codex/cli.py), [test_codex_cli.py](tests/test_codex_cli.py). |
+| `agent-switch codex login [--account NUMBER] [--alias NAME] [--activate]` | Interactive isolated official-CLI enrollment; no `--json`. Saves only unless activation is explicitly requested. `codex switch NUMBER --use-saved-login` can deliberately activate a saved same-account repair later. [codex/enrollment.py](src/agents_switcher/codex/enrollment.py). |
+| `agent-switch storage status/import` | `status --json` discovers independent storage and fixed historical source IDs. `import --source legacy\|xdg --confirm [--json]` copies accounts without modifying the source or overwriting an occupied destination. [storage_cli.py](src/agents_switcher/storage_cli.py). |
 | `agent-switch auto --json` | Claude JSON event stream, one event per line. `--once` can emit multiple events. [autoswitch.py](src/agents_switcher/autoswitch.py): `AutoSwitchEvent`, `TickOutcome`. |
 | `agent-switch codex auto --json` | Codex decision objects; one per iteration, pretty-printed for `--once`. [codex/cli.py](src/agents_switcher/codex/cli.py): `_decision_json`, `_AUTO_EXIT`. |
 | `agent-switch config list --json`, `config get KEY --json` | Schema-v1 settings output. `set`, `unset` and `path` are supported but not JSON operations. [settings.py](src/agents_switcher/settings.py), [test_config_cli.py](tests/test_config_cli.py). |
@@ -173,6 +176,25 @@ Corrupt/unreadable preferences never imply consent. A remembered notice may remo
 the repeated checkbox, but never the user's deliberate profile launch action,
 server consent boolean, process check, or known Chrome-pairing limitation.
 
+`GET /api/storage` is header-authenticated and independent of quota collection.
+`POST /api/storage/import` accepts only a fixed source ID and exact `confirm: true`.
+The importer owns quiescence checks, identity validation, source revalidation,
+private staging and rollback; the dashboard additionally serializes it with
+credential actions and requires its own auto-switch/preview workers stopped.
+Never copy Desktop profile/session directories, follow linked source entries,
+or fall back to a legacy store after a failed import. Opaque Claude OAuth tokens
+cannot have their provider ownership verified offline; do not claim otherwise.
+
+The authenticated `/api/codex/login/prepare`, `/complete`, and `/cancel` POSTs
+require exact confirmation and accept no path, executable, URL, PID, or credential
+payload. Preparation returns a quoted command using a fresh, file-backed private
+Codex home; the user runs it in their own terminal. Completion's deliberate
+**Save & switch** action checks strict Codex readiness before saving, then
+activates the same pinned session under the shared action lock. The underlying
+enrollment controller's `complete()` remains save-only; `activate()` is separate.
+Cancel and server shutdown clean only enrollment-owned temporary data, never
+saved accounts or provider processes. Preserve partial-save errors for retry.
+
 ## Setup, tests and builds
 
 From the repository root:
@@ -236,9 +258,10 @@ are in [desktop/README.md](desktop/README.md) and
    Never run login, switch, add, purge, export or quota polling against a user's
    live credentials merely to test a change.
 2. **Resolve paths centrally.** Claude honors `CLAUDE_CONFIG_DIR` and its secure
-   storage override; Codex honors `CODEX_HOME`. Backup paths retain upstream's
-   `claude-swap` names, with Codex under a separate `codex/` namespace. Constructors
-   and apparently read-only commands may initialize/migrate files or collect
+   storage override; Codex honors `CODEX_HOME`. Agent Switch's backups use its own
+   platform data root and saved-Keychain service, with Codex under `codex/`.
+   Provider-owned live paths are unchanged. Constructors and apparently read-only
+   commands may initialize Agent Switch files or collect
    usage. For ad-hoc checks, isolate HOME, USERPROFILE, XDG directories, provider
    config directories and ambient credentials before invoking the process.
 3. **Preserve identity before replacing credentials.** A malformed roster or
@@ -265,6 +288,12 @@ are in [desktop/README.md](desktop/README.md) and
    `CodexSwitcher.status()`, not the historical store active marker. An unmanaged
    or missing live login is not an active managed account; an unreadable auth
    file is an error, never permission to fall back to the saved marker.
+   Adding another account or repairing a revoked login must use isolated
+   enrollment, never plain `codex login` over the current home: modern Codex
+   revokes the previous login first. Save-only repairs must survive ordinary
+   status/quota reconciliation and application restart until explicit activation;
+   do not overwrite them with stale live credentials. Preserve unknown auth fields
+   and the expected account identity, alias, slot, and exclusion flag.
 6. **Dry-run is not a credential sandbox.** It prevents account switching, but
    usage collection may refresh tokens or write cache data. Keep automation
    selection based on eligible, sufficiently fresh data, not display-only

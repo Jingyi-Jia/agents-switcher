@@ -30,7 +30,7 @@ PAGE_STYLE = r"""
 * { box-sizing:border-box; }
 [hidden] { display:none !important; }
 body { margin:0; background:var(--canvas); color:var(--ink); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
-button,input,select { font:inherit; }
+button,input,select,textarea { font:inherit; }
 button,a,input,select,summary { -webkit-tap-highlight-color:transparent; }
 button { min-height:36px; padding:7px 13px; border:1px solid var(--hairline); border-radius:7px; background:var(--paper); color:var(--ink); cursor:pointer; font-weight:550; font-size:12px; }
 button:hover:not(:disabled) { border-color:var(--accent); background:var(--accent-soft); }
@@ -42,7 +42,7 @@ button.primary.danger,button.primary.danger:hover:not(:disabled) { background:va
 button.ghost { border-color:transparent; background:var(--accent-soft); color:var(--accent); }
 button.ghost:disabled { opacity:1; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
-input,select { color:var(--ink); background:var(--paper); border:1px solid var(--hairline); border-radius:6px; min-height:38px; padding:7px 10px; max-width:100%; }
+input,select,textarea { color:var(--ink); background:var(--paper); border:1px solid var(--hairline); border-radius:6px; min-height:38px; padding:7px 10px; max-width:100%; }
 input[type="checkbox"] { min-height:auto; accent-color:var(--accent); }
 a { color:var(--accent); text-underline-offset:3px; }
 summary { cursor:pointer; color:var(--mid); }
@@ -148,6 +148,10 @@ h1,h2,h3 { line-height:1.25; }
 .empty strong { display:block; color:var(--ink); font-size:14px; margin-bottom:6px; }
 .adopt { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .adopt b { color:var(--ink); font-weight:500; }
+.storage-notice { margin-bottom:22px; }
+.storage-path { overflow-wrap:anywhere; font:11px/1.7 ui-monospace,monospace; }
+#codex-login-dialog { width:min(580px,calc(100% - 32px)); }
+#codex-login-command { width:100%; resize:vertical; min-height:100px; font:11px/1.7 ui-monospace,monospace; }
 code { font:11px ui-monospace,monospace; color:var(--ink); padding:2px 5px; background:var(--canvas); border-radius:3px; }
 #claude-desktop-panel { margin-top:30px; padding-top:24px; border-top:1px solid var(--hairline); }
 #claude-desktop-panel h2::before { background:var(--violet); }

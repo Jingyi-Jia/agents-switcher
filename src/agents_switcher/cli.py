@@ -772,7 +772,7 @@ def _config_command(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="cswap config",
         description=(
-            "Read and edit claude-swap settings (settings.json in the "
+            "Read and edit Agent Switch settings (settings.json in the "
             "backup root)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -978,6 +978,11 @@ def main() -> None:
     if argv and argv[0] == "config":
         _config_command(argv[1:])
         return
+    if argv and argv[0] == "storage":
+        from agents_switcher.storage_cli import storage_command
+
+        storage_command(argv[1:])
+        return
     if argv and argv[0] == "tray":
         from agents_switcher.web.cli import tray_command
 
@@ -1062,6 +1067,8 @@ Commands:
   %(prog)s move <a> <slot>            assign an account to a slot (swaps if taken)
   %(prog)s auto                       auto-switch when nearing rate limits
   %(prog)s config [set KEY VALUE]     show or change settings (settings.json)
+  %(prog)s storage status             show independent storage and old account sources
+  %(prog)s storage import --source ID --confirm  copy old accounts without deleting them
   %(prog)s unclaimed [--purge ID]     list or drop stashed credential entries
   %(prog)s export <path>              export accounts
   %(prog)s import <path>              import accounts
@@ -1070,7 +1077,7 @@ Commands:
   %(prog)s menubar                    macOS menu bar app
   %(prog)s menubar --install-service  keep the menu bar running via launchd
   %(prog)s upgrade                    self-upgrade to latest
-  %(prog)s purge                      remove all claude-swap data
+  %(prog)s purge                      remove Agent Switch's saved data, not claude-swap's
 
 Aliases: ls=list  rm=remove  update=upgrade""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
