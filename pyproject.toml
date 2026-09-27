@@ -59,14 +59,14 @@ Upstream = "https://github.com/realiti4/claude-swap"
 # Deliberately NOT `cswap`/`claude-swap`: upstream claude-swap installs those,
 # and a fork that shadows them on PATH makes which tool ran depend on install
 # order. A distinct distribution name keeps `uv tool install` separate too.
-agent-switch = "claude_swap.cli:main"
+agent-switch = "agents_switcher.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/claude_swap"]
+packages = ["src/agents_switcher"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "pytest-xdist>=3.5", "trustme>=1.2.1"]

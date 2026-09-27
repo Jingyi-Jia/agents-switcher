@@ -14,10 +14,10 @@ import urllib.request
 
 import pytest
 
-from claude_swap.codex.store import CodexAccount
-from claude_swap.codex.switcher import CodexStatus, SwitchResult
-from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow
-from claude_swap.web.server import DashboardState, serve
+from agents_switcher.codex.store import CodexAccount
+from agents_switcher.codex.switcher import CodexStatus, SwitchResult
+from agents_switcher.codex.usage import CodexCredits, CodexUsage, CodexWindow
+from agents_switcher.web.server import DashboardState, serve
 
 
 class StubCodex:
@@ -178,7 +178,7 @@ class TestStartup:
         assert time.monotonic() - started < 2.0
 
     def test_server_name_is_the_host_not_a_resolved_name(self):
-        from claude_swap.web.server import DashboardState, serve
+        from agents_switcher.web.server import DashboardState, serve
 
         server, _ = serve(DashboardState(), host="127.0.0.1", port=0)
         try:
@@ -249,8 +249,8 @@ class TestLiveLogin:
     it?'"""
 
     def test_an_unmanaged_codex_login_is_surfaced(self, dashboard):
-        from claude_swap.codex.identity import CodexIdentity
-        from claude_swap.codex.switcher import CodexStatus
+        from agents_switcher.codex.identity import CodexIdentity
+        from agents_switcher.codex.switcher import CodexStatus
 
         codex = StubCodex()
         codex.status = lambda: CodexStatus(
@@ -267,7 +267,7 @@ class TestLiveLogin:
     def test_an_unmanaged_claude_login_is_surfaced(self, dashboard):
         class Claude:
             def accounts_snapshot(self, *a, **k):
-                from claude_swap.models import AccountsSnapshot
+                from agents_switcher.models import AccountsSnapshot
 
                 return AccountsSnapshot(active_number=None, accounts=(), taken_at=0.0)
 
@@ -303,7 +303,7 @@ class TestAddCurrent:
 
         class Claude:
             def accounts_snapshot(self, *a, **k):
-                from claude_swap.models import AccountsSnapshot
+                from agents_switcher.models import AccountsSnapshot
 
                 return AccountsSnapshot(active_number=None, accounts=(), taken_at=0.0)
 
@@ -391,7 +391,7 @@ class TestSwitching:
         assert body["restartRequired"] is False
 
     def test_a_running_codex_is_reported_as_needing_a_restart(self, dashboard):
-        from claude_swap.codex.processes import CodexProcess
+        from agents_switcher.codex.processes import CodexProcess
 
         codex = StubCodex(
             accounts=[account()],
@@ -406,7 +406,7 @@ class TestSwitching:
         assert "Restart Codex" in body["message"]
 
     def test_a_refused_switch_returns_the_reason(self, dashboard):
-        from claude_swap.exceptions import SwitchError
+        from agents_switcher.exceptions import SwitchError
 
         codex = StubCodex(accounts=[account()],
                           error=SwitchError("already the active Codex account"))
@@ -448,12 +448,12 @@ class TestSingleInstance:
 
     @pytest.fixture(autouse=True)
     def _isolated_record(self, tmp_path, monkeypatch):
-        from claude_swap import paths
+        from agents_switcher import paths
 
         monkeypatch.setattr(paths, "get_backup_root", lambda: tmp_path)
 
     def test_a_running_dashboard_is_found(self, dashboard):
-        from claude_swap.web.server import live_dashboard_url, publish_url
+        from agents_switcher.web.server import live_dashboard_url, publish_url
 
         base, token, _ = dashboard(codex=StubCodex())
         publish_url(f"{base}/?token={token}")
@@ -462,7 +462,7 @@ class TestSingleInstance:
     def test_a_stale_record_is_not_trusted(self, tmp_path):
         """A crashed process leaves a record behind, so the URL is only a claim
         until something answers it."""
-        from claude_swap.web.server import live_dashboard_url, publish_url, url_file
+        from agents_switcher.web.server import live_dashboard_url, publish_url, url_file
 
         publish_url("http://127.0.0.1:9/?token=dead")  # nothing listens on 9
         assert live_dashboard_url(timeout=0.5) is None
@@ -470,19 +470,19 @@ class TestSingleInstance:
 
     def test_a_record_with_the_wrong_token_is_stale(self, dashboard):
         # Someone else's dashboard, or a rotated token: not ours to join.
-        from claude_swap.web.server import live_dashboard_url, publish_url
+        from agents_switcher.web.server import live_dashboard_url, publish_url
 
         base, _, _ = dashboard(codex=StubCodex())
         publish_url(f"{base}/?token=wrong")
         assert live_dashboard_url(timeout=1.0) is None
 
     def test_no_record_is_simply_none(self):
-        from claude_swap.web.server import live_dashboard_url
+        from agents_switcher.web.server import live_dashboard_url
 
         assert live_dashboard_url() is None
 
     def test_an_empty_record_is_none(self, tmp_path):
-        from claude_swap.web.server import live_dashboard_url, url_file
+        from agents_switcher.web.server import live_dashboard_url, url_file
 
         url_file().write_text("   ")
         assert live_dashboard_url() is None
@@ -491,12 +491,12 @@ class TestSingleInstance:
     def test_the_record_is_owner_only_because_it_carries_the_token(self, tmp_path):
         import stat
 
-        from claude_swap.web.server import publish_url, url_file
+        from agents_switcher.web.server import publish_url, url_file
 
         publish_url("http://127.0.0.1:8765/?token=secret")
         assert stat.S_IMODE(url_file().stat().st_mode) == 0o600
 
     def test_clearing_is_safe_when_absent(self):
-        from claude_swap.web.server import clear_url
+        from agents_switcher.web.server import clear_url
 
         clear_url()  # must not raise

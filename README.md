@@ -425,7 +425,9 @@ server or automation. Stop it in the UI or stop its server. Closing the standalo
 app's window hides it; its backend and session automation keep running. Reopen it
 with **Show app** in the tray/menu bar, the macOS Dock, or by launching Agent Switch
 again. Choose **Quit Agent Switch** (Cmd+Q on macOS, Ctrl+Q on Windows/Linux) to
-stop the app and its automation. Exiting the TUI stops its session automation.
+stop the app and its automation; macOS also offers **Quit** when you right-click
+the Dock icon. Closing the window does not leave a minimized window in the Dock.
+Exiting the TUI stops its session automation.
 None of these stops independently launched CLI loops. The app does not keep
 automation running through logout, shutdown, or sleep.
 
@@ -456,11 +458,15 @@ dry-run), 1 for an error, 2 for no change, and 3 for blocked/no viable target
 
 The standalone app uses its own bundled backend and does not install or replace
 `cswap`. This repository's CLI command is `agent-switch`, from the
-`agents-switcher` distribution. Use separate `uv tool` or `pipx` environments
-for the two CLIs: both distributions contain a `claude_swap` Python package, so
-installing both into one Python environment can overwrite each other's modules.
+`agents-switcher` distribution, with the Python package `agents_switcher`.
+Upstream keeps `claude_swap`: neither package provides an alias for the other.
 Agent Switch's CLI upgrade command and optional Python menu-bar service target
 only Agent Switch, not upstream's package, executable, or launchd service.
+
+If both distributions were previously installed in one Python environment using
+Agent Switch 1.2.1 or earlier, reinstall upstream after upgrading Agent Switch:
+those older releases owned overlapping module files. Separate `uv tool` or
+`pipx` environments remain a convenient way to keep dependencies independent.
 
 **The default saved Claude account store is shared, not isolated.** Account
 changes, including removal or purge, can affect both tools. Both also control
@@ -473,10 +479,9 @@ Switch** before handing that profile to another manager.
 
 The recommended setup is the Agent Switch app plus its matching `agent-switch`
 CLI, with only one automatic-switching controller active per profile. Upstream
-can remain installed in its separate environment, but don't treat simultaneous
-operation as supported. Separate account stores would require an explicit,
-credential-safe import design; changing a folder name alone would not isolate
-the provider's active login.
+can remain installed but unused; no handoff wrapper or coordination service is
+required. The package rename does not move accounts, change Keychain entries,
+or make simultaneous account management safe.
 
 The optional Python menu-bar service uses
 `io.github.jingyi-jia.agent-switch.menubar`. It leaves any existing
@@ -507,7 +512,7 @@ safety rules, and validation requirements. Read
 [desktop/README.md](desktop/README.md) for native packaging and signing.
 
 1. **Use the right names.** The command is `agent-switch`, the distribution is
-   `agents-switcher`, and the import package is `claude_swap`. Do not restore
+   `agents-switcher`, and the import package is `agents_switcher`. Do not restore
    upstream's `cswap` entry point or rename persisted account directories.
 2. **Keep provider boundaries explicit.** Claude Code logins, Codex accounts, and
    Claude Desktop profiles are distinct. Analytics do not authorize switching;

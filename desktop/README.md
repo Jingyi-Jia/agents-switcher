@@ -105,7 +105,8 @@ the GitHub Releases page. No update mode installs during ordinary Quit.
 Closing the window hides it without stopping the backend or session-owned
 auto-switching. Reopen it with **Show app** in the tray/menu bar, the macOS Dock,
 or by launching Agent Switch again. **Quit Agent Switch** (Cmd+Q on macOS,
-Ctrl+Q on Windows/Linux) stops the backend and its automation, draining in-flight
+Ctrl+Q on Windows/Linux), including **Quit** in the macOS Dock icon's right-click
+menu, stops the backend and its automation, draining in-flight
 requests before exit. An unexpected destroyed window or a renderer/backend crash
 still triggers cleanup or explicit recovery, not an unreachable background
 service. OS session end requests shutdown rather than hiding; the OS can limit

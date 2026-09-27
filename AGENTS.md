@@ -7,10 +7,10 @@ Read the implementation and nearby tests before changing a provider's behavior.
 ## Project identity and scope
 
 - Distribution: `agents-switcher`; executable: `agent-switch`; import package:
-  `claude_swap`. Those names intentionally differ. Do not restore upstream's
-  `cswap`/`claude-swap` entry points or silently rename persisted data paths.
-  The bundled desktop runtime and separate uv/pipx environments avoid import
-  collisions; installing both distributions in one Python environment does not.
+  `agents_switcher`. Do not restore upstream's `cswap`/`claude-swap` entry points,
+  install a `claude_swap` compatibility package, or silently rename persisted
+  data paths. The Python namespace is separate from upstream; the historical
+  credential and backup namespaces intentionally remain unchanged.
   CLI release checks, upgrade commands, update caches and launchd services must
   target this fork, never upstream's package or service. The saved Claude store
   remains shared, and regular-file-lock upstream versions cannot coordinate with
@@ -26,7 +26,7 @@ Read the implementation and nearby tests before changing a provider's behavior.
   switched by the CLI-account actions. The app/dashboard's experimental Desktop
   profile launcher is independent; it launches empty or saved local profiles,
   never imports CLI credentials or confirms a signed-in identity. Keep that boundary consistent with
-  [client_support.py](src/claude_swap/client_support.py).
+  [client_support.py](src/agents_switcher/client_support.py).
 - The standalone Electron shell bundles a frozen backend, not provider CLIs.
   `agent-switch app install` is a browser-launcher shortcut, not that app.
 
@@ -34,24 +34,24 @@ Read the implementation and nearby tests before changing a provider's behavior.
 
 | Area | Sources and responsibility |
 | --- | --- |
-| CLI | [cli.py](src/claude_swap/cli.py), [__main__.py](src/claude_swap/__main__.py): entry point, provider dispatch, Claude commands and settings. |
-| Claude accounts | [switcher.py](src/claude_swap/switcher.py), [credentials.py](src/claude_swap/credentials.py), [oauth.py](src/claude_swap/oauth.py), [macos_keychain.py](src/claude_swap/macos_keychain.py): identities, capture, activation and refresh. |
-| Paths and persistence | [paths.py](src/claude_swap/paths.py), [migrations.py](src/claude_swap/migrations.py), [dirlock.py](src/claude_swap/dirlock.py), [locking.py](src/claude_swap/locking.py), [fsutil.py](src/claude_swap/fsutil.py): platform paths, migrations, locks and atomic replacement. |
-| Claude automation | [autoswitch.py](src/claude_swap/autoswitch.py), [settings.py](src/claude_swap/settings.py), [usage_store.py](src/claude_swap/usage_store.py), [poll_policy.py](src/claude_swap/poll_policy.py): decisions, settings, freshness and polling. |
-| Claude sessions | [session.py](src/claude_swap/session.py), [mappings.py](src/claude_swap/mappings.py): experimental per-terminal profiles and directory mappings. |
-| Codex | [codex/](src/claude_swap/codex/): separate CLI, roster, auth-file handling, identity, token refresh, process detection, quota/stats and automation. |
-| Shared UI actions | [providers.py](src/claude_swap/providers.py): provider capabilities, serialized actions and session-owned automation. |
-| Terminal UI | [tui/](src/claude_swap/tui/): Textual provider chooser, account dashboards and modals. |
-| Browser and tray | [web/server.py](src/claude_swap/web/server.py), [web/page.py](src/claude_swap/web/page.py), [web/cli.py](src/claude_swap/web/cli.py), [web/tray.py](src/claude_swap/web/tray.py), [web/launcher.py](src/claude_swap/web/launcher.py). |
-| Usage analytics and preferences | [analytics.py](src/claude_swap/analytics.py): account-specific Codex reports and local Claude stats-cache projection; [web/preferences.py](src/claude_swap/web/preferences.py): private appearance and versioned profile-notice acknowledgement. |
-| Codex app assistance | [codex/desktop.py](src/claude_swap/codex/desktop.py): strict process readiness and explicitly requested macOS normal quit/reopen. Never writes credentials or kills terminal processes. |
-| Standalone app | [desktop.py](src/claude_swap/desktop.py): private backend protocol; [desktop/src/](desktop/src/): Electron lifecycle and security; [desktop/scripts/](desktop/scripts/): freezing and smoke tests. |
-| Claude Desktop profiles | [claude_desktop.py](src/claude_swap/claude_desktop.py): experimental macOS/Linux launcher, private label registry, process interlock and profile directories. Separate from provider accounts and automatic switching. |
+| CLI | [cli.py](src/agents_switcher/cli.py), [__main__.py](src/agents_switcher/__main__.py): entry point, provider dispatch, Claude commands and settings. |
+| Claude accounts | [switcher.py](src/agents_switcher/switcher.py), [credentials.py](src/agents_switcher/credentials.py), [oauth.py](src/agents_switcher/oauth.py), [macos_keychain.py](src/agents_switcher/macos_keychain.py): identities, capture, activation and refresh. |
+| Paths and persistence | [paths.py](src/agents_switcher/paths.py), [migrations.py](src/agents_switcher/migrations.py), [dirlock.py](src/agents_switcher/dirlock.py), [locking.py](src/agents_switcher/locking.py), [fsutil.py](src/agents_switcher/fsutil.py): platform paths, migrations, locks and atomic replacement. |
+| Claude automation | [autoswitch.py](src/agents_switcher/autoswitch.py), [settings.py](src/agents_switcher/settings.py), [usage_store.py](src/agents_switcher/usage_store.py), [poll_policy.py](src/agents_switcher/poll_policy.py): decisions, settings, freshness and polling. |
+| Claude sessions | [session.py](src/agents_switcher/session.py), [mappings.py](src/agents_switcher/mappings.py): experimental per-terminal profiles and directory mappings. |
+| Codex | [codex/](src/agents_switcher/codex/): separate CLI, roster, auth-file handling, identity, token refresh, process detection, quota/stats and automation. |
+| Shared UI actions | [providers.py](src/agents_switcher/providers.py): provider capabilities, serialized actions and session-owned automation. |
+| Terminal UI | [tui/](src/agents_switcher/tui/): Textual provider chooser, account dashboards and modals. |
+| Browser and tray | [web/server.py](src/agents_switcher/web/server.py), [web/page.py](src/agents_switcher/web/page.py), [web/cli.py](src/agents_switcher/web/cli.py), [web/tray.py](src/agents_switcher/web/tray.py), [web/launcher.py](src/agents_switcher/web/launcher.py). |
+| Usage analytics and preferences | [analytics.py](src/agents_switcher/analytics.py): account-specific Codex reports and local Claude stats-cache projection; [web/preferences.py](src/agents_switcher/web/preferences.py): private appearance and versioned profile-notice acknowledgement. |
+| Codex app assistance | [codex/desktop.py](src/agents_switcher/codex/desktop.py): strict process readiness and explicitly requested macOS normal quit/reopen. Never writes credentials or kills terminal processes. |
+| Standalone app | [desktop.py](src/agents_switcher/desktop.py): private backend protocol; [desktop/src/](desktop/src/): Electron lifecycle and security; [desktop/scripts/](desktop/scripts/): freezing and smoke tests. |
+| Claude Desktop profiles | [claude_desktop.py](src/agents_switcher/claude_desktop.py): experimental macOS/Linux launcher, private label registry, process interlock and profile directories. Separate from provider accounts and automatic switching. |
 | Tests and CI | [tests/](tests/), [desktop/test/](desktop/test/), [.github/workflows/](.github/workflows/). |
 
 ## Supported command and JSON entry points
 
-The installed command routes to `claude_swap.cli:main`. Use
+The installed command routes to `agents_switcher.cli:main`. Use
 `uv run agent-switch --help` from the checkout. Some inherited help text still
 says `cswap`; that is not this distribution's executable name. A successful
 `COMMAND --help` alone does not prove `COMMAND` exists: the main parser handles
@@ -59,14 +59,14 @@ help before rejecting unknown arguments. Check dispatch and tests as well.
 
 | Interface | Contract and source |
 | --- | --- |
-| `agent-switch claude list/status/switch` | Explicit Claude route; unqualified account commands remain shortcuts. `list`, `status`, `switch`, and `switch TARGET` support `--json`. Shapes and errors use `schemaVersion: 1`: [cli.py](src/claude_swap/cli.py), [json_output.py](src/claude_swap/json_output.py), [test_json_output.py](tests/test_json_output.py). |
-| `agent-switch claude add`, `add-token`, `remove`, `disable`, `enable`, `alias`, `swap`, `move` | Claude account management. Do not assume every command accepts `--json`. `add-token` supports hidden input or stdin (`-`); never embed real secrets in examples. [cli.py](src/claude_swap/cli.py). |
-| `agent-switch run`, `map`, `unmap` | Experimental Claude terminal sessions and directory mappings, not Desktop profiles. `run TARGET -- ...` forwards arguments to Claude; no API-key session support. [session.py](src/claude_swap/session.py). |
-| `agent-switch codex status/list/add/switch/remove/enable/disable/alias/usage/stats` | Each accepts `--json`; identifiers are slot, email or alias where supported. Payloads are Codex-specific, not Claude's schema-v1 envelope. Errors are `{"error": "..."}`. [codex/cli.py](src/claude_swap/codex/cli.py), [test_codex_cli.py](tests/test_codex_cli.py). |
-| `agent-switch auto --json` | Claude JSON event stream, one event per line. `--once` can emit multiple events. [autoswitch.py](src/claude_swap/autoswitch.py): `AutoSwitchEvent`, `TickOutcome`. |
-| `agent-switch codex auto --json` | Codex decision objects; one per iteration, pretty-printed for `--once`. [codex/cli.py](src/claude_swap/codex/cli.py): `_decision_json`, `_AUTO_EXIT`. |
-| `agent-switch config list --json`, `config get KEY --json` | Schema-v1 settings output. `set`, `unset` and `path` are supported but not JSON operations. [settings.py](src/claude_swap/settings.py), [test_config_cli.py](tests/test_config_cli.py). |
-| `agent-switch tui`, `claude tui`, `codex tui`, `web`, `tray`, `app install/uninstall/status` | Human interfaces, not JSON APIs. Web options and launcher distinction: [web/cli.py](src/claude_swap/web/cli.py). |
+| `agent-switch claude list/status/switch` | Explicit Claude route; unqualified account commands remain shortcuts. `list`, `status`, `switch`, and `switch TARGET` support `--json`. Shapes and errors use `schemaVersion: 1`: [cli.py](src/agents_switcher/cli.py), [json_output.py](src/agents_switcher/json_output.py), [test_json_output.py](tests/test_json_output.py). |
+| `agent-switch claude add`, `add-token`, `remove`, `disable`, `enable`, `alias`, `swap`, `move` | Claude account management. Do not assume every command accepts `--json`. `add-token` supports hidden input or stdin (`-`); never embed real secrets in examples. [cli.py](src/agents_switcher/cli.py). |
+| `agent-switch run`, `map`, `unmap` | Experimental Claude terminal sessions and directory mappings, not Desktop profiles. `run TARGET -- ...` forwards arguments to Claude; no API-key session support. [session.py](src/agents_switcher/session.py). |
+| `agent-switch codex status/list/add/switch/remove/enable/disable/alias/usage/stats` | Each accepts `--json`; identifiers are slot, email or alias where supported. Payloads are Codex-specific, not Claude's schema-v1 envelope. Errors are `{"error": "..."}`. [codex/cli.py](src/agents_switcher/codex/cli.py), [test_codex_cli.py](tests/test_codex_cli.py). |
+| `agent-switch auto --json` | Claude JSON event stream, one event per line. `--once` can emit multiple events. [autoswitch.py](src/agents_switcher/autoswitch.py): `AutoSwitchEvent`, `TickOutcome`. |
+| `agent-switch codex auto --json` | Codex decision objects; one per iteration, pretty-printed for `--once`. [codex/cli.py](src/agents_switcher/codex/cli.py): `_decision_json`, `_AUTO_EXIT`. |
+| `agent-switch config list --json`, `config get KEY --json` | Schema-v1 settings output. `set`, `unset` and `path` are supported but not JSON operations. [settings.py](src/agents_switcher/settings.py), [test_config_cli.py](tests/test_config_cli.py). |
+| `agent-switch tui`, `claude tui`, `codex tui`, `web`, `tray`, `app install/uninstall/status` | Human interfaces, not JSON APIs. Web options and launcher distinction: [web/cli.py](src/agents_switcher/web/cli.py). |
 
 Both `auto --once` variants use exit codes 0 for a switch decision, 1 for an
 error, 2 for no action/cooldown and 3 for blocked/no target. Dry-run can return 0
@@ -74,15 +74,15 @@ without switching; Codex's dry-run JSON can say `switched: true` for the decisio
 Do not infer a credential mutation from that field or exit code alone.
 
 For UI work, the existing HTTP routes are implemented in
-[web/server.py](src/claude_swap/web/server.py) and tested in
+[web/server.py](src/agents_switcher/web/server.py) and tested in
 [test_web_actions.py](tests/test_web_actions.py). They are an authenticated local
 UI surface, not a promised public SDK. The Electron stdin/stdout protocol in
-[desktop.py](src/claude_swap/desktop.py) and
+[desktop.py](src/agents_switcher/desktop.py) and
 [backend.cjs](desktop/src/backend.cjs) is private; do not expose its token in logs,
 command-line arguments or screenshots.
 
 Both CLI and desktop startup initialize native TLS through
-[tls.py](src/claude_swap/tls.py) before provider clients or workers run. Preserve
+[tls.py](src/agents_switcher/tls.py) before provider clients or workers run. Preserve
 certificate and hostname verification, including when native trust is unavailable.
 
 Standalone updates use a sandboxed preload's zero-argument
@@ -106,7 +106,8 @@ HTTP requests before exiting, including profile and analytics work outside the
 credential-action lock; do not restore daemon request threads for this helper.
 Ordinary desktop window close hides the existing window and keeps that backend
 and its automation alive (`desktop.windowClose: "hide"`). Tray Show app, Dock
-activation and second-instance launch reopen it. Explicit Quit and OS session end
+activation and second-instance launch reopen it. Explicit Quit, including the
+native macOS Dock Quit command, and OS session end
 stop the backend; unexpected last-window destruction must still clean up, and
 renderer/backend crashes must still offer recovery or quit. Do not add renderer
 or HTTP quit APIs or disable the sandbox to smoke-test this lifecycle.
@@ -244,15 +245,15 @@ are in [desktop/README.md](desktop/README.md) and
    unreadable auth file is not an empty account store. Keep the strict reads,
    bounded retries, identity checks, locked mutations, atomic replacement and
    private file permissions. Do not replace cross-node-safe directory locks with
-   process-local or node-local locks. See [dirlock.py](src/claude_swap/dirlock.py),
-   [codex/store.py](src/claude_swap/codex/store.py) and
-   [codex/auth_file.py](src/claude_swap/codex/auth_file.py).
+   process-local or node-local locks. See [dirlock.py](src/agents_switcher/dirlock.py),
+   [codex/store.py](src/agents_switcher/codex/store.py) and
+   [codex/auth_file.py](src/agents_switcher/codex/auth_file.py).
 4. **Codex refresh tokens rotate.** Reconcile the live login to the matching
    account before switching; preserve unknown fields in the whole `auth.json`
    object. Persist rotated credentials before using them and retain the
    running-process refresh guard. Do not blindly retry a rejected refresh token.
-   [codex/switcher.py](src/claude_swap/codex/switcher.py) owns this protocol;
-   [codex/tokens.py](src/claude_swap/codex/tokens.py) is only its transport.
+   [codex/switcher.py](src/agents_switcher/codex/switcher.py) owns this protocol;
+   [codex/tokens.py](src/agents_switcher/codex/tokens.py) is only its transport.
 5. **Codex switching is quit-first, not hot switching.** Shared UI actions refuse
    while Codex processes run; the lower-level CLI reports `restartRequired` if
    they remain. Do not remove that distinction or imply switching the file moves

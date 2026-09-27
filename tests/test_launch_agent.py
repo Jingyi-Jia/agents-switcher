@@ -18,8 +18,8 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import launch_agent
-from claude_swap.exceptions import ClaudeSwitchError
+from agents_switcher import launch_agent
+from agents_switcher.exceptions import ClaudeSwitchError
 
 PROGRAM = ["/Users/x/.local/bin/agent-switch"]
 UID = 501
@@ -149,7 +149,7 @@ def test_resolve_program_makes_a_relative_argv0_absolute(tmp_path, monkeypatch):
 def test_resolve_program_falls_back_to_the_interpreter_without_a_script(tmp_path):
     with patch.object(launch_agent.sys, "argv", [str(tmp_path / "gone")]):
         with patch.object(launch_agent.shutil, "which", return_value=None):
-            assert launch_agent.resolve_program() == [sys.executable, "-m", "claude_swap"]
+            assert launch_agent.resolve_program() == [sys.executable, "-m", "agents_switcher"]
 
 
 def test_resolve_program_ignores_an_argv0_that_is_not_agent_switch(tmp_path):

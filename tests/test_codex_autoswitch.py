@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import pytest
 
-from claude_swap.codex.autoswitch import (
+from agents_switcher.codex.autoswitch import (
     AccountState,
     Action,
     AutoSettings,
     decide,
 )
-from claude_swap.codex.processes import CodexProcess
-from claude_swap.codex.store import CodexAccount
-from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow
+from agents_switcher.codex.processes import CodexProcess
+from agents_switcher.codex.store import CodexAccount
+from agents_switcher.codex.usage import CodexCredits, CodexUsage, CodexWindow
 
 SETTINGS = AutoSettings(threshold=80.0, hysteresis_pct=10.0, cooldown_seconds=600.0)
 RUNNING = (CodexProcess(1, "/bin/codex", "codex", tty="pts/0"),)

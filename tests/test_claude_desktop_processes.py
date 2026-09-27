@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap import claude_desktop as cd
-from claude_swap.providers import ProviderActionError
+from agents_switcher import claude_desktop as cd
+from agents_switcher.providers import ProviderActionError
 
 
 @pytest.mark.parametrize("zombie", ["1000 Z", "1000 Z+", "0 Zs", "1000 Z Claude", "1000 Z [claude-desktop]"])

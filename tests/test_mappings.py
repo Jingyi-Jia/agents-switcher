@@ -1,10 +1,10 @@
-"""Tests for the directory → account mapping store (claude_swap.mappings)."""
+"""Tests for the directory → account mapping store (agents_switcher.mappings)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from claude_swap.mappings import MappingStore, normalize_path
+from agents_switcher.mappings import MappingStore, normalize_path
 
 
 def test_set_then_get_exact(tmp_path: Path):
@@ -167,7 +167,7 @@ def test_persisted_schema(tmp_path: Path):
 
 def test_normalize_path_applies_normcase(monkeypatch, tmp_path: Path):
     """normalize_path runs paths through os.path.normcase (Windows case-fold)."""
-    import claude_swap.mappings as m
+    import agents_switcher.mappings as m
 
     calls = []
 

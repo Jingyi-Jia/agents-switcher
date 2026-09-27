@@ -2,10 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "cswap --list",
+            "name": "agent-switch list",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_swap.cli",
+            "module": "agents_switcher.cli",
             "args": ["--list"],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -14,10 +14,10 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "cswap --switch",
+            "name": "agent-switch switch",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_swap.cli",
+            "module": "agents_switcher.cli",
             "args": ["--switch"],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -26,10 +26,10 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "cswap --purge",
+            "name": "agent-switch purge",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_swap.cli",
+            "module": "agents_switcher.cli",
             "args": ["--purge"],
             "cwd": "${workspaceFolder}",
             "env": {
@@ -38,10 +38,10 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "cswap (custom args)",
+            "name": "agent-switch (custom args)",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_swap.cli",
+            "module": "agents_switcher.cli",
             "args": ["${input:cliArgs}"],
             "cwd": "${workspaceFolder}",
             "env": {

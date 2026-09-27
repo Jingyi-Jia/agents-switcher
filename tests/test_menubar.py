@@ -2,7 +2,7 @@
 
 These tests never import or run rumps/AppKit. They exercise the pure helpers
 (settings store, title/label formatting, usage/snapshot adapters, log parsing)
-only — the auto-switch engine itself lives in ``claude_swap.autoswitch`` and is
+only — the auto-switch engine itself lives in ``agents_switcher.autoswitch`` and is
 tested there.
 """
 
@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import menubar
-from claude_swap.exceptions import ClaudeSwitchError
-from claude_swap.switcher import USAGE_API_KEY
+from agents_switcher import menubar
+from agents_switcher.exceptions import ClaudeSwitchError
+from agents_switcher.switcher import USAGE_API_KEY
 
 
 # --- notification identity -----------------------------------------------------
@@ -548,7 +548,7 @@ def test_run_without_rumps_raises_clean_error(monkeypatch):
     """A missing menubar extra surfaces as ClaudeSwitchError, not a traceback.
 
     The module is import-safe without rumps, so the CLI's ImportError guard
-    around ``from claude_swap.menubar import run`` can never fire — the import
+    around ``from agents_switcher.menubar import run`` can never fire — the import
     failure happens inside ``run()``. Blocking the import (a ``None`` entry in
     ``sys.modules`` makes ``import rumps`` raise) checks that ``run()`` turns
     it into the error type the CLI renders with the install hint.

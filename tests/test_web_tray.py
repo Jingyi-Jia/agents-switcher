@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from claude_swap.web import tray
-from claude_swap.web.tray import TrayEntry, build_model
+from agents_switcher.web import tray
+from agents_switcher.web.tray import TrayEntry, build_model
 
 
 def account(number="1", email="a@e.com", used=None, active=False, **extra):

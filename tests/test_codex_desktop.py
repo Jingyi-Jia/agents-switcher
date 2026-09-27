@@ -15,7 +15,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap.codex import desktop as cd
+from agents_switcher.codex import desktop as cd
 
 _READ_MAC_ARGUMENTS = cd._read_mac_arguments
 _READ_MAC_EXECUTABLE = cd._read_mac_executable

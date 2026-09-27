@@ -17,7 +17,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap import desktop
+from agents_switcher import desktop
 
 
 def start_message(token=None):
@@ -216,7 +216,7 @@ def test_private_pipe_helper_serves_authenticated_page_and_exits(tmp_path, shutd
     env.update({"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "XDG_DATA_HOME": str(tmp_path / "data")})
     process = subprocess.Popen([
         sys.executable, "-c",
-        "from claude_swap import desktop; "
+        "from agents_switcher import desktop; "
         "desktop._build_state = lambda state_class: state_class(); "
         "raise SystemExit(desktop.main())",
     ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)

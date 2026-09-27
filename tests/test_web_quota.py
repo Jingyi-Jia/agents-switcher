@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap.codex.usage import CodexUsage, CodexWindow
-from claude_swap.usage_store import UsageEntry
-from claude_swap.web.server import DashboardState, _claude_windows, _quota_window
+from agents_switcher.codex.usage import CodexUsage, CodexWindow
+from agents_switcher.usage_store import UsageEntry
+from agents_switcher.web.server import DashboardState, _claude_windows, _quota_window
 from tests.test_provider_actions import Claude, Codex
 from tests.test_web_page_actions import node, run_page
 
@@ -19,7 +19,7 @@ NOW = datetime(2026, 9, 25, 12, tzinfo=timezone.utc).timestamp()
 
 @pytest.fixture
 def clock(monkeypatch):
-    monkeypatch.setattr("claude_swap.web.server.time.time", lambda: NOW)
+    monkeypatch.setattr("agents_switcher.web.server.time.time", lambda: NOW)
 
 
 def test_relative_reset_is_anchored_to_the_measurement_not_the_render(clock):
@@ -201,7 +201,7 @@ for (const flags of [{error: 'Unavailable'}, {sentinel: 'stale'}, {onCredits: tr
 
 
 def test_reported_model_limits_keep_their_own_weekly_reset(clock):
-    from claude_swap.oauth import build_usage_result
+    from agents_switcher.oauth import build_usage_result
 
     source = build_usage_result({
         "five_hour": {"utilization": 12},

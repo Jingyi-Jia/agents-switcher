@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap.codex import auth_file
+from agents_switcher.codex import auth_file
 from tests import conftest
-from claude_swap.codex.auth_file import (
+from agents_switcher.codex.auth_file import (
     CodexAuthError,
     has_live_login,
     read_auth,

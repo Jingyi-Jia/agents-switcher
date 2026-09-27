@@ -14,7 +14,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from claude_swap.web.page import PAGE_HTML
+from agents_switcher.web.page import PAGE_HTML
 
 
 class PageTree(HTMLParser):

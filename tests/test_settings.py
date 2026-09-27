@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap.exceptions import ConfigError
-from claude_swap.settings import (
+from agents_switcher.exceptions import ConfigError
+from agents_switcher.settings import (
     SETTING_SPECS,
     atomic_write_json,
     AutoSwitchSettings,
@@ -324,7 +324,7 @@ class TestAtomicWriteThroughSymlink:
         another mount — the write fails outright. Assert the placement
         directly; staging two filesystems in a unit test is not portable."""
         import tempfile
-        from claude_swap import settings as S
+        from agents_switcher import settings as S
         repo = tmp_path / "repo"; repo.mkdir()
         live = tmp_path / "live"; live.mkdir()
         tracked = repo / "settings.json"; tracked.write_text("{}")

@@ -8,14 +8,14 @@ import pytest
 from textual.containers import VerticalScroll
 from textual.widgets import Button, Input, ListView, Static
 
-from claude_swap.codex.usage import CodexUsage, CodexWindow
-from claude_swap.codex.processes import CodexProcess
-from claude_swap.codex.switcher import SwitchResult
-from claude_swap.tui.app import CswapApp
-from claude_swap.tui.dashboard import SwitchScreen, WatchScreen
-from claude_swap.tui.modals import AddTokenModal, ConfirmModal
-from claude_swap.tui.theme import CSWAP_DARK, CSWAP_LIGHT, Palette
-from claude_swap.tui.widgets import (
+from agents_switcher.codex.usage import CodexUsage, CodexWindow
+from agents_switcher.codex.processes import CodexProcess
+from agents_switcher.codex.switcher import SwitchResult
+from agents_switcher.tui.app import CswapApp
+from agents_switcher.tui.dashboard import SwitchScreen, WatchScreen
+from agents_switcher.tui.modals import AddTokenModal, ConfirmModal
+from agents_switcher.tui.theme import CSWAP_DARK, CSWAP_LIGHT, Palette
+from agents_switcher.tui.widgets import (
     AccountCard, AccountItem, AccountsPanel, AppHeader, account_card_text, mini_account_text,
 )
 from tests.test_codex_tui import account, on_credits
@@ -53,11 +53,11 @@ def design_switchers(monkeypatch, tmp_path):
         "2": CodexUsage(windows=(CodexWindow(76, 7200), CodexWindow(42, 604800))),
         "3": on_credits(),
     }
-    monkeypatch.setattr("claude_swap.tui.app.ClaudeAccountSwitcher", lambda: claude)
-    monkeypatch.setattr("claude_swap.tui.app.os.geteuid", lambda: 1000, raising=False)
-    monkeypatch.setattr("claude_swap.tui.codex.CodexSwitcher", lambda: codex)
-    monkeypatch.setattr("claude_swap.providers.running_codex_processes", lambda: ())
-    monkeypatch.setattr("claude_swap.tui.autoview.AutoSwitchEngine", _FakeEngine)
+    monkeypatch.setattr("agents_switcher.tui.app.ClaudeAccountSwitcher", lambda: claude)
+    monkeypatch.setattr("agents_switcher.tui.app.os.geteuid", lambda: 1000, raising=False)
+    monkeypatch.setattr("agents_switcher.tui.codex.CodexSwitcher", lambda: codex)
+    monkeypatch.setattr("agents_switcher.providers.running_codex_processes", lambda: ())
+    monkeypatch.setattr("agents_switcher.tui.autoview.AutoSwitchEngine", _FakeEngine)
     return claude, codex
 
 

@@ -113,7 +113,7 @@ def test_preferences_can_be_loaded_without_provider_requests(web):
     ({"available": False, "running": None}, True),
 ])
 def test_dashboard_automation_uses_the_same_strict_prerequisite(web, monkeypatch, mode, status, blocked):
-    from claude_swap.codex import autoswitch
+    from agents_switcher.codex import autoswitch
 
     tick = Mock(return_value=SimpleNamespace(reason="No switch needed", action=SimpleNamespace(value="noop")))
     monkeypatch.setattr(autoswitch, "run_once", tick)

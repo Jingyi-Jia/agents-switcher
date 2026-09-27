@@ -11,8 +11,8 @@ import urllib.error
 
 import pytest
 
-from claude_swap.codex import usage as usage_mod
-from claude_swap.codex.usage import (
+from agents_switcher.codex import usage as usage_mod
+from agents_switcher.codex.usage import (
     CodexCredits,
     CodexUsage,
     CodexWindow,

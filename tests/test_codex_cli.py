@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap.codex import cli as codex_cli
-from claude_swap.codex import switcher as switcher_mod
-from claude_swap.codex.auth_file import write_auth
-from claude_swap.codex.identity import OPENAI_AUTH_CLAIM
-from claude_swap.codex.processes import CodexProcess
-from claude_swap.codex.store import CodexAccountStore
-from claude_swap.codex.switcher import CodexSwitcher
+from agents_switcher.codex import cli as codex_cli
+from agents_switcher.codex import switcher as switcher_mod
+from agents_switcher.codex.auth_file import write_auth
+from agents_switcher.codex.identity import OPENAI_AUTH_CLAIM
+from agents_switcher.codex.processes import CodexProcess
+from agents_switcher.codex.store import CodexAccountStore
+from agents_switcher.codex.switcher import CodexSwitcher
 
 
 def auth_for(account_id="acct-1", email="one@example.com", refresh="rt-v1") -> dict:

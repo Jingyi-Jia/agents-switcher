@@ -7,7 +7,7 @@ import shutil
 
 import pytest
 
-from claude_swap.web.page import PAGE_HTML
+from agents_switcher.web.page import PAGE_HTML
 from tests.test_web_page_actions import run_page
 
 

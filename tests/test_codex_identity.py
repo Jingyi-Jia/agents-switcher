@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import json
 
-from claude_swap.codex.identity import (
+from agents_switcher.codex.identity import (
     OPENAI_AUTH_CLAIM,
     CodexIdentity,
     decode_jwt_claims,

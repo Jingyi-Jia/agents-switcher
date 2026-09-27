@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from claude_swap import paths as claude_paths
-from claude_swap.codex import paths
+from agents_switcher import paths as claude_paths
+from agents_switcher.codex import paths
 
 
 class TestCodexHome:

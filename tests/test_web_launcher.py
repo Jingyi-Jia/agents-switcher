@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap.web import launcher
+from agents_switcher.web import launcher
 
 
 class TestContent:
@@ -109,7 +109,7 @@ class TestExecutableResolution:
     def test_last_resort_reenters_through_the_interpreter(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
         monkeypatch.setattr(launcher.shutil, "which", lambda name: None)
-        assert "claude_swap.cli" in launcher.executable_path()
+        assert "agents_switcher.cli" in launcher.executable_path()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX install paths")

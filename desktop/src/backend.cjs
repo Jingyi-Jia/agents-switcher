@@ -35,7 +35,7 @@ function backendCommand({ isPackaged, resourcesPath, repoPath, env = process.env
   if (env.AGENT_SWITCH_BACKEND) return { command: env.AGENT_SWITCH_BACKEND, args: [], cwd: repoPath };
   return {
     command: env.AGENT_SWITCH_PYTHON || path.join(repoPath, '.venv', ...(platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python'])),
-    args: ['-m', 'claude_swap.desktop'],
+    args: ['-m', 'agents_switcher.desktop'],
     cwd: repoPath,
   };
 }

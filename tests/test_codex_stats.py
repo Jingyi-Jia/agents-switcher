@@ -10,15 +10,15 @@ import urllib.error
 
 import pytest
 
-from claude_swap.codex import stats as stats_mod
-from claude_swap.codex.stats import (
+from agents_switcher.codex import stats as stats_mod
+from agents_switcher.codex.stats import (
     CodexResetCredits,
     ResetCredit,
     fetch_profile_stats,
     parse_profile_stats,
     parse_reset_credits,
 )
-from claude_swap.codex.usage import UsageAuthError, UsageError
+from agents_switcher.codex.usage import UsageAuthError, UsageError
 
 PROFILE = {
     "metadata": {"generated_at": "2026-09-17T22:18:04Z", "stats_as_of": "2026-09-17",

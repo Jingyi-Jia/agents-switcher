@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from claude_swap.update_check import (
+from agents_switcher.update_check import (
     CACHE_TTL,
     LATEST_RELEASE_URL,
     MAX_RESPONSE_BYTES,
@@ -46,9 +46,9 @@ def _write_cache(path, version, timestamp=None):
 
 
 class TestCheckForUpdate:
-    @patch("claude_swap.update_check.urllib.request.build_opener")
+    @patch("agents_switcher.update_check.urllib.request.build_opener")
     def test_newer_version_available(self, mock_build_opener, tmp_path, monkeypatch):
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", tmp_path / "cache.json")
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", tmp_path / "cache.json")
         mock_build_opener.return_value = _make_github_opener("0.4.0")
 
         result = check_for_update("0.3.2")
@@ -57,19 +57,19 @@ class TestCheckForUpdate:
         assert "0.4.0" in result
         assert "0.3.2" in result
 
-    @patch("claude_swap.update_check.urllib.request.build_opener")
+    @patch("agents_switcher.update_check.urllib.request.build_opener")
     def test_already_on_latest(self, mock_build_opener, tmp_path, monkeypatch):
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", tmp_path / "cache.json")
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", tmp_path / "cache.json")
         mock_build_opener.return_value = _make_github_opener("0.3.2")
 
         result = check_for_update("0.3.2")
 
         assert result is None
 
-    @patch("claude_swap.update_check.urllib.request.build_opener", side_effect=OSError("network error"))
+    @patch("agents_switcher.update_check.urllib.request.build_opener", side_effect=OSError("network error"))
     def test_network_error_returns_none_and_caches(self, mock_build_opener, tmp_path, monkeypatch):
         cache_path = tmp_path / "cache.json"
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", cache_path)
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", cache_path)
 
         result = check_for_update("0.3.2")
 
@@ -78,11 +78,11 @@ class TestCheckForUpdate:
         cache = json.loads(cache_path.read_text())
         assert cache["data"] is None
 
-    @patch("claude_swap.update_check.urllib.request.build_opener")
+    @patch("agents_switcher.update_check.urllib.request.build_opener")
     def test_fresh_error_cache_skips_network(self, mock_build_opener, tmp_path, monkeypatch):
         cache_path = tmp_path / "cache.json"
         _write_cache(cache_path, None)
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", cache_path)
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", cache_path)
 
         result = check_for_update("0.3.2")
 
@@ -92,20 +92,20 @@ class TestCheckForUpdate:
     def test_fresh_cache_no_network(self, tmp_path, monkeypatch):
         cache_path = tmp_path / "cache.json"
         _write_cache(cache_path, "0.5.0")
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", cache_path)
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", cache_path)
 
-        with patch("claude_swap.update_check.urllib.request.build_opener") as mock_build_opener:
+        with patch("agents_switcher.update_check.urllib.request.build_opener") as mock_build_opener:
             result = check_for_update("0.3.2")
             mock_build_opener.assert_not_called()
 
         assert result is not None
         assert "0.5.0" in result
 
-    @patch("claude_swap.update_check.urllib.request.build_opener")
+    @patch("agents_switcher.update_check.urllib.request.build_opener")
     def test_stale_cache_fetches_from_github(self, mock_build_opener, tmp_path, monkeypatch):
         cache_path = tmp_path / "cache.json"
         _write_cache(cache_path, "0.3.0", timestamp=time.time() - CACHE_TTL - 1)
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", cache_path)
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", cache_path)
         mock_build_opener.return_value = _make_github_opener("0.4.0")
 
         result = check_for_update("0.3.2")
@@ -117,7 +117,7 @@ class TestCheckForUpdate:
 
 class TestDetectInstallMethod:
     def _set_prefix(self, monkeypatch, prefix: str) -> None:
-        monkeypatch.setattr("claude_swap.update_check.sys.prefix", prefix)
+        monkeypatch.setattr("agents_switcher.update_check.sys.prefix", prefix)
         # Clear env vars by default so path-based detection runs in isolation.
         monkeypatch.delenv("UV_TOOL_DIR", raising=False)
         monkeypatch.delenv("PIPX_HOME", raising=False)
@@ -151,7 +151,7 @@ class TestDetectInstallMethod:
     def test_uv_tool_dir_env_with_prefix_under_it(self, monkeypatch, tmp_path):
         custom_root = tmp_path / "uv-tools"
         prefix = custom_root / "claude-swap"
-        monkeypatch.setattr("claude_swap.update_check.sys.prefix", str(prefix))
+        monkeypatch.setattr("agents_switcher.update_check.sys.prefix", str(prefix))
         monkeypatch.setenv("UV_TOOL_DIR", str(custom_root))
         monkeypatch.delenv("PIPX_HOME", raising=False)
         assert _detect_install_method() == "uv"
@@ -160,7 +160,7 @@ class TestDetectInstallMethod:
         custom_root = tmp_path / "uv-tools"
         # Prefix lives somewhere else entirely — env var alone must not trigger.
         monkeypatch.setattr(
-            "claude_swap.update_check.sys.prefix", str(tmp_path / "some-project" / ".venv")
+            "agents_switcher.update_check.sys.prefix", str(tmp_path / "some-project" / ".venv")
         )
         monkeypatch.setenv("UV_TOOL_DIR", str(custom_root))
         monkeypatch.delenv("PIPX_HOME", raising=False)
@@ -169,21 +169,21 @@ class TestDetectInstallMethod:
     def test_pipx_home_env_with_prefix_under_it(self, monkeypatch, tmp_path):
         custom_root = tmp_path / "pipx-home"
         prefix = custom_root / "venvs" / "claude-swap"
-        monkeypatch.setattr("claude_swap.update_check.sys.prefix", str(prefix))
+        monkeypatch.setattr("agents_switcher.update_check.sys.prefix", str(prefix))
         monkeypatch.setenv("PIPX_HOME", str(custom_root))
         monkeypatch.delenv("UV_TOOL_DIR", raising=False)
         assert _detect_install_method() == "pipx"
 
 
 class TestCheckForUpdateMessage:
-    @patch("claude_swap.update_check.sys.platform", "linux")
-    @patch("claude_swap.update_check.urllib.request.build_opener")
+    @patch("agents_switcher.update_check.sys.platform", "linux")
+    @patch("agents_switcher.update_check.urllib.request.build_opener")
     def test_detected_method_non_windows_suggests_agent_switch_upgrade(
         self, mock_build_opener, tmp_path, monkeypatch
     ):
         # uv/pipx on macOS/Linux: agent-switch upgrade actually upgrades, so advertise it.
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", tmp_path / "cache.json")
-        monkeypatch.setattr("claude_swap.update_check._detect_install_method", lambda: "uv")
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", tmp_path / "cache.json")
+        monkeypatch.setattr("agents_switcher.update_check._detect_install_method", lambda: "uv")
         mock_build_opener.return_value = _make_github_opener("0.4.0")
 
         result = check_for_update("0.3.2")
@@ -192,14 +192,14 @@ class TestCheckForUpdateMessage:
         assert "agent-switch upgrade" in result
         assert "uv tool upgrade" not in result
 
-    @patch("claude_swap.update_check.sys.platform", "win32")
-    @patch("claude_swap.update_check.urllib.request.build_opener")
+    @patch("agents_switcher.update_check.sys.platform", "win32")
+    @patch("agents_switcher.update_check.urllib.request.build_opener")
     def test_detected_method_windows_suggests_direct_command(
         self, mock_build_opener, tmp_path, monkeypatch
     ):
         # Windows: agent-switch upgrade only prints, so point at the real command.
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", tmp_path / "cache.json")
-        monkeypatch.setattr("claude_swap.update_check._detect_install_method", lambda: "pipx")
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", tmp_path / "cache.json")
+        monkeypatch.setattr("agents_switcher.update_check._detect_install_method", lambda: "pipx")
         mock_build_opener.return_value = _make_github_opener("0.4.0")
 
         result = check_for_update("0.3.2")
@@ -208,13 +208,13 @@ class TestCheckForUpdateMessage:
         assert "pipx upgrade agents-switcher" in result
         assert "agent-switch upgrade" not in result
 
-    @patch("claude_swap.update_check.urllib.request.build_opener")
+    @patch("agents_switcher.update_check.urllib.request.build_opener")
     def test_unknown_method_suggests_agent_switch_instructions(
         self, mock_build_opener, tmp_path, monkeypatch
     ):
         # Unknown install method: agent-switch upgrade can only show instructions.
-        monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", tmp_path / "cache.json")
-        monkeypatch.setattr("claude_swap.update_check._detect_install_method", lambda: None)
+        monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", tmp_path / "cache.json")
+        monkeypatch.setattr("agents_switcher.update_check._detect_install_method", lambda: None)
         mock_build_opener.return_value = _make_github_opener("0.4.0")
 
         result = check_for_update("0.3.2")
@@ -225,10 +225,10 @@ class TestCheckForUpdateMessage:
         assert "pipx upgrade" not in result
 
 
-@patch("claude_swap.update_check.sys.platform", "linux")
+@patch("agents_switcher.update_check.sys.platform", "linux")
 class TestRunSelfUpgrade:
-    @patch("claude_swap.update_check.subprocess.run")
-    @patch("claude_swap.update_check._detect_install_method", return_value="uv")
+    @patch("agents_switcher.update_check.subprocess.run")
+    @patch("agents_switcher.update_check._detect_install_method", return_value="uv")
     def test_uv_invokes_uv_tool_upgrade(self, mock_detect, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
 
@@ -237,8 +237,8 @@ class TestRunSelfUpgrade:
             ["uv", "tool", "upgrade", "agents-switcher"], check=False
         )
 
-    @patch("claude_swap.update_check.subprocess.run")
-    @patch("claude_swap.update_check._detect_install_method", return_value="pipx")
+    @patch("agents_switcher.update_check.subprocess.run")
+    @patch("agents_switcher.update_check._detect_install_method", return_value="pipx")
     def test_pipx_invokes_pipx_upgrade(self, mock_detect, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
 
@@ -247,15 +247,15 @@ class TestRunSelfUpgrade:
             ["pipx", "upgrade", "agents-switcher"], check=False
         )
 
-    @patch("claude_swap.update_check.subprocess.run")
-    @patch("claude_swap.update_check._detect_install_method", return_value="uv")
+    @patch("agents_switcher.update_check.subprocess.run")
+    @patch("agents_switcher.update_check._detect_install_method", return_value="uv")
     def test_propagates_nonzero_exit_code(self, mock_detect, mock_run):
         mock_run.return_value = MagicMock(returncode=2)
 
         assert run_self_upgrade() == 2
 
-    @patch("claude_swap.update_check.subprocess.run")
-    @patch("claude_swap.update_check._detect_install_method", return_value=None)
+    @patch("agents_switcher.update_check.subprocess.run")
+    @patch("agents_switcher.update_check._detect_install_method", return_value=None)
     def test_unknown_method_returns_1_and_prints_instructions(
         self, mock_detect, mock_run, capsys
     ):
@@ -267,38 +267,38 @@ class TestRunSelfUpgrade:
         assert "pip install --upgrade git+https://github.com/Jingyi-Jia/agents-switcher.git" in err
 
     @patch(
-        "claude_swap.update_check.subprocess.run", side_effect=FileNotFoundError
+        "agents_switcher.update_check.subprocess.run", side_effect=FileNotFoundError
     )
-    @patch("claude_swap.update_check._detect_install_method", return_value="uv")
+    @patch("agents_switcher.update_check._detect_install_method", return_value="uv")
     def test_filenotfound_returns_1(self, mock_detect, mock_run, capsys):
         assert run_self_upgrade() == 1
         err = capsys.readouterr().err
         assert "PATH" in err
 
 
-@patch("claude_swap.update_check.sys.platform", "win32")
+@patch("agents_switcher.update_check.sys.platform", "win32")
 class TestRunSelfUpgradeWindows:
     """On Windows the running .exe is locked, so we never upgrade in place --
     we print the command for the user to run themselves and exit 1."""
 
-    @patch("claude_swap.update_check.subprocess.run")
-    @patch("claude_swap.update_check._detect_install_method", return_value="uv")
+    @patch("agents_switcher.update_check.subprocess.run")
+    @patch("agents_switcher.update_check._detect_install_method", return_value="uv")
     def test_uv_prints_command_and_does_not_run(self, mock_detect, mock_run, capsys):
         assert run_self_upgrade() == 1
         mock_run.assert_not_called()
         out = capsys.readouterr().out
         assert "uv tool upgrade agents-switcher" in out
 
-    @patch("claude_swap.update_check.subprocess.run")
-    @patch("claude_swap.update_check._detect_install_method", return_value="pipx")
+    @patch("agents_switcher.update_check.subprocess.run")
+    @patch("agents_switcher.update_check._detect_install_method", return_value="pipx")
     def test_pipx_prints_command_and_does_not_run(self, mock_detect, mock_run, capsys):
         assert run_self_upgrade() == 1
         mock_run.assert_not_called()
         out = capsys.readouterr().out
         assert "pipx upgrade agents-switcher" in out
 
-    @patch("claude_swap.update_check.subprocess.run")
-    @patch("claude_swap.update_check._detect_install_method", return_value=None)
+    @patch("agents_switcher.update_check.subprocess.run")
+    @patch("agents_switcher.update_check._detect_install_method", return_value=None)
     def test_unknown_method_hits_generic_fallback(self, mock_detect, mock_run, capsys):
         assert run_self_upgrade() == 1
         mock_run.assert_not_called()
@@ -309,11 +309,11 @@ class TestRunSelfUpgradeWindows:
 
 
 def test_release_check_uses_only_our_public_repository_without_ambient_credentials(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", tmp_path / "cache.json")
+    monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", tmp_path / "cache.json")
     monkeypatch.setenv("GH_TOKEN", "synthetic-private-token")
     monkeypatch.setenv("GITHUB_TOKEN", "another-synthetic-token")
     opener = _make_github_opener("2.0.0")
-    with patch("claude_swap.update_check.urllib.request.build_opener", return_value=opener) as factory:
+    with patch("agents_switcher.update_check.urllib.request.build_opener", return_value=opener) as factory:
         assert "agents-switcher" in check_for_update("1.0.0")
     assert isinstance(factory.call_args.args[0], _NoRedirect)
     request = opener.open.call_args.args[0]
@@ -334,13 +334,13 @@ def test_release_check_uses_only_our_public_repository_without_ambient_credentia
 ])
 def test_untrusted_or_non_cli_releases_do_not_advertise_an_update(tmp_path, monkeypatch, changes):
     cache = tmp_path / "cache.json"
-    monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", cache)
+    monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", cache)
     opener = _make_github_opener("2.0.0")
     response = opener.open.return_value
     data = json.loads(response.read.return_value)
     data.update(changes)
     response.read.return_value = json.dumps(data).encode()
-    with patch("claude_swap.update_check.urllib.request.build_opener", return_value=opener):
+    with patch("agents_switcher.update_check.urllib.request.build_opener", return_value=opener):
         assert check_for_update("1.0.0") is None
     assert json.loads(cache.read_text())["data"] is None
 
@@ -350,21 +350,21 @@ def test_untrusted_or_non_cli_releases_do_not_advertise_an_update(tmp_path, monk
     {"browser_download_url": "https://foreign.example/agents_switcher-2.0.0-py3-none-any.whl"},
 ])
 def test_only_an_uploaded_cli_asset_from_the_same_release_is_eligible(tmp_path, monkeypatch, changes):
-    monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", tmp_path / "cache.json")
+    monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", tmp_path / "cache.json")
     opener = _make_github_opener("2.0.0")
     response = opener.open.return_value
     data = json.loads(response.read.return_value)
     data["assets"][0].update(changes)
     response.read.return_value = json.dumps(data).encode()
-    with patch("claude_swap.update_check.urllib.request.build_opener", return_value=opener):
+    with patch("agents_switcher.update_check.urllib.request.build_opener", return_value=opener):
         assert check_for_update("1.0.0") is None
 
 
 def test_oversized_release_response_is_rejected(tmp_path, monkeypatch):
-    monkeypatch.setattr("claude_swap.update_check.CACHE_PATH", tmp_path / "cache.json")
+    monkeypatch.setattr("agents_switcher.update_check.CACHE_PATH", tmp_path / "cache.json")
     opener = _make_github_opener("2.0.0")
     opener.open.return_value.read.return_value = b" " * (MAX_RESPONSE_BYTES + 1)
-    with patch("claude_swap.update_check.urllib.request.build_opener", return_value=opener):
+    with patch("agents_switcher.update_check.urllib.request.build_opener", return_value=opener):
         assert check_for_update("1.0.0") is None
 
 
@@ -374,7 +374,7 @@ def test_release_checks_do_not_follow_redirects(code):
 
 
 def test_upstream_update_cache_is_not_consumed_or_overwritten(tmp_path, monkeypatch):
-    from claude_swap import update_check
+    from agents_switcher import update_check
 
     assert update_check.CACHE_PATH.name == "agents-switcher-update.json"
     own_cache = tmp_path / update_check.CACHE_PATH.name
@@ -382,7 +382,7 @@ def test_upstream_update_cache_is_not_consumed_or_overwritten(tmp_path, monkeypa
     _write_cache(upstream_cache, "999.0.0")
     original = upstream_cache.read_bytes()
     monkeypatch.setattr(update_check, "CACHE_PATH", own_cache)
-    with patch("claude_swap.update_check.urllib.request.build_opener", return_value=_make_github_opener("1.0.0")):
+    with patch("agents_switcher.update_check.urllib.request.build_opener", return_value=_make_github_opener("1.0.0")):
         assert check_for_update("1.0.0") is None
     assert upstream_cache.read_bytes() == original
     assert json.loads(own_cache.read_text())["data"] == "1.0.0"

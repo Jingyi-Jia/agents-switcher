@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from claude_swap import appearance
+from agents_switcher import appearance
 
 
 class TestParseOsc11:

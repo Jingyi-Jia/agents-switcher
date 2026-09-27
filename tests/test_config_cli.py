@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import cli
+from agents_switcher import cli
 
 
 def _run(argv: list[str], capsys) -> tuple[int, str, str]:
@@ -258,11 +258,11 @@ class TestConfigMisc:
                 captured["settings"] = settings
 
             def tick(self):
-                from claude_swap.autoswitch import TickOutcome
+                from agents_switcher.autoswitch import TickOutcome
 
                 return TickOutcome.NO_ACTION
 
-        with patch("claude_swap.autoswitch.AutoSwitchEngine", FakeEngine), \
+        with patch("agents_switcher.autoswitch.AutoSwitchEngine", FakeEngine), \
              patch("os.geteuid", return_value=1000, create=True), \
              patch.object(sys, "argv", ["claude-swap", "auto", "--once"]):
             with pytest.raises(SystemExit):

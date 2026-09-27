@@ -57,7 +57,7 @@ test('packaged helper ignores all development executable overrides', () => {
 
 test('development uses explicit Python or platform-specific repository virtualenv', () => {
   assert.deepEqual(backendCommand({ isPackaged: false, repoPath: '/repo', env: {}, platform: 'linux' }), {
-    command: path.join('/repo', '.venv', 'bin', 'python'), args: ['-m', 'claude_swap.desktop'], cwd: '/repo',
+    command: path.join('/repo', '.venv', 'bin', 'python'), args: ['-m', 'agents_switcher.desktop'], cwd: '/repo',
   });
   assert.match(backendCommand({ isPackaged: false, repoPath: '/repo', env: {}, platform: 'win32' }).command, /Scripts[/\\]python\.exe$/);
   assert.equal(backendCommand({ isPackaged: false, repoPath: '/repo', env: { AGENT_SWITCH_PYTHON: '/explicit/python' } }).command, '/explicit/python');

@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap.codex import autoswitch as auto_mod
-from claude_swap.codex import cli as codex_cli
-from claude_swap.codex import switcher as switcher_mod
-from claude_swap.codex.auth_file import read_auth, write_auth
-from claude_swap.codex.autoswitch import (
+from agents_switcher.codex import autoswitch as auto_mod
+from agents_switcher.codex import cli as codex_cli
+from agents_switcher.codex import switcher as switcher_mod
+from agents_switcher.codex.auth_file import read_auth, write_auth
+from agents_switcher.codex.autoswitch import (
     Action,
     AutoSettings,
     collect_states,
@@ -21,11 +21,11 @@ from claude_swap.codex.autoswitch import (
     run_once,
     write_last_switch_at,
 )
-from claude_swap.codex.identity import OPENAI_AUTH_CLAIM
-from claude_swap.codex.processes import CodexProcess
-from claude_swap.codex.store import CodexAccountStore
-from claude_swap.codex.switcher import CodexSwitcher
-from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow, UsageError
+from agents_switcher.codex.identity import OPENAI_AUTH_CLAIM
+from agents_switcher.codex.processes import CodexProcess
+from agents_switcher.codex.store import CodexAccountStore
+from agents_switcher.codex.switcher import CodexSwitcher
+from agents_switcher.codex.usage import CodexCredits, CodexUsage, CodexWindow, UsageError
 
 
 def auth_for(account_id, email):

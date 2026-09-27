@@ -226,6 +226,25 @@ for (const platform of ['darwin', 'linux']) {
   });
 }
 
+test('macOS native Quit request drains the hidden app without a window-close request', async () => {
+  let finish;
+  const { state, app } = harness({ platform: 'darwin', stop: () => new Promise(resolve => { finish = resolve; }) });
+  await settle();
+  const window = state.windows[0];
+  window.close();
+  assert.equal(window.isMinimized(), false);
+  assert.equal(window.shown, false);
+  let prevented = false;
+  app.emit('before-quit', { preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(window.destroyed, true);
+  assert.equal(state.backends[0].stops, 1);
+  assert.deepEqual(state.exits, []);
+  finish(); await settle();
+  assert.equal(state.trayDestroyed, true);
+  assert.deepEqual(state.exits, [0]);
+});
+
 for (const event of ['query-session-end', 'session-end']) {
   test(`Windows ${event} starts cleanup without cancelling logout`, async () => {
     const { state } = harness({ platform: 'win32' });
