@@ -212,15 +212,18 @@ test('full-screen smoke requires native exit before hide rather than merely even
       isFullScreen() { return this.fullScreen; },
       isVisible() { return this.shown; },
       isDestroyed() { return false; },
+      hide() { this.shown = false; this.emit('hide'); },
       close() {
         setImmediate(() => {
-          if (hideBeforeExit) { this.shown = false; this.emit('hide'); }
+          this.emit('hide');
+          if (hideBeforeExit) this.hide();
           this.fullScreen = false;
           this.emit('leave-full-screen');
-          if (!hideBeforeExit) { this.shown = false; this.emit('hide'); }
+          if (!hideBeforeExit) this.hide();
         });
       },
     });
+    const nativeHide = window.hide;
     const smoke = closeFullScreenWindow(async (method, params) => {
       assert.equal(method, 'Runtime.evaluate');
       assert.equal(params.awaitPromise, true);
@@ -235,6 +238,7 @@ test('full-screen smoke requires native exit before hide rather than merely even
     else await smoke;
     assert.deepEqual(window.requests, [true]);
     assert.equal(window.shown, false);
+    assert.equal(window.hide, nativeHide);
     assert.equal(window.eventNames().length, 0);
   }
   for (const result of [{result: {value: false}}, {result: {value: 'SECRET ws://127.0.0.1:1234/private'}}, {exceptionDetails: {text: 'SECRET'}}]) {
@@ -254,8 +258,10 @@ for (const missing of ['enter-full-screen', 'hide']) {
       setFullScreen() { if (missing !== 'enter-full-screen') this.emit('enter-full-screen'); },
       isFullScreen() { return true; },
       isVisible() { return true; },
-      close() {},
+      hide() { assert.fail('the missing hide call must not be supplied by the smoke'); },
+      close() { this.emit('leave-full-screen'); this.emit('hide'); },
     });
+    const nativeHide = window.hide;
     const rejected = assert.rejects(closeFullScreenWindow(async (method, params) => {
       const value = await vm.runInNewContext(params.expression, {setTimeout, clearTimeout, process: {mainModule: {require() {
         return {BrowserWindow: {getAllWindows: () => [window]}};
@@ -266,6 +272,7 @@ for (const missing of ['enter-full-screen', 'hide']) {
     t.mock.timers.tick(10000);
     await rejected;
     assert.equal(window.eventNames().length, 0);
+    assert.equal(window.hide, nativeHide);
   });
 }
 

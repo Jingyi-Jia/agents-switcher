@@ -229,7 +229,7 @@ That smoke checks renderer startup, the release
 mode, window hide/reopen with the same backend, graceful explicit quit, and
 screenshots. It keeps empty-account dry-run automation enabled across close and
 reopen. On macOS it also enters native full screen, closes the window, and requires
-the full-screen exit event before the hide event, then checks reopening with the
+the full-screen exit event before the app calls `hide()`, then checks reopening with the
 same automation. It then uses Electron's native DevTools `Browser.close` quit path
 and checks that the backend is no longer reachable, before the force-kill timeout. It does
 not print debug addresses or backend tokens. It does not approve browser

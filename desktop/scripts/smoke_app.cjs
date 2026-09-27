@@ -99,13 +99,22 @@ async function closeFullScreenWindow(command) {
     if (!await transition('enter-full-screen', () => window.setFullScreen(true))) return 'enter-timeout';
     if (!window.isFullScreen()) return 'not-full-screen-after-entry';
     if (!window.isVisible()) return 'not-visible-after-entry';
+    const nativeHide = window.hide;
     let leftFullScreen = false, hiddenEarly = false;
     const onLeave = () => { leftFullScreen = true; };
-    const onHide = () => { if (!leftFullScreen) hiddenEarly = true; };
     window.on('leave-full-screen', onLeave);
-    window.on('hide', onHide);
     try {
-      const hidden = await transition('hide', () => window.close());
+      const hidden = await new Promise(resolve => {
+        const timer = setTimeout(() => resolve(false), 10000);
+        window.hide = function (...args) {
+          if (!leftFullScreen) hiddenEarly = true;
+          const result = nativeHide.apply(this, args);
+          clearTimeout(timer);
+          resolve(true);
+          return result;
+        };
+        window.close();
+      });
       if (!hidden) return 'hide-timeout';
       if (!leftFullScreen) return 'exit-event-missing';
       if (hiddenEarly) return 'hidden-before-exit';
@@ -114,8 +123,8 @@ async function closeFullScreenWindow(command) {
       if (window.isVisible()) return 'still-visible';
       return true;
     } finally {
+      window.hide = nativeHide;
       window.removeListener('leave-full-screen', onLeave);
-      window.removeListener('hide', onHide);
     }
   })()`, awaitPromise: true, returnByValue: true });
   if (!result.exceptionDetails && result.result?.value === true) return;
