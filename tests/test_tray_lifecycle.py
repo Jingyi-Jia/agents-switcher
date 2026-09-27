@@ -5,10 +5,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap.codex import autoswitch
-from claude_swap.codex.autoswitch import Action, AutoDecision
-from claude_swap.web import cli, tray
-from claude_swap.web.server import DashboardState
+from agents_switcher.codex import autoswitch
+from agents_switcher.codex.autoswitch import Action, AutoDecision
+from agents_switcher.web import cli, tray
+from agents_switcher.web.server import DashboardState
 from tests.test_provider_actions import Codex
 
 

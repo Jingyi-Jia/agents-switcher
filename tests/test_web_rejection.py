@@ -12,7 +12,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from claude_swap.web import server
+from agents_switcher.web import server
 from tests.test_web_actions import web
 
 

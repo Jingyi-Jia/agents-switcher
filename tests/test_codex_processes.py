@@ -12,8 +12,8 @@ import subprocess
 
 import pytest
 
-from claude_swap.codex import processes as proc_mod
-from claude_swap.codex.processes import (
+from agents_switcher.codex import processes as proc_mod
+from agents_switcher.codex.processes import (
     CodexProcess,
     _parse_windows_powershell,
     _parse_windows_tasklist,

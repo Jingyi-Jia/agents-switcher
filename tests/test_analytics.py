@@ -13,14 +13,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import analytics
-from claude_swap.analytics import UsageAnalytics
-from claude_swap.codex import switcher as switcher_mod
-from claude_swap.codex.identity import CodexIdentity
-from claude_swap.codex.stats import CodexProfileStats, parse_profile_stats
-from claude_swap.codex.store import CodexAccountStore
-from claude_swap.codex.switcher import CodexSwitcher
-from claude_swap.codex.usage import UsageAuthError
+from agents_switcher import analytics
+from agents_switcher.analytics import UsageAnalytics
+from agents_switcher.codex import switcher as switcher_mod
+from agents_switcher.codex.identity import CodexIdentity
+from agents_switcher.codex.stats import CodexProfileStats, parse_profile_stats
+from agents_switcher.codex.store import CodexAccountStore
+from agents_switcher.codex.switcher import CodexSwitcher
+from agents_switcher.codex.usage import UsageAuthError
 
 
 TODAY = date(2026, 9, 25)

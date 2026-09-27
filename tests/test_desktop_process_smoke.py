@@ -4,9 +4,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap import claude_desktop
-from claude_swap.codex.desktop import CodexDesktop
-from claude_swap.providers import ProviderActionError
+from agents_switcher import claude_desktop
+from agents_switcher.codex.desktop import CodexDesktop
+from agents_switcher.providers import ProviderActionError
 from tests.test_tls import packaging_script
 
 

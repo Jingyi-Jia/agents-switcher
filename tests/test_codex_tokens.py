@@ -13,8 +13,8 @@ import urllib.error
 
 import pytest
 
-from claude_swap.codex import tokens as tokens_mod
-from claude_swap.codex.tokens import (
+from agents_switcher.codex import tokens as tokens_mod
+from agents_switcher.codex.tokens import (
     CLIENT_ID,
     CLIENT_ID_ENV_VAR,
     TokenRefreshError,

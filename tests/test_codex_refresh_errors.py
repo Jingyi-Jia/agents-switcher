@@ -9,9 +9,9 @@ import urllib.error
 
 import pytest
 
-from claude_swap.codex import tokens as tokens_mod
-from claude_swap.codex.tokens import TokenRefreshError, refresh_tokens
-from claude_swap.providers import safe_error
+from agents_switcher.codex import tokens as tokens_mod
+from agents_switcher.codex.tokens import TokenRefreshError, refresh_tokens
+from agents_switcher.providers import safe_error
 
 _SECRET = "test-only-opaque-credential"
 _ISSUER = f"https://issuer.invalid/private/{_SECRET}"

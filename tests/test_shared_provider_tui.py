@@ -5,14 +5,14 @@ from datetime import datetime
 import pytest
 from textual.widgets import ListView, Static
 
-from claude_swap.codex.usage import CodexUsage, CodexWindow
-from claude_swap.tui import app as app_module
-from claude_swap.tui import codex as codex_module
-from claude_swap.tui.app import CswapApp
-from claude_swap.tui.autoview import AutoView
-from claude_swap.tui.codex import CodexScreen, codex_snapshot
-from claude_swap.tui.dashboard import DashboardScreen, SwitchScreen, WatchScreen
-from claude_swap.tui.widgets import AccountsPanel, MenuItem, usage_rows
+from agents_switcher.codex.usage import CodexUsage, CodexWindow
+from agents_switcher.tui import app as app_module
+from agents_switcher.tui import codex as codex_module
+from agents_switcher.tui.app import CswapApp
+from agents_switcher.tui.autoview import AutoView
+from agents_switcher.tui.codex import CodexScreen, codex_snapshot
+from agents_switcher.tui.dashboard import DashboardScreen, SwitchScreen, WatchScreen
+from agents_switcher.tui.widgets import AccountsPanel, MenuItem, usage_rows
 from tests.test_codex_tui import account, healthy
 from tests.test_provider_navigation import ManagedCodexSwitcher, choose_menu
 from tests.test_tui import FakeSwitcher, make_account, settle

@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap.codex import store as store_mod
-from claude_swap.codex.identity import CodexIdentity
-from claude_swap.codex.store import CodexAccount, CodexAccountStore
-from claude_swap.exceptions import ConfigError
+from agents_switcher.codex import store as store_mod
+from agents_switcher.codex.identity import CodexIdentity
+from agents_switcher.codex.store import CodexAccount, CodexAccountStore
+from agents_switcher.exceptions import ConfigError
 
 CREDS = {
     "OPENAI_API_KEY": None,
@@ -228,7 +228,7 @@ class TestLocking:
         assert not store.lock_dir.exists()
 
     def test_lock_excludes_a_second_holder(self, store):
-        from claude_swap.exceptions import LockError
+        from agents_switcher.exceptions import LockError
 
         with store.lock():
             with pytest.raises(LockError):

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap.providers import ProviderActionError
-from claude_swap.web.preferences import UiPreferences
+from agents_switcher.providers import ProviderActionError
+from agents_switcher.web.preferences import UiPreferences
 
 
 def test_reading_defaults_does_not_create_files(tmp_path):

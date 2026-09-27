@@ -1,6 +1,6 @@
-from claude_swap.client_support import CLAUDE_SWITCH_NOTICE
-from claude_swap.models import Platform
-from claude_swap.switcher import ClaudeAccountSwitcher
+from agents_switcher.client_support import CLAUDE_SWITCH_NOTICE
+from agents_switcher.models import Platform
+from agents_switcher.switcher import ClaudeAccountSwitcher
 
 
 def test_cli_followup_explains_desktop_sign_in(temp_home, capsys):

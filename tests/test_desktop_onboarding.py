@@ -7,7 +7,7 @@ import shutil
 
 import pytest
 
-from claude_swap.web.page import PAGE_HTML
+from agents_switcher.web.page import PAGE_HTML
 from tests.test_web_page_actions import run_page
 
 
@@ -23,7 +23,7 @@ DESKTOP = r"""
 const desktopFixture = (platform = 'darwin') => {
   const data = fixture();
   data.desktop = {
-    version: '1.0.0', platform, windowClose: 'quit',
+    version: '1.0.0', platform, windowClose: 'hide',
     providers: {claude: {installed: true}, codex: {installed: true}},
   };
   for (const id of ['claude', 'codex']) {
@@ -249,17 +249,22 @@ assert.equal(state.claude.accounts.length, 0);
 """)
 
 
-def test_desktop_lifecycle_copy_and_live_confirmation_match_window_quit(node):
+def test_desktop_lifecycle_copy_and_live_confirmation_match_background_behavior(node):
     run_page(node, DESKTOP + r"""
 apiState = desktopFixture();
 await load();
 for (const id of ['claude', 'codex']) {
-  assert.match(providerUI[id].lifecycle.textContent, /Closing the app stops its automation/);
+  assert.match(providerUI[id].lifecycle.textContent, /Closing the window.*automation running in the background/);
+  assert.match(providerUI[id].lifecycle.textContent, /Show app.*Dock.*launching Agent Switch again/);
+  assert.match(providerUI[id].lifecycle.textContent, /Quit Agent Switch to stop this app's automation/);
   assert.match(providerUI[id].lifecycle.textContent, /app session only/);
   assert.doesNotMatch(providerUI[id].lifecycle.textContent, /tab|server session/);
 }
+assert.equal($('settings-lifecycle').textContent, providerUI.claude.lifecycle.textContent);
+assert.match($('desktop-guide').textContent, /Closing the window.*automation running in the background/);
 providerUI.codex.modes.live.click();
-assert.match($('dialog-description').textContent, /Closing the app stops its automation/);
+assert.match($('dialog-description').textContent, /Closing the window.*automation running in the background/);
+assert.match($('dialog-description').textContent, /Quit Agent Switch to stop this app's automation/);
 assert.doesNotMatch($('dialog-description').textContent, /Closing the tab|local dashboard server/);
 assert.equal(posts().length, 0);
 await submitDialog(); await settle();

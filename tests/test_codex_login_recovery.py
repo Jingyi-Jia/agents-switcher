@@ -11,17 +11,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_swap import providers
-from claude_swap.codex import switcher as switcher_mod
-from claude_swap.codex.auth_file import read_auth, write_auth
-from claude_swap.codex.identity import OPENAI_AUTH_CLAIM
-from claude_swap.codex.processes import CodexProcess
-from claude_swap.codex.store import CodexAccountStore
-from claude_swap.codex.switcher import CodexSwitcher
-from claude_swap.codex.tokens import TokenRefreshError
-from claude_swap.codex.usage import CodexUsage, UsageAuthError
-from claude_swap.exceptions import SwitchError
-from claude_swap.providers import ProviderActionError, ProviderActions, safe_error
+from agents_switcher import providers
+from agents_switcher.codex import switcher as switcher_mod
+from agents_switcher.codex.auth_file import read_auth, write_auth
+from agents_switcher.codex.identity import OPENAI_AUTH_CLAIM
+from agents_switcher.codex.processes import CodexProcess
+from agents_switcher.codex.store import CodexAccountStore
+from agents_switcher.codex.switcher import CodexSwitcher
+from agents_switcher.codex.tokens import TokenRefreshError
+from agents_switcher.codex.usage import CodexUsage, UsageAuthError
+from agents_switcher.exceptions import SwitchError
+from agents_switcher.providers import ProviderActionError, ProviderActions, safe_error
 
 
 def jwt(claims):

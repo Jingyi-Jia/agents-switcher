@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import claude_locks
-from claude_swap.claude_locks import (
+from agents_switcher import claude_locks
+from agents_switcher.claude_locks import (
     claude_config_lock,
     claude_credentials_lock,
     config_lock_dir,
     credentials_lock_dir,
     proper_lockfile,
 )
-from claude_swap.exceptions import ClaudeCodeLockTimeout
+from agents_switcher.exceptions import ClaudeCodeLockTimeout
 
 
 @pytest.fixture

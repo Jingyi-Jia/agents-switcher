@@ -6,7 +6,7 @@ def smoke_tls() -> int:
     import http.client
     import ssl
 
-    from claude_swap.tls import use_native_tls
+    from agents_switcher.tls import use_native_tls
 
     stage = "initialization"
     try:
@@ -37,8 +37,8 @@ def main() -> int:
     if sys.argv[1:] == ["--smoke-tls"]:
         return smoke_tls()
     if sys.argv[1:] == ["--smoke-processes"]:
-        from claude_swap.claude_desktop import running
-        from claude_swap.codex.desktop import CodexDesktop
+        from agents_switcher.claude_desktop import running
+        from agents_switcher.codex.desktop import CodexDesktop
 
         try:
             if sys.platform in {"darwin", "linux"}:
@@ -51,7 +51,7 @@ def main() -> int:
             return 1
         print("Frozen helper process smoke passed")
         return 0
-    runpy.run_module("claude_swap.desktop", run_name="__main__")
+    runpy.run_module("agents_switcher.desktop", run_name="__main__")
     return 0
 
 

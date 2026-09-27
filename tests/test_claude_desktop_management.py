@@ -8,8 +8,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap import claude_desktop as cd
-from claude_swap.providers import ProviderActionError
+from agents_switcher import claude_desktop as cd
+from agents_switcher.providers import ProviderActionError
 from tests.test_claude_desktop import profiles
 from tests.test_web_actions import request, web
 

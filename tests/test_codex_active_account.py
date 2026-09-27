@@ -8,13 +8,13 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap.codex import autoswitch, cli
-from claude_swap.codex.auth_file import CodexAuthError, read_auth, write_auth
-from claude_swap.codex.autoswitch import Action, run_once
-from claude_swap.codex.usage import CodexUsage, CodexWindow
-from claude_swap.exceptions import SwitchError
-from claude_swap.providers import ProviderActions
-from claude_swap.web.server import DashboardState
+from agents_switcher.codex import autoswitch, cli
+from agents_switcher.codex.auth_file import CodexAuthError, read_auth, write_auth
+from agents_switcher.codex.autoswitch import Action, run_once
+from agents_switcher.codex.usage import CodexUsage, CodexWindow
+from agents_switcher.exceptions import SwitchError
+from agents_switcher.providers import ProviderActions
+from agents_switcher.web.server import DashboardState
 from tests.test_codex_switcher import auth_for, env
 from tests.test_web import dashboard, get, post
 
@@ -34,7 +34,7 @@ def live_codex(env, monkeypatch):
     monkeypatch.setattr(env.switcher, "usage_for", lambda number: usage[number])
     monkeypatch.setattr(cli, "CodexSwitcher", lambda: env.switcher)
     monkeypatch.setattr(autoswitch, "running_codex_processes", list)
-    monkeypatch.setattr("claude_swap.providers.running_codex_processes", list)
+    monkeypatch.setattr("agents_switcher.providers.running_codex_processes", list)
     return env
 
 
@@ -308,8 +308,8 @@ def test_dashboard_refreshes_live_account_after_already_active_switch(live_codex
 
 @pytest.mark.asyncio
 async def test_tui_initial_and_refreshed_snapshots_follow_live_auth(live_codex, monkeypatch, tmp_path):
-    from claude_swap.tui import codex as codex_module
-    from claude_swap.tui.codex import CodexScreen
+    from agents_switcher.tui import codex as codex_module
+    from agents_switcher.tui.codex import CodexScreen
     from tests.test_tui import FakeSwitcher, make_app, settle
 
     monkeypatch.setattr(codex_module, "CodexSwitcher", lambda: live_codex.switcher)
@@ -346,8 +346,8 @@ async def test_tui_initial_and_refreshed_snapshots_follow_live_auth(live_codex, 
 async def test_tui_surfaces_unreadable_auth_without_stale_active(live_codex, monkeypatch, tmp_path, initially_torn):
     from textual.widgets import Static
 
-    from claude_swap.tui import codex as codex_module
-    from claude_swap.tui.codex import CodexScreen
+    from agents_switcher.tui import codex as codex_module
+    from agents_switcher.tui.codex import CodexScreen
     from tests.test_tui import FakeSwitcher, make_app, settle
 
     monkeypatch.setattr(codex_module, "CodexSwitcher", lambda: live_codex.switcher)

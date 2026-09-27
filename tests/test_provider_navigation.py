@@ -9,17 +9,17 @@ from unittest.mock import MagicMock
 import pytest
 from textual.widgets import ListView, Static
 
-from claude_swap import cli, tui
-from claude_swap.codex import cli as codex_cli
-from claude_swap.codex import autoswitch as codex_auto
-from claude_swap.codex.switcher import SwitchResult
-from claude_swap.tui import app as app_module
-from claude_swap.tui import codex as codex_module
-from claude_swap.tui.app import CswapApp
-from claude_swap.tui.codex import CodexScreen
-from claude_swap.tui.dashboard import DashboardScreen
-from claude_swap.tui.providers import ProviderScreen
-from claude_swap.tui.widgets import AccountsPanel, MenuItem
+from agents_switcher import cli, tui
+from agents_switcher.codex import cli as codex_cli
+from agents_switcher.codex import autoswitch as codex_auto
+from agents_switcher.codex.switcher import SwitchResult
+from agents_switcher.tui import app as app_module
+from agents_switcher.tui import codex as codex_module
+from agents_switcher.tui.app import CswapApp
+from agents_switcher.tui.codex import CodexScreen
+from agents_switcher.tui.dashboard import DashboardScreen
+from agents_switcher.tui.providers import ProviderScreen
+from agents_switcher.tui.widgets import AccountsPanel, MenuItem
 from tests.test_codex_tui import StubCodexSwitcher, account, healthy, on_credits
 from tests.test_tui import FakeSwitcher, make_account, settle
 
@@ -40,7 +40,7 @@ def test_bare_explicit_claude_defaults_to_status(monkeypatch, tmp_path):
     switcher = MagicMock(backup_dir=tmp_path)
     monkeypatch.setattr(cli, "ClaudeAccountSwitcher", lambda **_: switcher)
     monkeypatch.setattr(sys, "argv", ["agent-switch", "claude"])
-    monkeypatch.setattr("claude_swap.update_check.check_for_update", lambda _: None)
+    monkeypatch.setattr("agents_switcher.update_check.check_for_update", lambda _: None)
     cli.main()
     switcher.status.assert_called_once_with(json_output=False)
 

@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from claude_swap.codex import switcher as switcher_mod
-from claude_swap.codex.store import CodexAccount
-from claude_swap.codex.switcher import CodexStatus, SwitchResult
-from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow
-from claude_swap.tui import codex as codex_screen_mod
-from claude_swap.tui.codex import CodexScreen
-from claude_swap.tui.widgets import AccountsPanel
+from agents_switcher.codex import switcher as switcher_mod
+from agents_switcher.codex.store import CodexAccount
+from agents_switcher.codex.switcher import CodexStatus, SwitchResult
+from agents_switcher.codex.usage import CodexCredits, CodexUsage, CodexWindow
+from agents_switcher.tui import codex as codex_screen_mod
+from agents_switcher.tui.codex import CodexScreen
+from agents_switcher.tui.widgets import AccountsPanel
 from tests.test_tui import FakeSwitcher, make_account, make_app, settle
 
 pytestmark = pytest.mark.asyncio
@@ -180,7 +180,7 @@ class TestSwitching:
             assert instance.switched_to == ["2"]
 
     async def test_a_running_codex_is_reported_after_the_switch(self, tmp_path, stub):
-        from claude_swap.codex.processes import CodexProcess
+        from agents_switcher.codex.processes import CodexProcess
 
         stub(
             accounts=[account("1", "one@e.com")],
@@ -205,7 +205,7 @@ class TestSwitching:
             assert "Restart Codex" in status
 
     async def test_a_refused_switch_is_shown_not_swallowed(self, tmp_path, stub):
-        from claude_swap.exceptions import SwitchError
+        from agents_switcher.exceptions import SwitchError
 
         stub(accounts=[account("1", "one@e.com")], usage={"1": healthy(10)},
              switch_error=SwitchError("already the active Codex account"))
@@ -229,7 +229,7 @@ class TestStatusPinning:
         """A switch triggers a quota reload, and the reload used to clear the
         status -- wiping the one line the user MUST read a second after it
         appeared."""
-        from claude_swap.codex.processes import CodexProcess
+        from agents_switcher.codex.processes import CodexProcess
         from textual.widgets import Static
 
         stub(
@@ -279,7 +279,7 @@ class TestDashboardEntry:
     async def test_the_menu_offers_codex(self, tmp_path):
         from textual.widgets import ListView
 
-        from claude_swap.tui.widgets import MenuItem
+        from agents_switcher.tui.widgets import MenuItem
 
         app = await open_codex(tmp_path)
         async with app.run_test(size=(100, 32)) as pilot:

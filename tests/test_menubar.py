@@ -2,7 +2,7 @@
 
 These tests never import or run rumps/AppKit. They exercise the pure helpers
 (settings store, title/label formatting, usage/snapshot adapters, log parsing)
-only — the auto-switch engine itself lives in ``claude_swap.autoswitch`` and is
+only — the auto-switch engine itself lives in ``agents_switcher.autoswitch`` and is
 tested there.
 """
 
@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap import menubar
-from claude_swap.exceptions import ClaudeSwitchError
-from claude_swap.switcher import USAGE_API_KEY
+from agents_switcher import menubar
+from agents_switcher.exceptions import ClaudeSwitchError
+from agents_switcher.switcher import USAGE_API_KEY
 
 
 # --- notification identity -----------------------------------------------------
@@ -33,8 +33,8 @@ def test_notification_identity_creates_and_preserves_info_plist(tmp_path: Path):
 
     assert result == info
     data = plistlib.loads(info.read_bytes())
-    assert data["CFBundleIdentifier"] == "com.claude-swap.menubar"
-    assert data["CFBundleName"] == "claude-swap"
+    assert data["CFBundleIdentifier"] == "io.github.jingyi-jia.agent-switch.menubar"
+    assert data["CFBundleName"] == "Agent Switch"
     assert data["ExistingKey"] == "kept"
 
 
@@ -52,8 +52,8 @@ def test_notification_identity_heals_corrupt_info_plist(tmp_path: Path):
 
     assert result == info
     data = plistlib.loads(info.read_bytes())
-    assert data["CFBundleIdentifier"] == "com.claude-swap.menubar"
-    assert data["CFBundleName"] == "claude-swap"
+    assert data["CFBundleIdentifier"] == "io.github.jingyi-jia.agent-switch.menubar"
+    assert data["CFBundleName"] == "Agent Switch"
     assert not (executable.parent / "Info.plist.tmp").exists()
 
 
@@ -548,13 +548,13 @@ def test_run_without_rumps_raises_clean_error(monkeypatch):
     """A missing menubar extra surfaces as ClaudeSwitchError, not a traceback.
 
     The module is import-safe without rumps, so the CLI's ImportError guard
-    around ``from claude_swap.menubar import run`` can never fire — the import
+    around ``from agents_switcher.menubar import run`` can never fire — the import
     failure happens inside ``run()``. Blocking the import (a ``None`` entry in
     ``sys.modules`` makes ``import rumps`` raise) checks that ``run()`` turns
     it into the error type the CLI renders with the install hint.
     """
     monkeypatch.setitem(sys.modules, "rumps", None)
-    with pytest.raises(ClaudeSwitchError, match=r"claude-swap\[menubar\]"):
+    with pytest.raises(ClaudeSwitchError, match=r"agents-switcher\[menubar\]"):
         menubar.run(switcher=None)
 
 

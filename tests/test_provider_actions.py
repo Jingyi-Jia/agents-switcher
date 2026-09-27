@@ -11,13 +11,13 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap.codex.autoswitch import Action, AutoDecision
-from claude_swap.codex.identity import CodexIdentity
-from claude_swap.codex.store import CodexAccount, CodexAccountStore
-from claude_swap.codex.switcher import CodexStatus, CodexSwitcher, SwitchResult
-from claude_swap.codex.usage import CodexCredits, CodexUsage, CodexWindow
-from claude_swap.providers import MAX_EVENTS, ProviderActionError, ProviderActions
-from claude_swap.settings import SETTING_SPECS
+from agents_switcher.codex.autoswitch import Action, AutoDecision
+from agents_switcher.codex.identity import CodexIdentity
+from agents_switcher.codex.store import CodexAccount, CodexAccountStore
+from agents_switcher.codex.switcher import CodexStatus, CodexSwitcher, SwitchResult
+from agents_switcher.codex.usage import CodexCredits, CodexUsage, CodexWindow
+from agents_switcher.providers import MAX_EVENTS, ProviderActionError, ProviderActions
+from agents_switcher.settings import SETTING_SPECS
 
 
 def quota(percent, *, credits=False):
@@ -101,7 +101,7 @@ class Claude:
 
 @pytest.fixture
 def actions(tmp_path, monkeypatch):
-    from claude_swap.codex import autoswitch
+    from agents_switcher.codex import autoswitch
 
     monkeypatch.setattr(autoswitch, "running_codex_processes", list)
     result = ProviderActions(claude=Claude(), codex=Codex(tmp_path / "codex"))
@@ -203,7 +203,7 @@ def test_codex_disable_updates_only_roster(tmp_path):
 
 
 def test_codex_add_current_refreshes_live_rotation_without_changing_slot_metadata(tmp_path, monkeypatch):
-    from claude_swap.codex import switcher as switcher_module
+    from agents_switcher.codex import switcher as switcher_module
     from tests.test_codex_switcher import auth_for, id_token
 
     store = CodexAccountStore(tmp_path / "codex")
@@ -283,7 +283,7 @@ def test_codex_dry_run_uses_real_policy_without_switch_or_cooldown(actions, monk
 
 
 def test_codex_live_preserves_running_process_guard(actions, monkeypatch):
-    from claude_swap.codex import autoswitch
+    from agents_switcher.codex import autoswitch
 
     monkeypatch.setattr(autoswitch, "running_codex_processes", lambda: [object()])
     ready = watch_event(actions.auto, monkeypatch, "notify")
@@ -304,7 +304,7 @@ def test_codex_live_switches_and_persists_existing_cooldown(actions, monkeypatch
 
 
 def test_real_claude_engine_dry_run_and_adaptive_delay(temp_home, monkeypatch):
-    from claude_swap.autoswitch import AutoSwitchEngine
+    from agents_switcher.autoswitch import AutoSwitchEngine
     from tests.test_autoswitch import EngineHarness, _entry_for, _usage
 
     harness = EngineHarness(temp_home)
@@ -333,7 +333,7 @@ def test_real_claude_engine_dry_run_and_adaptive_delay(temp_home, monkeypatch):
 
 
 def test_stop_joins_inflight_tick_before_returning(actions, monkeypatch):
-    from claude_swap.codex import autoswitch
+    from agents_switcher.codex import autoswitch
 
     entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
 

@@ -12,13 +12,13 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap.web.server import MAX_BODY_BYTES, DashboardState, serve
+from agents_switcher.web.server import MAX_BODY_BYTES, DashboardState, serve
 from tests.test_provider_actions import Claude, Codex, watch_event
 
 
 @pytest.fixture
 def web(tmp_path, monkeypatch):
-    from claude_swap.codex import autoswitch
+    from agents_switcher.codex import autoswitch
 
     monkeypatch.setattr(autoswitch, "running_codex_processes", list)
     state = DashboardState(Claude(), Codex(tmp_path / "codex"))

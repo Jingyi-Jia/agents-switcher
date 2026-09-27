@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_swap.dirlock import DirectoryLock
-from claude_swap.locking import FileLock
+from agents_switcher.dirlock import DirectoryLock
+from agents_switcher.locking import FileLock
 
 
 class TestLockIsADirectory:
@@ -80,14 +80,14 @@ class TestCrashedHolderRecovery:
     def test_recovery_fits_inside_one_default_timeout(self):
         """Staleness must sit below FileLock's default timeout, or recovering
         from a crashed holder needs a second invocation."""
-        from claude_swap import locking
+        from agents_switcher import locking
 
         assert locking._STALENESS_S < FileLock(Path("/x")).timeout
 
     def test_a_live_holder_has_refresh_margin(self):
         """Staleness must be several refresh intervals, or a merely busy holder
         gets robbed of a lock it still owns."""
-        from claude_swap import locking
+        from agents_switcher import locking
 
         assert locking._STALENESS_S >= 3 * locking._TOUCH_INTERVAL_S
 

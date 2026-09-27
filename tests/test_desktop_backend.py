@@ -17,7 +17,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from claude_swap import desktop
+from agents_switcher import desktop
 
 
 def start_message(token=None):
@@ -182,7 +182,7 @@ def test_desktop_metadata_is_not_added_to_browser_state(monkeypatch):
     state = desktop.DesktopState()
     result = state.get()
     assert result["desktop"]["providers"] == {"claude": {"installed": True}, "codex": {"installed": False}}
-    assert result["desktop"]["windowClose"] == "quit"
+    assert result["desktop"]["windowClose"] == "hide"
     assert "desktop" not in desktop.DashboardState().get()
     assert "desktop" not in state._cached
 
@@ -216,7 +216,7 @@ def test_private_pipe_helper_serves_authenticated_page_and_exits(tmp_path, shutd
     env.update({"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "XDG_DATA_HOME": str(tmp_path / "data")})
     process = subprocess.Popen([
         sys.executable, "-c",
-        "from claude_swap import desktop; "
+        "from agents_switcher import desktop; "
         "desktop._build_state = lambda state_class: state_class(); "
         "raise SystemExit(desktop.main())",
     ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -237,7 +237,7 @@ def test_private_pipe_helper_serves_authenticated_page_and_exits(tmp_path, shutd
             connection.request("GET", "/api/state", headers={"X-Auth-Token": token})
             response = connection.getresponse()
             assert response.status == 200
-            assert json.loads(response.read())["desktop"]["windowClose"] == "quit"
+            assert json.loads(response.read())["desktop"]["windowClose"] == "hide"
             connection.request("GET", "/", headers={"X-Auth-Token": token})
             response = connection.getresponse()
             assert response.status == 200

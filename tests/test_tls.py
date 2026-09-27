@@ -14,7 +14,7 @@ from unittest.mock import Mock
 import pytest
 import trustme
 
-from claude_swap import cli, tls
+from agents_switcher import cli, tls
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ import ssl
 import sys
 from types import SimpleNamespace
 
-from claude_swap.tls import use_native_tls
+from agents_switcher.tls import use_native_tls
 
 original_context = ssl.SSLContext
 if sys.argv[1] == "missing":
@@ -114,7 +114,7 @@ import ssl
 import sys
 import threading
 
-from claude_swap.tls import use_native_tls
+from agents_switcher.tls import use_native_tls
 
 mode, scenario, certificate, key, ca_certificate = sys.argv[1:]
 server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -163,7 +163,7 @@ finally:
 
 
 def test_cli_initializes_native_tls_before_provider_dispatch(monkeypatch):
-    from claude_swap.codex import cli as codex_cli
+    from agents_switcher.codex import cli as codex_cli
 
     events = []
     monkeypatch.setattr(cli, "use_native_tls", lambda: events.append("tls"))
@@ -196,7 +196,7 @@ def test_packaging_entry_dispatches_tls_only_when_explicit(monkeypatch, packagin
         smoke.assert_called_once_with()
         normal.assert_not_called()
     else:
-        normal.assert_called_once_with("claude_swap.desktop", run_name="__main__")
+        normal.assert_called_once_with("agents_switcher.desktop", run_name="__main__")
         smoke.assert_not_called()
 
 

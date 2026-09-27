@@ -422,8 +422,14 @@ an offline test mode or a substitute for a disposable test account store.
 Dashboard/TUI auto modes and threshold overrides belong to that session and are
 not saved as rules. Closing a browser tab or pausing its view does not stop the
 server or automation. Stop it in the UI or stop its server. Closing the standalone
-app's only window quits its backend and session automation; exiting the TUI does
-the same for its session. None of these stops independently launched CLI loops.
+app's window hides it; its backend and session automation keep running. Reopen it
+with **Show app** in the tray/menu bar, the macOS Dock, or by launching Agent Switch
+again. Choose **Quit Agent Switch** (Cmd+Q on macOS, Ctrl+Q on Windows/Linux) to
+stop the app and its automation; macOS also offers **Quit** when you right-click
+the Dock icon. Closing the window does not leave a minimized window in the Dock.
+Exiting the TUI stops its session automation.
+None of these stops independently launched CLI loops. The app does not keep
+automation running through logout, shutdown, or sleep.
 
 Codex auto-switch waits while Codex processes are running and never selects an
 account that needs paid billing credits. Claude API-key accounts are excluded by
@@ -447,6 +453,40 @@ payload shapes. Claude `auto --json` emits JSON events, while Codex auto emits
 decisions. For `auto --once`, exit codes are 0 for a switch decision (including
 dry-run), 1 for an error, 2 for no change, and 3 for blocked/no viable target
 (including Codex waiting for a restart). See [AGENTS.md](AGENTS.md) for source refs.
+
+### Using Agent Switch alongside upstream `cswap`
+
+The standalone app uses its own bundled backend and does not install or replace
+`cswap`. This repository's CLI command is `agent-switch`, from the
+`agents-switcher` distribution, with the Python package `agents_switcher`.
+Upstream keeps `claude_swap`: neither package provides an alias for the other.
+Agent Switch's CLI upgrade command and optional Python menu-bar service target
+only Agent Switch, not upstream's package, executable, or launchd service.
+
+If both distributions were previously installed in one Python environment using
+Agent Switch 1.2.1 or earlier, reinstall upstream after upgrading Agent Switch:
+those older releases owned overlapping module files. Separate `uv tool` or
+`pipx` environments remain a convenient way to keep dependencies independent.
+
+**The default saved Claude account store is shared, not isolated.** Account
+changes, including removal or purge, can affect both tools. Both also control
+the active login of the same Claude Code profile. Do not run upstream `cswap`
+account commands, its menu bar, or its automation against that profile while
+Agent Switch is using it. Our directory locks are not compatible with upstream
+versions that use regular-file locks; even a usage refresh can update credentials.
+Closing Agent Switch's window keeps its backend running—use **Quit Agent
+Switch** before handing that profile to another manager.
+
+The recommended setup is the Agent Switch app plus its matching `agent-switch`
+CLI, with only one automatic-switching controller active per profile. Upstream
+can remain installed but unused; no handoff wrapper or coordination service is
+required. The package rename does not move accounts, change Keychain entries,
+or make simultaneous account management safe.
+
+The optional Python menu-bar service uses
+`io.github.jingyi-jia.agent-switch.menubar`. It leaves any existing
+`com.cswap.menubar` service untouched. If an older service is already running,
+stop it through the tool that installed it before enabling another controller.
 
 ### Local data and privacy
 
@@ -472,7 +512,7 @@ safety rules, and validation requirements. Read
 [desktop/README.md](desktop/README.md) for native packaging and signing.
 
 1. **Use the right names.** The command is `agent-switch`, the distribution is
-   `agents-switcher`, and the import package is `claude_swap`. Do not restore
+   `agents-switcher`, and the import package is `agents_switcher`. Do not restore
    upstream's `cswap` entry point or rename persisted account directories.
 2. **Keep provider boundaries explicit.** Claude Code logins, Codex accounts, and
    Claude Desktop profiles are distinct. Analytics do not authorize switching;

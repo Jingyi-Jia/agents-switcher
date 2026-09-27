@@ -1,4 +1,4 @@
-"""Tests for the launchd LaunchAgent that keeps ``cswap menubar`` alive.
+"""Tests for the launchd LaunchAgent that keeps ``agent-switch menubar`` alive.
 
 ``subprocess.run`` is patched throughout so the real ``launchctl`` is never
 driven: these assert the argv this module *shapes* and how it reads launchctl's
@@ -18,10 +18,10 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap import launch_agent
-from claude_swap.exceptions import ClaudeSwitchError
+from agents_switcher import launch_agent
+from agents_switcher.exceptions import ClaudeSwitchError
 
-PROGRAM = ["/Users/x/.local/bin/cswap"]
+PROGRAM = ["/Users/x/.local/bin/agent-switch"]
 UID = 501
 
 
@@ -94,7 +94,7 @@ def test_build_plist_path_env_leads_with_the_programs_own_directory(tmp_path):
     reason="asserts POSIX path shapes; the agent only ever runs on macOS",
 )
 def test_build_plist_path_env_includes_the_user_bin_dir(tmp_path):
-    # A uv tool install puts cswap's siblings in ~/.local/bin; launchd's own
+    # A uv tool install puts agent-switch's siblings in ~/.local/bin; launchd's own
     # default PATH does not include it.
     parsed = plistlib.loads(launch_agent.build_plist(PROGRAM, home=tmp_path))
     entries = parsed["EnvironmentVariables"]["PATH"].split(":")
@@ -111,25 +111,25 @@ def test_build_plist_path_env_keeps_the_launchd_defaults(tmp_path):
 
 
 def test_resolve_program_prefers_the_console_script(tmp_path):
-    script = tmp_path / "cswap"
+    script = tmp_path / "agent-switch"
     script.write_text("#!/bin/sh\n")
     with patch.object(launch_agent.sys, "argv", [str(script)]):
         assert launch_agent.resolve_program() == [str(script)]
 
 
 def test_resolve_program_keeps_the_symlink_and_does_not_follow_it(tmp_path):
-    """`uv tool install` links ~/.local/bin/cswap into the tool's virtualenv.
+    """`uv tool install` links ~/.local/bin/agent-switch into the tool's virtualenv.
 
     Resolving that symlink would pin the virtualenv-internal path, which a
     reinstall recreates — exactly the path this module exists to avoid.
     """
     venv_bin = tmp_path / "venv" / "bin"
     venv_bin.mkdir(parents=True)
-    real = venv_bin / "cswap"
+    real = venv_bin / "agent-switch"
     real.write_text("#!/bin/sh\n")
     link_dir = tmp_path / "local" / "bin"
     link_dir.mkdir(parents=True)
-    link = link_dir / "cswap"
+    link = link_dir / "agent-switch"
     link.symlink_to(real)
 
     with patch.object(launch_agent.sys, "argv", [str(link)]):
@@ -137,10 +137,10 @@ def test_resolve_program_keeps_the_symlink_and_does_not_follow_it(tmp_path):
 
 
 def test_resolve_program_makes_a_relative_argv0_absolute(tmp_path, monkeypatch):
-    script = tmp_path / "cswap"
+    script = tmp_path / "agent-switch"
     script.write_text("#!/bin/sh\n")
     monkeypatch.chdir(tmp_path)
-    with patch.object(launch_agent.sys, "argv", ["./cswap"]):
+    with patch.object(launch_agent.sys, "argv", ["./agent-switch"]):
         result = launch_agent.resolve_program()
     assert result == [str(script)]
     assert Path(result[0]).is_absolute()
@@ -149,15 +149,15 @@ def test_resolve_program_makes_a_relative_argv0_absolute(tmp_path, monkeypatch):
 def test_resolve_program_falls_back_to_the_interpreter_without_a_script(tmp_path):
     with patch.object(launch_agent.sys, "argv", [str(tmp_path / "gone")]):
         with patch.object(launch_agent.shutil, "which", return_value=None):
-            assert launch_agent.resolve_program() == [sys.executable, "-m", "claude_swap"]
+            assert launch_agent.resolve_program() == [sys.executable, "-m", "agents_switcher"]
 
 
-def test_resolve_program_ignores_an_argv0_that_is_not_cswap(tmp_path):
+def test_resolve_program_ignores_an_argv0_that_is_not_agent_switch(tmp_path):
     # Running through pytest, argv[0] is the test runner — not a thing launchd
     # should be pointed at.
     other = tmp_path / "pytest"
     other.write_text("#!/bin/sh\n")
-    found = tmp_path / "cswap"
+    found = tmp_path / "agent-switch"
     found.write_text("#!/bin/sh\n")
     with patch.object(launch_agent.sys, "argv", [str(other)]):
         with patch.object(launch_agent.shutil, "which", return_value=str(found)):
@@ -363,7 +363,7 @@ def test_status_reads_the_jobs_own_state_not_a_nested_blocks(tmp_path):
     reported the endpoint's state as the service's.
     """
     printed = (
-        "gui/501/com.cswap.menubar = {\n"
+        "gui/501/com.agent-switch.menubar = {\n"
         "\tactive count = 1\n"
         "\tstate = running\n"
         "\tpid = 25026\n"

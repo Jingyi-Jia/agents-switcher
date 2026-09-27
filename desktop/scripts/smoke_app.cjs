@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { setTimeout: delay } = require('node:timers/promises');
 
@@ -31,30 +32,140 @@ function validateRenderer(result, version, distribution) {
   if (!result || result.version !== version || result.mode !== (manual ? 'manual' : 'unsupported')
     || result.status !== (manual ? 'idle' : 'unsupported') || result.supported !== manual
     || result.checkEnabled !== manual || result.updatesVisible !== true || result.settingsVisible !== true
-    || result.executableActionsHidden !== true || result.releaseHidden !== true || result.accountsIsolated !== true) {
+    || result.executableActionsHidden !== true || result.releaseHidden !== true || result.accountsIsolated !== true
+    || result.windowClose !== 'hide') {
     throw new SmokeError('Packaged renderer or account isolation did not match the build mode');
   }
 }
 
-function targets(port) {
-  return new Promise((resolve, reject) => {
-    const request = http.get({ hostname: '127.0.0.1', port, path: '/json/list', timeout: 3000 }, response => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', chunk => {
-        body += chunk;
-        if (body.length > 65536) request.destroy(new SmokeError('Debug target response exceeded its bound'));
-      });
-      response.on('error', reject);
-      response.on('end', () => {
-        try {
-          if (response.statusCode !== 200) throw new SmokeError();
-          resolve(JSON.parse(body));
-        } catch { reject(new SmokeError('Debug target response was invalid')); }
-      });
+async function verifyWindowState(command, readState, visibility) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const result = await command('Runtime.evaluate', { expression:
+      '({visibility: document.visibilityState, sameDocument: window.__agentSwitchSmoke === true})', returnByValue: true });
+    const renderer = result.result?.value;
+    if (result.exceptionDetails || !renderer || renderer.sameDocument !== true) {
+      throw new SmokeError('Window lifecycle did not retain the isolated renderer, backend and automation');
+    }
+    if (renderer.visibility === visibility) {
+      const state = await readState();
+      if (state?.desktop?.windowClose !== 'hide'
+        || !['claude', 'codex'].every(provider => state[provider]?.available === true
+          && state[provider]?.accounts?.length === 0 && state[provider]?.auto?.mode === 'dry-run')) {
+        throw new SmokeError('Window lifecycle did not retain the isolated renderer, backend and automation');
+      }
+      return;
+    }
+    await delay(250);
+  }
+  throw new SmokeError('Window did not reach the expected visibility');
+}
+
+async function quitApplication(socket, exited, backendPort) {
+  socket.send(JSON.stringify({ id: 0, method: 'Browser.close', params: {} }));
+  const exit = await Promise.race([exited, delay(15000, null, { ref: false })]);
+  if (!exit || exit.code !== 0 || exit.signal !== null) throw new SmokeError('Packaged app did not quit cleanly');
+  const stopped = await new Promise(resolve => {
+    const connection = net.createConnection({ host: '127.0.0.1', port: backendPort });
+    connection.setTimeout(3000);
+    connection.once('connect', () => { connection.destroy(); resolve(false); });
+    connection.once('timeout', () => { connection.destroy(); resolve(false); });
+    connection.once('error', error => resolve(error.code === 'ECONNREFUSED'));
+  });
+  if (!stopped) throw new SmokeError('The local service remained reachable after explicit quit');
+}
+
+async function closeNativeWindow(command) {
+  const result = await command('Runtime.evaluate', { expression: `(() => {
+    const windows = process.mainModule.require('electron').BrowserWindow.getAllWindows();
+    if (windows.length !== 1) return false;
+    windows[0].close();
+    return !windows[0].isDestroyed() && !windows[0].isVisible();
+  })()`, returnByValue: true });
+  if (result.exceptionDetails || result.result?.value !== true) throw new SmokeError('Native window close did not hide the existing window');
+}
+
+async function connectDebugger(address) {
+  const endpoint = new URL(address);
+  if (endpoint.protocol !== 'ws:' || endpoint.hostname !== '127.0.0.1' || endpoint.username || endpoint.password) {
+    throw new SmokeError('Debug endpoint was not local');
+  }
+  const socket = new WebSocket(endpoint);
+  const pending = new Map();
+  let sequence = 0;
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new SmokeError('Debug connection timed out')), 5000);
+      socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+      socket.addEventListener('error', () => { clearTimeout(timer); reject(new SmokeError('Debug connection failed')); }, { once: true });
     });
-    request.on('timeout', () => request.destroy(new SmokeError('Debug target request timed out')));
-    request.on('error', reject);
+  } catch (error) {
+    socket.close();
+    throw error;
+  }
+  socket.addEventListener('message', event => {
+    let message;
+    try { message = JSON.parse(event.data); } catch { socket.close(); return; }
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    clearTimeout(request.timer);
+    if (message.error) request.reject(new SmokeError('Packaged app debug command failed'));
+    else request.resolve(message.result);
+  });
+  socket.addEventListener('close', () => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(new SmokeError('Debug connection closed'));
+    }
+    pending.clear();
+  });
+  return {
+    socket,
+    command: (method, params = {}) => new Promise((resolve, reject) => {
+      const id = ++sequence;
+      const timer = setTimeout(() => { pending.delete(id); reject(new SmokeError('Packaged app debug command timed out')); }, 30000);
+      pending.set(id, { resolve, reject, timer });
+      socket.send(JSON.stringify({ id, method, params }));
+    }),
+  };
+}
+
+function readJSON(port, pathname, headers = {}) {
+  const backend = pathname === '/api/state';
+  const timeoutMs = backend ? 30000 : 3000;
+  const phase = backend ? 'Backend state collection' : 'Debugger discovery';
+  return new Promise((resolve, reject) => {
+    let request, settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        request?.destroy();
+        reject(new SmokeError(`${phase} ${error}`));
+      } else resolve(value);
+    };
+    const timer = setTimeout(() => finish(`request timed out after ${timeoutMs / 1000} seconds`), timeoutMs);
+    try {
+      request = http.get({ hostname: '127.0.0.1', port, path: pathname, headers }, response => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => {
+          body += chunk;
+          if (body.length > 65536) finish('response exceeded its bound');
+        });
+        response.on('error', () => finish('response failed'));
+        response.on('aborted', () => finish('response was interrupted'));
+        response.on('end', () => {
+          try {
+            if (response.statusCode !== 200) throw new SmokeError();
+            finish(null, JSON.parse(body));
+          } catch { finish('response was invalid'); }
+        });
+      });
+      request.on('error', () => finish('request failed'));
+    } catch { finish('request failed'); }
   });
 }
 
@@ -70,13 +181,20 @@ async function exercise({ platform, arch, distribution, disposable, screenshot }
     win: ['win-unpacked', 'Agent Switch.exe'], linux: ['linux-unpacked', 'agent-switch-desktop'],
   }[platform]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-switch-app-smoke-'));
-  let child, socket;
-  const pending = new Map();
-  let sequence = 0;
+  let child, second, renderer, mainDebugger;
   try {
     const profile = path.join(root, 'electron');
-    child = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0'], {
-      cwd: root, env: isolatedEnvironment(root), stdio: 'ignore', shell: false,
+    const env = isolatedEnvironment(root);
+    child = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--inspect=127.0.0.1:0'], {
+      cwd: root, env, stdio: ['ignore', 'ignore', 'pipe'], shell: false,
+    });
+    let inspectorAddress, diagnostic = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => {
+      if (inspectorAddress) return;
+      diagnostic = (diagnostic + chunk).slice(-8192);
+      inspectorAddress = diagnostic.match(/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[a-f0-9-]+)/)?.[1];
+      if (inspectorAddress) diagnostic = '';
     });
     let spawnFailed = false;
     child.on('error', () => { spawnFailed = true; });
@@ -88,46 +206,17 @@ async function exercise({ platform, arch, distribution, disposable, screenshot }
       try {
         const port = Number(fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
         if (Number.isInteger(port) && port > 0 && port < 65536) {
-          target = (await targets(port)).find(item => item.type === 'page' && item.url.startsWith('http://127.0.0.1:'));
-          if (target) break;
+          target = (await readJSON(port, '/json/list')).find(item => item.type === 'page' && item.url.startsWith('http://127.0.0.1:'));
+          if (target && inspectorAddress) break;
         }
       } catch {}
       await delay(250);
     }
-    if (!target) throw new SmokeError('Packaged app did not expose its local renderer in time');
-    const endpoint = new URL(target.webSocketDebuggerUrl);
-    if (endpoint.protocol !== 'ws:' || endpoint.hostname !== '127.0.0.1' || endpoint.username || endpoint.password) {
-      throw new SmokeError('Debug endpoint was not local');
-    }
-    socket = new WebSocket(endpoint);
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new SmokeError('Debug connection timed out')), 5000);
-      socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
-      socket.addEventListener('error', () => { clearTimeout(timer); reject(new SmokeError('Debug connection failed')); }, { once: true });
-    });
-    socket.addEventListener('message', event => {
-      let message;
-      try { message = JSON.parse(event.data); } catch { socket.close(); return; }
-      const request = pending.get(message.id);
-      if (!request) return;
-      pending.delete(message.id);
-      clearTimeout(request.timer);
-      if (message.error) request.reject(new SmokeError('Packaged renderer command failed'));
-      else request.resolve(message.result);
-    });
-    socket.addEventListener('close', () => {
-      for (const request of pending.values()) {
-        clearTimeout(request.timer);
-        request.reject(new SmokeError('Debug connection closed'));
-      }
-      pending.clear();
-    });
-    const command = (method, params = {}) => new Promise((resolve, reject) => {
-      const id = ++sequence;
-      const timer = setTimeout(() => { pending.delete(id); reject(new SmokeError('Packaged renderer command timed out')); }, 30000);
-      pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ id, method, params }));
-    });
+    if (!target || !inspectorAddress) throw new SmokeError('Packaged app did not expose its local debuggers in time');
+    const address = new URL(target.url);
+    const readState = () => readJSON(Number(address.port), '/api/state', { 'X-Auth-Token': address.searchParams.get('token') });
+    renderer = await connectDebugger(target.webSocketDebuggerUrl);
+    const { command } = renderer;
     let ready = false;
     while (Date.now() < deadline) {
       const result = await command('Runtime.evaluate', { expression: "Boolean(window.agentSwitchUpdater && document.getElementById('update-kind')?.textContent)", returnByValue: true });
@@ -141,6 +230,7 @@ async function exercise({ platform, arch, distribution, disposable, screenshot }
       const response = await fetch('/api/state', {headers: {'X-Auth-Token': new URL(location.href).searchParams.get('token')}});
       const accounts = await response.json();
       return {version: state.currentVersion, mode: state.mode, status: state.status, supported: state.supported,
+        windowClose: accounts.desktop?.windowClose,
         checkEnabled: !document.getElementById('update-check').disabled,
         settingsVisible: !document.getElementById('view-settings').hidden,
         updatesVisible: !document.getElementById('app-updates').hidden,
@@ -150,22 +240,47 @@ async function exercise({ platform, arch, distribution, disposable, screenshot }
     })()`, awaitPromise: true, returnByValue: true });
     if (result.exceptionDetails) throw new SmokeError('Packaged renderer evaluation failed');
     validateRenderer(result.result?.value, require('../package.json').version, distribution);
+    const automation = await command('Runtime.evaluate', { expression: `(async () => {
+      const headers = {'X-Auth-Token': new URL(location.href).searchParams.get('token'), 'Content-Type': 'application/json'};
+      for (const provider of ['claude', 'codex']) {
+        const response = await fetch('/api/auto', {method: 'POST', headers, body: JSON.stringify({provider, mode: 'dry-run'})});
+        if (!response.ok || (await response.json()).ok !== true) return false;
+      }
+      window.__agentSwitchSmoke = true;
+      return true;
+    })()`, awaitPromise: true, returnByValue: true });
+    if (automation.exceptionDetails || automation.result?.value !== true) throw new SmokeError('Isolated automation did not start');
+    await verifyWindowState(command, readState, 'visible');
+    mainDebugger = await connectDebugger(inspectorAddress);
+    await closeNativeWindow(mainDebugger.command);
+    mainDebugger.socket.close();
+    await verifyWindowState(command, readState, 'hidden');
+    second = spawn(executable, [`--user-data-dir=${profile}`], { cwd: root, env, stdio: 'ignore', shell: false });
+    const secondExit = await Promise.race([
+      new Promise((resolve, reject) => {
+        second.once('error', () => reject(new SmokeError('Second app launch failed')));
+        second.once('exit', (code, signal) => resolve({ code, signal }));
+      }),
+      delay(10000, null, { ref: false }),
+    ]);
+    if (!secondExit || secondExit.code !== 0 || secondExit.signal !== null) throw new SmokeError('Second launch did not return to the running app');
+    await verifyWindowState(command, readState, 'visible');
     if (screenshot) {
       const image = await command('Page.captureScreenshot', { format: 'png' });
       fs.mkdirSync(path.dirname(path.resolve(screenshot)), { recursive: true });
       fs.writeFileSync(screenshot, Buffer.from(image.data, 'base64'));
     }
-    await command('Runtime.evaluate', { expression: 'setTimeout(() => window.close(), 100); true', returnByValue: true });
-    const exit = await Promise.race([exited, delay(45000, null, { ref: false })]);
-    if (!exit || exit.code !== 0 || exit.signal !== null) throw new SmokeError('Packaged app did not quit cleanly');
-    console.log(`Packaged ${platform}-${arch} app smoke passed (${distribution}; isolated accounts, native bridge, renderer, normal quit)`);
+    await quitApplication(renderer.socket, exited, Number(address.port));
+    console.log(`Packaged ${platform}-${arch} app smoke passed (${distribution}; isolated accounts, native bridge, renderer, close hides, second launch reopens, automation retained, explicit quit stops backend)`);
   } finally {
-    for (const request of pending.values()) clearTimeout(request.timer);
-    socket?.close();
-    if (child?.pid && child.exitCode === null && child.signalCode === null) {
-      child.kill();
-      for (let i = 0; i < 40 && child.exitCode === null && child.signalCode === null; i += 1) await delay(250);
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    mainDebugger?.socket.close();
+    renderer?.socket.close();
+    for (const process of [second, child]) {
+      if (process?.pid && process.exitCode === null && process.signalCode === null) {
+        process.kill();
+        for (let i = 0; i < 40 && process.exitCode === null && process.signalCode === null; i += 1) await delay(250);
+        if (process.exitCode === null && process.signalCode === null) process.kill('SIGKILL');
+      }
     }
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
@@ -181,4 +296,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { isolatedEnvironment, validateRenderer, exercise };
+module.exports = { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, quitApplication, readJSON, exercise };

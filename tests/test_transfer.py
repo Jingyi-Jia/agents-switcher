@@ -12,12 +12,12 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_swap.exceptions import TransferError
-from claude_swap.models import Platform
-from claude_swap.oauth import credential_fingerprint
-from claude_swap.switcher import ClaudeAccountSwitcher
-from claude_swap.transfer import export_accounts, import_accounts
-from claude_swap.usage_store import FetchRecord
+from agents_switcher.exceptions import TransferError
+from agents_switcher.models import Platform
+from agents_switcher.oauth import credential_fingerprint
+from agents_switcher.switcher import ClaudeAccountSwitcher
+from agents_switcher.transfer import export_accounts, import_accounts
+from agents_switcher.usage_store import FetchRecord
 
 
 # ---------------------------------------------------------------------------
@@ -1361,7 +1361,7 @@ class TestExportSkipsBrokenSlots:
         _seed_account(s, 2, "bob@example.com")
         self._break_credentials(s, 1, "alice@example.com")
 
-        from claude_swap.exceptions import CredentialReadError
+        from agents_switcher.exceptions import CredentialReadError
 
         with pytest.raises(CredentialReadError, match="no backup credentials"):
             export_accounts(
@@ -1376,7 +1376,7 @@ class TestExportSkipsBrokenSlots:
         _seed_account(s, 2, "bob@example.com")
         self._break_config(s, 1, "alice@example.com")
 
-        from claude_swap.exceptions import ConfigError
+        from agents_switcher.exceptions import ConfigError
 
         with pytest.raises(ConfigError, match="no backup config"):
             export_accounts(
@@ -1455,7 +1455,7 @@ class TestImportSessionInvalidation:
     def test_force_overwrite_invalidates_session_credentials(
         self, temp_home: Path, capsys
     ):
-        from claude_swap.session import session_dir_for
+        from agents_switcher.session import session_dir_for
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 1, "alice@example.com", "org-a")
@@ -1478,7 +1478,7 @@ class TestImportSessionInvalidation:
     ):
         import os as _os
 
-        from claude_swap.session import session_dir_for
+        from agents_switcher.session import session_dir_for
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 1, "alice@example.com", "org-a")
@@ -1652,7 +1652,7 @@ class TestImportClearsDeadTokenQuarantine:
         a plain import then replaces a healthy slot's credential, which is the
         whole reason `--force` exists.
         """
-        from claude_swap import oauth
+        from agents_switcher import oauth
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 2, "bob@example.com")
@@ -1736,7 +1736,7 @@ class TestImportClearsDeadTokenQuarantine:
         reads it as healthy and refuses to replace it — and `cswap import` is
         exactly what the "re-login needed" message tells the user to run.
         """
-        from claude_swap import oauth
+        from agents_switcher import oauth
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 2, "bob@example.com")
@@ -1855,7 +1855,7 @@ class TestImportClearsDeadTokenQuarantine:
         keeps its own credential copy until restarted via `cswap run`."""
         import os as _os
 
-        from claude_swap.session import session_dir_for
+        from agents_switcher.session import session_dir_for
 
         s = _linux_switcher(temp_home)
         _seed_account(s, 2, "bob@example.com")
