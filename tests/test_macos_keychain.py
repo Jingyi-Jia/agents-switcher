@@ -9,7 +9,9 @@ function bodies run against a fake process.)
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -204,8 +206,12 @@ def test_keychain_account_name_no_user_env_avoids_legacy_default(monkeypatch):
     # Claude Code's OS-username on headless hosts ($USER unset). The shared helper
     # must fall back to the OS username / "claude-code-user", never "user".
     monkeypatch.delenv("USER", raising=False)
+    pwd = MagicMock()
+    pwd.getpwuid.return_value.pw_name = "headless-operator"
+    monkeypatch.setitem(sys.modules, "pwd", pwd)
+    monkeypatch.setattr(os, "geteuid", lambda: 123, raising=False)
     name = macos_keychain.keychain_account_name()
-    assert name and name != "user"
+    assert name == "headless-operator"
 
 
 # The real-Keychain round-trip test lives in test_macos_keychain_contract.py,

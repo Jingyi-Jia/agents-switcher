@@ -8,11 +8,8 @@ from pathlib import Path
 class _LazyDirRotatingFileHandler(RotatingFileHandler):
     """RotatingFileHandler that creates its parent dir on first emit.
 
-    Keeps the backup root from being materialized just because the switcher
-    was instantiated. Necessary so a no-op run (e.g. ``cswap --status`` with
-    no managed accounts) doesn't lay down ``cache/`` or log files inside the
-    XDG path, which would later trip the legacy → XDG migration collision
-    check if a legacy directory appeared between runs.
+    Keeps the data root from being materialized just because the switcher
+    was instantiated.
     """
 
     def _open(self):  # type: ignore[override]
@@ -33,7 +30,7 @@ def setup_logging(log_dir: Path, debug: bool = False) -> logging.Logger:
     Returns:
         Configured logger instance.
     """
-    logger = logging.getLogger("claude-swap")
+    logger = logging.getLogger("agents-switcher")
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
     # Clear any existing handlers
@@ -41,7 +38,7 @@ def setup_logging(log_dir: Path, debug: bool = False) -> logging.Logger:
 
     # File handler - opens lazily so the dir is only created when something
     # is actually logged.
-    log_file = log_dir / "claude-swap.log"
+    log_file = log_dir / "agents-switcher.log"
     file_handler = _LazyDirRotatingFileHandler(
         log_file,
         maxBytes=1024 * 1024,  # 1MB

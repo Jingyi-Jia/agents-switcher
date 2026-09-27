@@ -42,7 +42,7 @@ from agents_switcher.paths import (
     get_global_config_path,
 )
 
-_logger = logging.getLogger("claude-swap")
+_logger = logging.getLogger("agents-switcher")
 
 
 def _active_profile_is_default() -> bool:
@@ -107,10 +107,7 @@ def _active_oauth_keychain_services() -> list[str]:
     return services
 
 
-# Service name for per-account backup credentials now managed via the ``security``
-# CLI on macOS. Deliberately distinct from KEYRING_SERVICE so old keyring items and
-# new security items coexist during migration (safe write → verify → delete).
-SECURITY_SERVICE = "claude-swap"
+SECURITY_SERVICE = "agents-switcher"
 
 # Service name of Claude Code's *active* OAuth credential in the macOS Keychain
 # (read by Claude Code itself; we read/write it when switching accounts).

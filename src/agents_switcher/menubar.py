@@ -77,7 +77,7 @@ def ensure_notification_identity(
             tmp.write_bytes(plistlib.dumps(data))
             os.replace(tmp, path)
     except (OSError, plistlib.InvalidFileException, ValueError) as exc:
-        logging.getLogger("claude-swap").warning(
+        logging.getLogger("agents-switcher").warning(
             "Could not prepare menu-bar notification identity: %s", exc
         )
         return None
@@ -555,7 +555,7 @@ def run(switcher) -> int:
     from agents_switcher.snapshot_source import SnapshotSource
 
     settings_path = switcher.backup_dir / "menubar_settings.json"
-    log_path = switcher.backup_dir / "claude-swap.log"
+    log_path = switcher.backup_dir / "agents-switcher.log"
 
     class MenuBarApp(rumps.App):
         def __init__(self):

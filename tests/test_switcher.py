@@ -1831,7 +1831,7 @@ class TestListAccountsUsage:
         )
         with patch.object(
             switcher._usage_store, "set_poll_plan", side_effect=OSError("disk full")
-        ), caplog.at_level(logging.WARNING, logger="claude-swap"):
+        ), caplog.at_level(logging.WARNING, logger="agents-switcher"):
             switcher._replan_new_active("1", "a@x.com", "")
         assert any(
             "switch itself succeeded" in r.getMessage() for r in caplog.records
@@ -2720,7 +2720,7 @@ class TestActiveAccountRefresh:
             "organizationUuid": None,
         }
 
-        with caplog.at_level(logging.WARNING, logger="claude-swap"):
+        with caplog.at_level(logging.WARNING, logger="agents-switcher"):
             first, write_backup, mock_probe = self._fresh_drift_pass(
                 switcher, foreign
             )
@@ -4993,18 +4993,9 @@ class TestAddAccountSlot:
 
 
 class TestPurgeLegacyCleanup:
-    """``purge`` must remove a stale legacy directory if it ever reappears.
-
-    Migration normally consumes the legacy path on init, but a partial
-    pre-migration state or external recreation could leave it behind.
-    Purge is the user's last-resort "remove everything" hammer, so it must
-    cover that case explicitly.
-    """
+    """Purge owns only the independent store, including when legacy data exists."""
 
     def _ensure_linux_layout(self, monkeypatch):
-        # Tests must observe the post-migration two-path world. On macOS in
-        # CI the backup root and the legacy root are the same directory, so
-        # there's nothing distinct to clean — pin to LINUX semantics.
         monkeypatch.setattr(Platform, "detect", staticmethod(lambda: Platform.LINUX))
 
     def _make_switcher_then_recreate_legacy(
@@ -5031,19 +5022,19 @@ class TestPurgeLegacyCleanup:
         legacy.mkdir(parents=True, exist_ok=True)
         return switcher, backup_dir, legacy
 
-    def test_purge_removes_stale_legacy_directory(
+    def test_purge_preserves_legacy_directory(
         self, temp_home: Path, monkeypatch: pytest.MonkeyPatch
     ):
         switcher, backup_dir, legacy = self._make_switcher_then_recreate_legacy(monkeypatch)
-        (legacy / "ghost.txt").write_text("should be removed")
+        (legacy / "ghost.txt").write_text("belongs to upstream")
 
         with patch("builtins.input", return_value="y"):
             switcher.purge()
 
-        assert not legacy.exists()
+        assert (legacy / "ghost.txt").read_text() == "belongs to upstream"
         assert not backup_dir.exists()
 
-    def test_purge_prompt_lists_legacy_when_present(
+    def test_purge_prompt_excludes_legacy_when_present(
         self, temp_home: Path, monkeypatch: pytest.MonkeyPatch, capsys
     ):
         switcher, backup_dir, legacy = self._make_switcher_then_recreate_legacy(monkeypatch)
@@ -5053,7 +5044,7 @@ class TestPurgeLegacyCleanup:
 
         out = capsys.readouterr().out
         assert str(backup_dir) in out
-        assert str(legacy) in out
+        assert str(legacy) not in out
 
     def test_purge_prompt_omits_legacy_when_absent(
         self, temp_home: Path, monkeypatch: pytest.MonkeyPatch, capsys
@@ -5344,8 +5335,7 @@ class TestPurge:
     """Tests for purge cleanup."""
 
     def test_purge_removes_legacy_none_keychain_entry(self, temp_home):
-        """Purge should clean account-None-* entries from older buggy runs — from
-        the new security service and best-effort from the legacy keyring."""
+        """Purge cleans only Agent Switch's own Keychain service."""
         switcher = ClaudeAccountSwitcher()
         switcher.platform = Platform.MACOS
         switcher._setup_directories()
@@ -5370,16 +5360,11 @@ class TestPurge:
              patch.dict(sys.modules, {"keyring": mock_keyring}):
             switcher.purge()
 
-        # New security service: account + legacy account-None both cleaned.
         mock_kc.delete_password.assert_has_calls([
-            call("claude-swap", "account-1-user@example.com"),
-            call("claude-swap", "account-None-user@example.com"),
+            call("agents-switcher", "account-1-user@example.com"),
+            call("agents-switcher", "account-None-user@example.com"),
         ])
-        # Best-effort legacy keyring cleanup of the old claude-code service.
-        mock_keyring.delete_password.assert_has_calls([
-            call("claude-code", "account-1-user@example.com"),
-            call("claude-code", "account-None-user@example.com"),
-        ])
+        mock_keyring.delete_password.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -6259,6 +6244,10 @@ class TestMacosKeychainFallback:
         self, temp_home: Path, monkeypatch, block_real_keychain
     ):
         monkeypatch.delenv("USER", raising=False)
+        pwd = MagicMock()
+        pwd.getpwuid.return_value.pw_name = "headless-operator"
+        monkeypatch.setitem(sys.modules, "pwd", pwd)
+        monkeypatch.setattr(os, "geteuid", lambda: 123, raising=False)
         s = self._macos_switcher()
         s._write_credentials('{"x":1}')
         acct = macos_keychain.keychain_account_name()
@@ -7752,7 +7741,7 @@ class TestStashAndRetentionStore:
         caplog.clear()
         enc.chmod(0o000)
         try:
-            with caplog.at_level(logging.WARNING, logger="claude-swap"):
+            with caplog.at_level(logging.WARNING, logger="agents-switcher"):
                 store._retain_previous_backup("1", "a@b.c", "gen-2")
         finally:
             enc.chmod(0o600)
@@ -11448,7 +11437,7 @@ class TestGateUltraReviewFixes:
         try:
             for d in chmodded:
                 d.chmod(0o500)
-            with caplog.at_level(logging.WARNING, logger="claude-swap"):
+            with caplog.at_level(logging.WARNING, logger="agents-switcher"):
                 s._write_account_credentials("1", "test@example.com", self._NEW)
         finally:
             for d in reversed(chmodded):

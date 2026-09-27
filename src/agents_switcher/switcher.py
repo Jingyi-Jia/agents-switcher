@@ -80,8 +80,6 @@ from agents_switcher.paths import (
     get_credentials_path,
     get_default_claude_config_home,
     get_global_config_path,
-    get_legacy_backup_root,
-    migrate_legacy_backup_dir,
 )
 from agents_switcher.process_detection import get_running_instances
 from agents_switcher import poll_policy
@@ -92,11 +90,6 @@ from agents_switcher.usage_store import (
     UsageStore,
     with_sentinel,
 )
-
-# Service name under which the legacy ``keyring`` backend stored per-account
-# backup credentials on macOS (kept for the one-time keyring → security migration
-# and for the Windows Credential Manager migration).
-KEYRING_SERVICE = "claude-code"
 
 # SECURITY_SERVICE and CLAUDE_CODE_KEYCHAIN_SERVICE now live in credentials.py
 # (storage concerns); re-exported above for migrations.py and the test suite.
@@ -281,29 +274,6 @@ def _same_directory(left: Path, right: Path) -> bool:
         return left == right
 
 
-def _sweep_legacy_keyring(usernames: list[str], removed_items: list[str]) -> None:
-    """Best-effort purge of legacy ``KEYRING_SERVICE`` entries via ``keyring``.
-
-    Used only during ``purge()`` to mop up entries a never-completed
-    keyring → file/security migration left behind. Never raises: keyring being
-    unavailable or an entry being absent just means nothing to clean up.
-    """
-    try:
-        import keyring  # noqa: PLC0415 - legacy cleanup only
-
-        for username in usernames:
-            try:
-                keyring.delete_password(KEYRING_SERVICE, username)
-                removed_items.append(f"Legacy keyring credential: {username}")
-            except Exception:
-                pass  # Doesn't exist / other error — ignore
-    except Exception:
-        pass  # keyring unavailable — nothing to clean up
-
-
-
-
-
 class ClaudeAccountSwitcher:
     """Multi-account switcher for Claude Code."""
 
@@ -311,18 +281,6 @@ class ClaudeAccountSwitcher:
         self.home = Path.home()
         self.platform = Platform.detect()
         self.backup_dir = get_backup_root()
-
-        # Migrate legacy ~/.claude-swap-backup to the new XDG path on Linux/WSL
-        # before any logger or directory setup writes to the new location.
-        # Migration is a no-op on macOS/Windows where backup_dir already
-        # equals the legacy path. MigrationError on a genuine collision
-        # propagates as a ClaudeSwitchError and is caught by the CLI.
-        if migrate_legacy_backup_dir(self.backup_dir):
-            legacy = get_legacy_backup_root()
-            print(
-                f"claude-swap: migrated data from {legacy} to {self.backup_dir}",
-                file=sys.stderr,
-            )
 
         self.sequence_file = self.backup_dir / "sequence.json"
         self.configs_dir = self.backup_dir / "configs"
@@ -337,7 +295,6 @@ class ClaudeAccountSwitcher:
         # The credential storage layer (active + per-account backup stores, macOS
         # Keychain-vs-file routing, the per-process capability cache). Reads its
         # live config (platform, _logger, credentials_dir) back off this switcher.
-        # Constructed BEFORE run_migrations(), which performs storage ops on macOS.
         # One store per switcher: the capability cache is per-process.
         self._store = CredentialStore(self)
 
@@ -377,14 +334,6 @@ class ClaudeAccountSwitcher:
         self._probe_verdicts: dict[
             tuple[str, str, str, str, str, str], bool
         ] = {}
-
-        # Run any pending one-time data migrations (e.g. relocating Windows
-        # backup credentials out of Credential Manager into files). Imported
-        # lazily to avoid a circular import, and self-contained so it never
-        # aborts construction. No-op on fresh installs / once recorded.
-        from agents_switcher.migrations import run_migrations
-
-        run_migrations(self)
 
     def _is_running_in_container(self) -> bool:
         """Check if running inside a container."""
@@ -7288,20 +7237,8 @@ class ClaudeAccountSwitcher:
         print(dimmed(CLAUDE_SWITCH_NOTICE))
 
     def purge(self) -> None:
-        """Remove all traces of claude-swap from the system.
-
-        This removes:
-        - All stored account credentials (``.enc`` files on Linux/WSL/Windows; on
-          macOS both the Keychain items via ``security`` and any fallback ``.enc``
-          files), plus a best-effort sweep of any pre-migration keyring / Windows
-          Credential Manager entries left behind
-        - The active backup directory (XDG path on Linux/WSL, ~/.claude-swap-backup elsewhere)
-        - Any stale legacy ~/.claude-swap-backup directory left around from
-          before the XDG migration
-        """
+        """Remove Agent Switch's saved data, never upstream stores or live logins."""
         self._refuse_session_shell()
-        legacy = get_legacy_backup_root()
-        legacy_distinct = legacy != self.backup_dir
 
         # Refuse while any session-mode claude is running: purging would pull
         # its profile (and keychain entry) out from under a live process.
@@ -7341,10 +7278,8 @@ class ClaudeAccountSwitcher:
                 "them, then retry --purge."
             )
 
-        warning("This will remove ALL claude-swap data from your system:")
+        warning("This will remove ALL agents-switcher data from your system:")
         print(f"  - Backup directory: {self.backup_dir}")
-        if legacy_distinct and legacy.exists():
-            print(f"  - Legacy backup directory: {legacy}")
         if self.platform == Platform.MACOS:
             print("  - All stored account credentials (macOS Keychain and/or files)")
         else:
@@ -7392,13 +7327,6 @@ class ClaudeAccountSwitcher:
                         except Exception:
                             pass  # Ignore errors during purge
 
-                # Best-effort sweep of any pre-migration keyring / Credential
-                # Manager entries left behind by an incomplete keyring → files
-                # (Windows) or keyring → security (macOS) migration. Linux/WSL
-                # never used a keyring backend.
-                if self.platform in (Platform.MACOS, Platform.WINDOWS):
-                    _sweep_legacy_keyring(usernames, removed_items)
-
         # Session-profile keychain entries must go BEFORE the backup dir:
         # the hashed service names are derived from the dir paths and can't
         # be recomputed once the directories are deleted.
@@ -7421,20 +7349,11 @@ class ClaudeAccountSwitcher:
             shutil.rmtree(self.backup_dir)
             removed_items.append(f"Directory: {self.backup_dir}")
 
-        # Also clean a stale legacy directory if it somehow still exists
-        # (e.g. a partial pre-migration state, or files re-created after init).
-        if legacy_distinct and legacy.exists():
-            try:
-                shutil.rmtree(legacy)
-                removed_items.append(f"Legacy directory: {legacy}")
-            except OSError:
-                pass
-
         if removed_items:
             print(f"\n{accent('Removed:')}")
             for item in removed_items:
                 print(f"  {dimmed('-')} {item}")
         else:
-            print(f"\n{dimmed('No claude-swap data found to remove.')}")
+            print(f"\n{dimmed('No agents-switcher data found to remove.')}")
 
         print(f"\n{accent('Purge complete.')}")

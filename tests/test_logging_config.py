@@ -9,16 +9,12 @@ from agents_switcher.logging_config import setup_logging
 
 
 def test_setup_does_not_create_dir(tmp_path: Path):
-    """Calling setup_logging must not materialize the log directory.
-
-    The log dir lives under the cswap backup root; pre-creating it laid down
-    cache/log artifacts that later tripped the legacy → XDG migration
-    collision check (see paths.migrate_legacy_backup_dir).
-    """
+    """Calling setup_logging must not materialize the independent data root."""
     log_dir = tmp_path / "should-not-exist"
     logger = setup_logging(log_dir)
     try:
         assert not log_dir.exists()
+        assert logger.name == "agents-switcher"
         # File handler is registered but stays unopened until first emit.
         assert logger.handlers
     finally:
@@ -36,7 +32,8 @@ def test_dir_is_created_on_first_log(tmp_path: Path):
         for handler in logger.handlers:
             handler.flush()
         assert log_dir.is_dir()
-        assert (log_dir / "claude-swap.log").exists()
+        assert (log_dir / "agents-switcher.log").exists()
+        assert not (log_dir / "claude-swap.log").exists()
     finally:
         for handler in logger.handlers[:]:
             handler.close()
