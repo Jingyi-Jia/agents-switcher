@@ -37,9 +37,27 @@ Work developed in this repository includes:
 - **Shared safety infrastructure**, including cross-node-safe locking, serialized
   credential actions, native TLS trust, and packaged-backend checks.
 
+### Screenshots
+
+**Dark mode — accounts and quota at a glance.**
+
 ![Agent Switch dashboard with synthetic accounts and a separate Fable quota](https://api.capy.ai/pr-assets/UEoDb1vkRZ3aBJlDOseKiVqqgGHg2mevIGojk91yprU)
 
-To get started, [get the desktop app or a preview](#get-the-app), or
+**macOS in light mode — your accounts, side by side.**
+The Mac captures use anonymized emails and account labels; the second Codex
+account shows simulated quota data.
+
+![Agent Switch on macOS in light mode, showing Codex and Claude Code accounts and quota windows](assets/screenshots/macos-accounts-light.png)
+
+**Usage — daily activity, totals, and reporting coverage.**
+
+![Agent Switch on macOS in light mode, showing a Codex activity chart and daily heatmap](assets/screenshots/macos-usage-light.png)
+
+**Settings — choose your appearance and check for updates when you want.**
+
+![Agent Switch on macOS in light mode, showing appearance preferences and manual community updates](assets/screenshots/macos-settings-light.png)
+
+To get started, [get the desktop app](#get-the-app), or
 [install the CLI from source](#install-the-cli-from-source). Sign in through your
 provider first, then choose **Add existing login** in Agent Switch.
 
@@ -62,9 +80,8 @@ readout and can incur per-token charges.
 
 ### Get the app
 
-When a community release is published, use the
-[Releases page](https://github.com/jingyi-jia/agents-switcher/releases) and
-download the matching platform and architecture. The community distribution is
+Download the [latest community release](https://github.com/jingyi-jia/agents-switcher/releases/latest)
+for your platform and architecture. The community distribution is
 public without paid Apple or Windows signing credentials; a separate signed
 distribution remains a future, optional path. Draft artifacts and package
 versions are not published downloads.

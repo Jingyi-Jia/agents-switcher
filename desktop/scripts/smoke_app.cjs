@@ -85,6 +85,55 @@ async function closeNativeWindow(command) {
   if (result.exceptionDetails || result.result?.value !== true) throw new SmokeError('Native window close did not hide the existing window');
 }
 
+async function closeFullScreenWindow(command) {
+  const result = await command('Runtime.evaluate', { expression: `(async () => {
+    const windows = process.mainModule.require('electron').BrowserWindow.getAllWindows();
+    if (windows.length !== 1) return 'window-count';
+    const window = windows[0];
+    const transition = (event, action) => new Promise(resolve => {
+      const done = () => { clearTimeout(timer); resolve(true); };
+      const timer = setTimeout(() => { window.removeListener(event, done); resolve(false); }, 10000);
+      window.once(event, done);
+      action();
+    });
+    if (!await transition('enter-full-screen', () => window.setFullScreen(true))) return 'enter-timeout';
+    if (!window.isFullScreen()) return 'not-full-screen-after-entry';
+    if (!window.isVisible()) return 'not-visible-after-entry';
+    const nativeHide = window.hide;
+    let leftFullScreen = false, hiddenEarly = false;
+    const onLeave = () => { leftFullScreen = true; };
+    window.on('leave-full-screen', onLeave);
+    try {
+      const hidden = await new Promise(resolve => {
+        const timer = setTimeout(() => resolve(false), 10000);
+        window.hide = function (...args) {
+          if (!leftFullScreen) hiddenEarly = true;
+          const result = nativeHide.apply(this, args);
+          clearTimeout(timer);
+          resolve(true);
+          return result;
+        };
+        window.close();
+      });
+      if (!hidden) return 'hide-timeout';
+      if (!leftFullScreen) return 'exit-event-missing';
+      if (hiddenEarly) return 'hidden-before-exit';
+      if (window.isDestroyed()) return 'window-destroyed';
+      if (window.isFullScreen()) return 'still-full-screen';
+      if (window.isVisible()) return 'still-visible';
+      return true;
+    } finally {
+      window.hide = nativeHide;
+      window.removeListener('leave-full-screen', onLeave);
+    }
+  })()`, awaitPromise: true, returnByValue: true });
+  if (!result.exceptionDetails && result.result?.value === true) return;
+  const phases = ['window-count', 'enter-timeout', 'not-full-screen-after-entry', 'not-visible-after-entry',
+    'hide-timeout', 'exit-event-missing', 'hidden-before-exit', 'window-destroyed', 'still-full-screen', 'still-visible'];
+  const phase = !result.exceptionDetails && phases.includes(result.result?.value) ? result.result.value : 'evaluation-failed';
+  throw new SmokeError(`Native full-screen close did not leave full screen before hiding (${phase})`);
+}
+
 async function connectDebugger(address) {
   const endpoint = new URL(address);
   if (endpoint.protocol !== 'ws:' || endpoint.hostname !== '127.0.0.1' || endpoint.username || endpoint.password) {
@@ -252,26 +301,29 @@ async function exercise({ platform, arch, distribution, disposable, screenshot }
     if (automation.exceptionDetails || automation.result?.value !== true) throw new SmokeError('Isolated automation did not start');
     await verifyWindowState(command, readState, 'visible');
     mainDebugger = await connectDebugger(inspectorAddress);
-    await closeNativeWindow(mainDebugger.command);
+    for (const fullScreen of platform === 'mac' ? [false, true] : [false]) {
+      if (fullScreen) await closeFullScreenWindow(mainDebugger.command);
+      else await closeNativeWindow(mainDebugger.command);
+      await verifyWindowState(command, readState, 'hidden');
+      second = spawn(executable, [`--user-data-dir=${profile}`], { cwd: root, env, stdio: 'ignore', shell: false });
+      const secondExit = await Promise.race([
+        new Promise((resolve, reject) => {
+          second.once('error', () => reject(new SmokeError('Second app launch failed')));
+          second.once('exit', (code, signal) => resolve({ code, signal }));
+        }),
+        delay(10000, null, { ref: false }),
+      ]);
+      if (!secondExit || secondExit.code !== 0 || secondExit.signal !== null) throw new SmokeError('Second launch did not return to the running app');
+      await verifyWindowState(command, readState, 'visible');
+    }
     mainDebugger.socket.close();
-    await verifyWindowState(command, readState, 'hidden');
-    second = spawn(executable, [`--user-data-dir=${profile}`], { cwd: root, env, stdio: 'ignore', shell: false });
-    const secondExit = await Promise.race([
-      new Promise((resolve, reject) => {
-        second.once('error', () => reject(new SmokeError('Second app launch failed')));
-        second.once('exit', (code, signal) => resolve({ code, signal }));
-      }),
-      delay(10000, null, { ref: false }),
-    ]);
-    if (!secondExit || secondExit.code !== 0 || secondExit.signal !== null) throw new SmokeError('Second launch did not return to the running app');
-    await verifyWindowState(command, readState, 'visible');
     if (screenshot) {
       const image = await command('Page.captureScreenshot', { format: 'png' });
       fs.mkdirSync(path.dirname(path.resolve(screenshot)), { recursive: true });
       fs.writeFileSync(screenshot, Buffer.from(image.data, 'base64'));
     }
     await quitApplication(renderer.socket, exited, Number(address.port));
-    console.log(`Packaged ${platform}-${arch} app smoke passed (${distribution}; isolated accounts, native bridge, renderer, close hides, second launch reopens, automation retained, explicit quit stops backend)`);
+    console.log(`Packaged ${platform}-${arch} app smoke passed (${distribution}; isolated accounts, native bridge, renderer, close hides${platform === 'mac' ? ', full-screen exit before hide' : ''}, second launch reopens, automation retained, explicit quit stops backend)`);
   } finally {
     mainDebugger?.socket.close();
     renderer?.socket.close();
@@ -296,4 +348,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, quitApplication, readJSON, exercise };
+module.exports = { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, closeFullScreenWindow, quitApplication, readJSON, exercise };

@@ -64,6 +64,7 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
       super();
       this.options = options;
       this.destroyed = false;
+      this.fullScreenRequests = [];
       this.webContents = new EventEmitter();
       this.webContents.setWindowOpenHandler = () => {};
       this.webContents.isDestroyed = () => this.destroyed;
@@ -74,6 +75,8 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
     async loadURL(url) { this.loadedURL = url; this.webContents.mainFrame.url = url; }
     isDestroyed() { return this.destroyed; }
     isMinimized() { return Boolean(this.minimized); }
+    isFullScreen() { return Boolean(this.fullScreen); }
+    setFullScreen(value) { this.fullScreenRequests.push(value); }
     restore() { this.minimized = false; }
     show() { this.shown = true; }
     hide() { this.shown = false; this.focused = false; }
@@ -209,6 +212,151 @@ for (const platform of ['darwin', 'win32', 'linux']) {
       assert.deepEqual(state.exits, [0]);
     });
   }
+}
+
+test('macOS full-screen close waits for native exit before hiding and retains the backend', async () => {
+  const { state, app } = harness({ platform: 'darwin' });
+  await settle();
+  const window = state.windows[0];
+  const address = window.loadedURL;
+  window.fullScreen = true;
+  window.close();
+  window.close();
+  assert.equal(window.shown, true);
+  assert.deepEqual(window.fullScreenRequests, [false]);
+  window.fullScreen = false;
+  window.close();
+  await settle();
+  assert.equal(window.shown, true);
+  assert.deepEqual(window.fullScreenRequests, [false]);
+  assert.equal(window.listenerCount('leave-full-screen'), 1);
+  assert.equal(state.backends[0].stops, 0);
+  window.emit('leave-full-screen');
+  assert.equal(window.shown, false);
+  assert.equal(window.destroyed, false);
+  assert.equal(window.listenerCount('leave-full-screen'), 0);
+  assert.equal(window.loadedURL, address);
+  assert.equal(state.backends[0].state, 'running');
+  assert.deepEqual(state.exits, []);
+  app.emit('activate');
+  assert.equal(window.shown, true);
+  assert.equal(window.isFullScreen(), false);
+  assert.equal(state.windows.length, 1);
+  assert.equal(state.backends.length, 1);
+  window.close();
+  assert.equal(window.shown, false);
+  assert.deepEqual(window.fullScreenRequests, [false]);
+  app.quit(); await settle();
+});
+
+for (const source of ['activate', 'second-instance', 'tray', 'Show app', 'Settings']) {
+  test(`macOS ${source} during full-screen exit cancels the pending hide`, async () => {
+    const { state, app } = harness({ platform: 'darwin' });
+    await settle();
+    const window = state.windows[0];
+    window.fullScreen = true;
+    window.close();
+    if (source === 'tray') state.tray.emit('click');
+    else if (['Show app', 'Settings'].includes(source)) state.trayMenu.find(item => item.label === source).click();
+    else app.emit(source);
+    window.fullScreen = false;
+    window.emit('leave-full-screen');
+    assert.equal(window.shown, true);
+    await settle();
+    assert.equal(window.shown, true);
+    assert.equal(window.focused, true);
+    assert.deepEqual(window.fullScreenRequests, [false]);
+    assert.equal(state.backends[0].stops, 0);
+    window.close();
+    assert.equal(window.shown, false);
+    app.quit(); await settle();
+  });
+}
+
+test('macOS close after a reopen request still waits for the in-flight full-screen exit', async () => {
+  const { state, app } = harness({ platform: 'darwin' });
+  await settle();
+  const window = state.windows[0];
+  window.fullScreen = true;
+  window.close();
+  app.emit('activate');
+  window.fullScreen = false;
+  window.close();
+  assert.equal(window.shown, true);
+  assert.deepEqual(window.fullScreenRequests, [false]);
+  window.emit('leave-full-screen');
+  assert.equal(window.shown, false);
+  assert.equal(state.backends[0].stops, 0);
+  app.quit(); await settle();
+});
+
+test('macOS leaving full screen without closing never hides the window', async () => {
+  const { state, app } = harness({ platform: 'darwin' });
+  await settle();
+  const window = state.windows[0];
+  window.fullScreen = false;
+  window.emit('leave-full-screen');
+  assert.equal(window.shown, true);
+  assert.deepEqual(window.fullScreenRequests, []);
+  app.quit(); await settle();
+});
+
+for (const source of ['quit', 'shutdown']) {
+  test(`macOS ${source} during full-screen exit drains immediately without a delayed hide`, async () => {
+    let finish;
+    const { state, app, powerMonitor } = harness({ platform: 'darwin', stop: () => new Promise(resolve => { finish = resolve; }) });
+    await settle();
+    const window = state.windows[0];
+    window.fullScreen = true;
+    window.close();
+    window.hide = () => assert.fail('must not hide after shutdown starts');
+    if (source === 'quit') app.quit();
+    else powerMonitor.emit('shutdown', { preventDefault() {} });
+    assert.equal(window.destroyed, true);
+    assert.equal(state.backends[0].stops, 1);
+    assert.deepEqual(state.exits, []);
+    window.emit('leave-full-screen');
+    finish(); await settle();
+    assert.deepEqual(state.exits, [0]);
+  });
+}
+
+test('a stale macOS full-screen exit cannot hide or cancel closing a recovered window', async () => {
+  const { state, app } = harness({ platform: 'darwin', recoveryResponse: 0 });
+  await settle();
+  const previous = state.windows[0];
+  previous.fullScreen = true;
+  previous.close();
+  state.backends[0].emit('failure', new BackendError('unexpected_exit'));
+  await settle();
+  const replacement = state.windows[1];
+  assert.equal(previous.destroyed, true);
+  replacement.fullScreen = true;
+  replacement.close();
+  previous.hide = () => assert.fail('must not hide a destroyed window');
+  previous.emit('leave-full-screen');
+  assert.equal(replacement.shown, true);
+  replacement.fullScreen = false;
+  replacement.emit('leave-full-screen');
+  assert.equal(replacement.shown, false);
+  assert.equal(state.backends[1].state, 'running');
+  assert.equal(state.backends[1].stops, 0);
+  app.quit(); await settle();
+});
+
+for (const platform of ['win32', 'linux']) {
+  test(`${platform} full-screen close keeps the existing immediate hide behavior`, async () => {
+    const { state, app } = harness({ platform });
+    await settle();
+    const window = state.windows[0];
+    window.fullScreen = true;
+    window.close();
+    assert.equal(window.shown, false);
+    assert.equal(window.destroyed, false);
+    assert.deepEqual(window.fullScreenRequests, []);
+    assert.equal(state.backends[0].stops, 0);
+    app.quit(); await settle();
+  });
 }
 
 for (const platform of ['darwin', 'linux']) {
