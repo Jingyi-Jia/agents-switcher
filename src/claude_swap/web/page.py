@@ -51,7 +51,7 @@ PAGE_HTML = r"""<!doctype html>
     </ol>
     <p class="guide-boundary" id="guide-boundary">The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
     <p class="hint">Paid-credit accounts remain manual-only; auto-switch never chooses them. After switching, follow any provider restart notice shown below.</p>
-    <p class="hint">Closing the app stops its automation. Pausing live updates only pauses this view.</p>
+    <p class="hint">Closing the window keeps this app's automation running in the background. Choose Quit Agent Switch to stop it. Pausing live updates only pauses this view.</p>
     <div class="guide-footer"><button type="button" id="guide-check" data-action>Check again</button><span class="hint" id="desktop-meta"></span></div>
   </section>
   </div>
@@ -94,7 +94,7 @@ PAGE_HTML = r"""<!doctype html>
       <h3>Appearance &amp; live data</h3>
       <div class="setting-row"><div><label for="theme">Appearance</label><p class="hint">Follow your device, or set the mood.</p></div><select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
       <div class="setting-row"><div><label for="watch">Live updates</label><p class="hint" id="watch-status">Every 20 seconds · auto-switch runs independently</p></div><input id="watch" type="checkbox" checked></div>
-      <p id="settings-lifecycle">Closing the app stops its automation. Pausing live updates only pauses this view. Use Stop in an account's auto-switch controls to stop automation.</p>
+      <p id="settings-lifecycle">Pausing live updates only pauses this view. Use Stop in an account's auto-switch controls to stop automation.</p>
       <p class="hint">Usage history refreshes when you open Usage or choose Refresh activity, not on every live update. Profile readiness is checked while Profiles is visible.</p>
     </div>
     <section class="settings-panel" id="app-updates" aria-labelledby="app-updates-title" hidden>
@@ -162,7 +162,7 @@ function isDesktop() {
 
 function automationLifecycle() {
   return isDesktop()
-    ? "Runs only while this app is open. Closing the app stops its automation. Pausing live updates does not stop it; use Stop. These controls apply to this app session only."
+    ? "Closing the window keeps this app's automation running in the background. Reopen from the tray's Show app, the Dock, or by launching Agent Switch again. Choose Quit Agent Switch to stop this app's automation. Pausing live updates does not stop it; use Stop. These controls apply to this app session only."
     : "Runs only while the local dashboard server is open. Closing this tab or pausing live updates does not stop it. These controls apply to this server session only.";
 }
 

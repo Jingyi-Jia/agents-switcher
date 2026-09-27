@@ -33,8 +33,8 @@ def test_notification_identity_creates_and_preserves_info_plist(tmp_path: Path):
 
     assert result == info
     data = plistlib.loads(info.read_bytes())
-    assert data["CFBundleIdentifier"] == "com.claude-swap.menubar"
-    assert data["CFBundleName"] == "claude-swap"
+    assert data["CFBundleIdentifier"] == "io.github.jingyi-jia.agent-switch.menubar"
+    assert data["CFBundleName"] == "Agent Switch"
     assert data["ExistingKey"] == "kept"
 
 
@@ -52,8 +52,8 @@ def test_notification_identity_heals_corrupt_info_plist(tmp_path: Path):
 
     assert result == info
     data = plistlib.loads(info.read_bytes())
-    assert data["CFBundleIdentifier"] == "com.claude-swap.menubar"
-    assert data["CFBundleName"] == "claude-swap"
+    assert data["CFBundleIdentifier"] == "io.github.jingyi-jia.agent-switch.menubar"
+    assert data["CFBundleName"] == "Agent Switch"
     assert not (executable.parent / "Info.plist.tmp").exists()
 
 
@@ -554,7 +554,7 @@ def test_run_without_rumps_raises_clean_error(monkeypatch):
     it into the error type the CLI renders with the install hint.
     """
     monkeypatch.setitem(sys.modules, "rumps", None)
-    with pytest.raises(ClaudeSwitchError, match=r"claude-swap\[menubar\]"):
+    with pytest.raises(ClaudeSwitchError, match=r"agents-switcher\[menubar\]"):
         menubar.run(switcher=None)
 
 

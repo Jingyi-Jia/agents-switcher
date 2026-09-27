@@ -102,10 +102,17 @@ launch must be checked after publication.
 Versions predating the community release flow need one manual installation from
 the GitHub Releases page. No update mode installs during ordinary Quit.
 
-Quitting the application, including closing its only window, stops its backend and
-session-owned auto-switching. It does not stop independently started CLI
-automation. Updating never changes accounts or provider credentials; updating or
-uninstalling does not remove them.
+Closing the window hides it without stopping the backend or session-owned
+auto-switching. Reopen it with **Show app** in the tray/menu bar, the macOS Dock,
+or by launching Agent Switch again. **Quit Agent Switch** (Cmd+Q on macOS,
+Ctrl+Q on Windows/Linux) stops the backend and its automation, draining in-flight
+requests before exit. An unexpected destroyed window or a renderer/backend crash
+still triggers cleanup or explicit recovery, not an unreachable background
+service. OS session end requests shutdown rather than hiding; the OS can limit
+the time available to drain requests. Automation does not run through logout,
+shutdown, or sleep. Quitting does not stop independently started CLI automation.
+Updating never changes accounts or provider credentials; updating or uninstalling
+does not remove them.
 
 ## Build locally
 
@@ -210,10 +217,17 @@ test; clean-machine installation and first-run checks remain a release
 prerequisite.
 
 The packaged-app startup smoke uses an isolated app and
-the loopback debug protocol. That smoke checks renderer startup, the release
-mode, normal quit, and screenshots; it does not approve browser quarantine,
-Gatekeeper, SmartScreen, or installer UI behavior. Those OS approval prompts and
-clean-machine installer checks still require fresh native testing.
+loopback renderer/main-process debuggers enabled only for that test launch. It
+invokes the existing native `BrowserWindow.close()` rather than DOM
+`window.close()`, without adding a renderer bridge or changing the sandbox.
+That smoke checks renderer startup, the release
+mode, window hide/reopen with the same backend, graceful explicit quit, and
+screenshots. It keeps empty-account dry-run automation enabled across close and
+reopen, then uses Electron's native DevTools `Browser.close` quit path and checks
+that the backend is no longer reachable, before the force-kill timeout. It does
+not print debug addresses or backend tokens. It does not approve browser
+quarantine, Gatekeeper, SmartScreen, or installer UI behavior. Those OS approval
+prompts and clean-machine installer checks still require fresh native testing.
 
 PR path changes and the existing **Desktop installers** workflow remain
 preview-only. Neither path receives signing secrets or release write permission.

@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, session, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, session, shell, ipcMain, powerMonitor } = require('electron');
 const { Backend, BackendError } = require('./backend.cjs');
 const { HELP_LINKS, secureSession, secureWebContents } = require('./security.cjs');
 const { UpdateController, registerUpdaterIPC } = require('./updater.cjs');
@@ -18,6 +18,10 @@ let starting = false;
 let dashboardAddress = null;
 let updates = null;
 let installing = false;
+
+function installerOwnsShutdown() {
+  return installing && updates?.installStarted && backend?.cleanExit;
+}
 
 function showWindow() {
   if (!window || window.isDestroyed() || recovering || quitting || installing) return;
@@ -51,7 +55,7 @@ function installMenu() {
     { label: 'File', submenu: [
       { label: 'Show app', click: showWindow },
       { type: 'separator' },
-      { label: 'Quit Agent Switch', accelerator: process.platform === 'darwin' ? undefined : 'Alt+F4', click: () => app.quit() },
+      { label: 'Quit Agent Switch', accelerator: process.platform === 'darwin' ? undefined : 'Control+Q', click: () => app.quit() },
     ] },
     { role: 'editMenu' },
     { label: 'View', submenu: [
@@ -77,8 +81,10 @@ function installTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, '..', 'assets', process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png'));
   if (process.platform === 'darwin') icon.setTemplateImage(true);
   tray = new Tray(icon);
-  tray.setToolTip('Agent Switch — close the window to quit');
+  tray.setToolTip('Agent Switch — close hides the window; Quit stops automation');
   tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Show app', click: showWindow },
+    { type: 'separator' },
     { label: 'Accounts', click: () => showView('accounts') },
     { label: 'Usage dashboard', click: () => showView('usage') },
     { label: 'Settings', click: () => showView('settings') },
@@ -147,6 +153,13 @@ async function startDashboard() {
     });
     secureWebContents(window.webContents, origin, openHelp);
     window.webContents.on('render-process-gone', () => void recover(new BackendError('backend_error')));
+    window.on('close', (event) => {
+      if (quitting || recovering || installerOwnsShutdown()) return;
+      event.preventDefault();
+      window.hide();
+    });
+    window.on('query-session-end', () => app.quit());
+    window.on('session-end', () => app.quit());
     window.on('closed', () => { window = null; });
     await window.loadURL(url);
     showWindow();
@@ -164,10 +177,10 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', showWindow);
   app.on('activate', showWindow);
   app.on('window-all-closed', () => {
-    if (!recovering && !quitting) app.quit();
+    if (!recovering && !quitting && !installerOwnsShutdown()) app.quit();
   });
   app.on('before-quit', (event) => {
-    if (installing && updates?.installStarted && backend?.cleanExit) {
+    if (installerOwnsShutdown()) {
       quitting = true;
       updates.close();
       if (tray) tray.destroy();
@@ -217,6 +230,10 @@ if (!app.requestSingleInstanceLock()) {
   process.on('SIGINT', () => app.quit());
   process.on('SIGTERM', () => app.quit());
   void app.whenReady().then(async () => {
+    powerMonitor.on('shutdown', (event) => {
+      event.preventDefault();
+      app.quit();
+    });
     const metadata = require('../package.json');
     const runtime = await createUpdateRuntime({ app, releaseBuild: metadata.agentSwitchRelease,
       communityBuild: metadata.agentSwitchCommunityRelease });

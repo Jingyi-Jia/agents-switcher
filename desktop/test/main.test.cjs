@@ -11,7 +11,8 @@ const { BackendError } = require('../src/backend.cjs');
 
 const main = path.resolve(__dirname, '../src/main.cjs');
 
-function harness({ singleInstance = true, startError, runtime = {}, confirm = 1, stopForUpdate } = {}) {
+function harness({ singleInstance = true, startError, runtime = {}, confirm = 1, stopForUpdate,
+  platform = 'linux', stop, recoveryResponse = 1, trayError } = {}) {
   const state = { windows: [], backends: [], dialogs: [], external: [], exits: [], partitions: [], ipc: new Map(), updates: [], nativeQuits: 0 };
   const app = new EventEmitter();
   Object.assign(app, {
@@ -25,7 +26,10 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
     quit: () => {
       let prevented = false;
       app.emit('before-quit', { preventDefault() { prevented = true; } });
-      if (!prevented) state.nativeQuits += 1;
+      if (!prevented) {
+        state.nativeQuits += 1;
+        for (const window of state.windows) if (!window.isDestroyed()) window.close();
+      }
     },
     exit: (code) => state.exits.push(code),
   });
@@ -42,7 +46,11 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
       this.state = 'running';
       return `http://127.0.0.1:12345/?token=${'a'.repeat(64)}&desktop=1`;
     }
-    async stop() { this.state = 'stopped'; this.stops += 1; }
+    async stop() {
+      this.state = 'stopping'; this.stops += 1;
+      if (stop) await stop();
+      this.state = 'stopped';
+    }
     async stopForUpdate() {
       this.updateStopCalled = true;
       if (stopForUpdate) await stopForUpdate();
@@ -65,22 +73,32 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
     }
     async loadURL(url) { this.loadedURL = url; this.webContents.mainFrame.url = url; }
     isDestroyed() { return this.destroyed; }
-    isMinimized() { return false; }
+    isMinimized() { return Boolean(this.minimized); }
+    restore() { this.minimized = false; }
     show() { this.shown = true; }
+    hide() { this.shown = false; this.focused = false; }
     focus() { this.focused = true; }
+    close() {
+      let prevented = false;
+      this.emit('close', { preventDefault() { prevented = true; } });
+      if (!prevented) this.destroy();
+    }
     destroy() { this.destroyed = true; this.emit('closed'); app.emit('window-all-closed'); }
   }
   class Tray extends EventEmitter {
+    constructor() { super(); if (trayError) throw trayError; state.tray = this; }
     setToolTip(value) { state.tooltip = value; }
     setContextMenu(value) { state.trayMenu = value; }
     destroy() { state.trayDestroyed = true; }
   }
+  const powerMonitor = new EventEmitter();
   const electron = {
     app, BrowserWindow, Tray,
+    powerMonitor,
     Menu: { buildFromTemplate: (value) => value, setApplicationMenu: (value) => { state.menu = value; } },
     nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) },
     dialog: {
-      showMessageBox: async (options) => { state.dialogs.push(options); return { response: options.title === 'Install Agent Switch update' ? confirm : 1 }; },
+      showMessageBox: async (options) => { state.dialogs.push(options); return { response: options.title === 'Install Agent Switch update' ? confirm : recoveryResponse }; },
       showErrorBox: (title, message) => state.dialogs.push({ title, message }),
     },
     shell: { openExternal: async (url) => state.external.push(url) },
@@ -93,7 +111,7 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
       });
     } },
   };
-  const process = Object.assign(new EventEmitter(), { platform: 'linux', arch: 'x64', resourcesPath: '/packaged/resources' });
+  const process = Object.assign(new EventEmitter(), { platform, arch: 'x64', resourcesPath: '/packaged/resources' });
   const localRequire = createRequire(main);
   vm.runInNewContext(fs.readFileSync(main, 'utf8'), {
     require: (name) => name === 'electron' ? electron : name === './backend.cjs' ? { Backend, BackendError }
@@ -104,7 +122,7 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
     const contents = state.windows.at(-1).webContents;
     return state.ipc.get(`agent-switch:update:${method}`)({ sender: contents, senderFrame: contents.mainFrame });
   };
-  return { ...state, app, state, invoke };
+  return { ...state, app, state, invoke, powerMonitor };
 }
 
 async function settle() {
@@ -134,6 +152,93 @@ test('packaged main creates only a sandboxed, isolated, non-privileged renderer'
   assert.deepEqual(state.exits, [0]);
 });
 
+for (const platform of ['darwin', 'win32', 'linux']) {
+  test(`${platform} window close hides without restarting or stopping the backend`, async () => {
+    const { state, app } = harness({ platform });
+    await settle();
+    const window = state.windows[0];
+    const address = window.loadedURL;
+    for (const reopen of [() => app.emit('activate'), () => app.emit('second-instance'),
+      () => state.tray.emit('click'), () => state.trayMenu.find(item => item.label === 'Show app').click(),
+      () => state.menu.find(item => item.label === 'File').submenu.find(item => item.label === 'Show app').click()]) {
+      window.close();
+      window.close();
+      await settle();
+      assert.equal(window.shown, false);
+      assert.equal(window.destroyed, false);
+      assert.equal(state.backends[0].state, 'running');
+      assert.equal(state.backends[0].stops, 0);
+      assert.equal(state.trayDestroyed, undefined);
+      assert.deepEqual(state.exits, []);
+      window.minimized = true;
+      reopen();
+      assert.equal(window.minimized, false);
+      assert.equal(window.shown, true);
+      assert.equal(window.focused, true);
+      assert.equal(window.loadedURL, address);
+      assert.equal(state.windows.length, 1);
+      assert.equal(state.backends.length, 1);
+      assert.equal(state.partitions.length, 1);
+    }
+    assert.match(state.tooltip, /close hides the window/);
+    assert.match(state.tooltip, /Quit stops automation/);
+    app.quit(); await settle();
+  });
+
+  for (const source of platform === 'darwin' ? ['tray', 'File', 'Agent Switch'] : ['tray', 'File']) {
+    test(`${platform} ${source} Quit drains the hidden app before exiting`, async () => {
+      let finish;
+      const { state, app } = harness({ platform, stop: () => new Promise(resolve => { finish = resolve; }) });
+      await settle();
+      const window = state.windows[0];
+      window.close();
+      const menu = source === 'tray' ? state.trayMenu : state.menu.find(item => item.label === source).submenu;
+      const quit = menu.find(item => item.label === 'Quit Agent Switch');
+      if (source === 'Agent Switch') assert.equal(quit.accelerator, 'Command+Q');
+      if (source === 'File' && platform !== 'darwin') assert.equal(quit.accelerator, 'Control+Q');
+      quit.click();
+      assert.equal(window.destroyed, true);
+      assert.equal(state.backends[0].stops, 1);
+      assert.equal(state.backends[0].state, 'stopping');
+      assert.deepEqual(state.exits, []);
+      app.emit('activate'); app.emit('second-instance'); app.quit();
+      assert.equal(state.backends[0].stops, 1);
+      finish(); await settle();
+      assert.equal(state.backends[0].state, 'stopped');
+      assert.equal(state.trayDestroyed, true);
+      assert.deepEqual(state.exits, [0]);
+    });
+  }
+}
+
+for (const platform of ['darwin', 'linux']) {
+  test(`${platform} OS shutdown quits rather than leaving a hidden service`, async () => {
+    const { state, powerMonitor } = harness({ platform });
+    await settle();
+    state.windows[0].close();
+    let delayed = false;
+    powerMonitor.emit('shutdown', { preventDefault() { delayed = true; } });
+    await settle();
+    assert.equal(delayed, true);
+    assert.equal(state.backends[0].stops, 1);
+    assert.equal(state.windows[0].destroyed, true);
+    assert.deepEqual(state.exits, [0]);
+  });
+}
+
+for (const event of ['query-session-end', 'session-end']) {
+  test(`Windows ${event} starts cleanup without cancelling logout`, async () => {
+    const { state } = harness({ platform: 'win32' });
+    await settle();
+    state.windows[0].close();
+    state.windows[0].emit(event, { preventDefault() { assert.fail('must not cancel logout'); } });
+    await settle();
+    assert.equal(state.backends[0].stops, 1);
+    assert.equal(state.windows[0].destroyed, true);
+    assert.deepEqual(state.exits, [0]);
+  });
+}
+
 function updateFixture() {
   const updater = new EventEmitter();
   const info = { version: '1.2.0', files: [{ url: 'Agent-Switch-1.2.0-linux-x86_64.AppImage', size: 123, sha512: Buffer.alloc(64).toString('base64') }] };
@@ -161,12 +266,48 @@ test('install waits for clean service exit and lets the native updater quit norm
   assert.equal(state.backends[0].updateStopCalled, true);
   assert.equal(state.installs, undefined);
   assert.equal(state.dialogs[0].defaultId, 1);
+  state.windows[0].close();
+  assert.equal(state.windows[0].destroyed, false);
+  assert.equal(state.windows[0].shown, false);
+  assert.deepEqual(state.exits, []);
   finishStop(); await install;
   assert.equal(state.installs, 1);
   assert.equal(state.nativeQuits, 1);
   assert.deepEqual(state.exits, []);
   assert.equal(state.trayDestroyed, true);
+  assert.equal(state.windows[0].destroyed, true);
 });
+
+for (const hidden of [false, true]) {
+  test(`installer closes the ${hidden ? 'hidden' : 'visible'} window before before-quit without ordinary cleanup`, async () => {
+    const updater = updateFixture();
+    const { state, invoke, app } = harness({ runtime: { updater }, confirm: 0 });
+    await settle();
+    const window = state.windows[0];
+    if (hidden) window.close();
+    const events = [];
+    window.on('closed', () => events.push('closed'));
+    app.on('window-all-closed', () => events.push('window-all-closed'));
+    app.on('before-quit', () => events.push('before-quit'));
+    let nativeArgs, closedBeforeQuit = false, quitPrevented = false;
+    updater.quitAndInstall = (...args) => {
+      nativeArgs = args;
+      window.close();
+      closedBeforeQuit = window.destroyed;
+      app.emit('before-quit', { preventDefault() { quitPrevented = true; } });
+    };
+    await invoke('check'); await invoke('download'); await invoke('install'); await settle();
+    assert.equal(state.backends[0].cleanExit, true);
+    assert.deepEqual(nativeArgs, [false, true]);
+    assert.equal(closedBeforeQuit, true);
+    assert.deepEqual(events, ['closed', 'window-all-closed', 'before-quit']);
+    assert.equal(quitPrevented, false);
+    assert.equal(state.nativeQuits, 0);
+    assert.equal(state.backends[0].stops, 1);
+    assert.deepEqual(state.exits, []);
+    assert.equal(state.trayDestroyed, true);
+  });
+}
 
 test('cancelled install and ordinary quit never install a downloaded update', async () => {
   const updater = updateFixture();
@@ -294,6 +435,41 @@ test('renderer crash destroys the stale window and stops the backend', async () 
   assert.deepEqual(state.exits, [0]);
 });
 
+for (const source of ['backend', 'renderer']) {
+  test(`${source} failure while hidden recovers to a usable new dashboard`, async () => {
+    const { state, app } = harness({ recoveryResponse: 0 });
+    await settle();
+    const previous = state.windows[0];
+    previous.close();
+    if (source === 'backend') state.backends[0].emit('failure', new BackendError('unexpected_exit'));
+    else previous.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+    await settle();
+    assert.equal(previous.destroyed, true);
+    assert.equal(state.backends[0].stops, 1);
+    assert.equal(state.dialogs.length, 1);
+    assert.equal(state.windows.length, 2);
+    assert.equal(state.backends.length, 2);
+    assert.equal(state.windows[1].shown, true);
+    assert.equal(state.backends[1].state, 'running');
+    assert.deepEqual(state.exits, []);
+    state.windows[1].close();
+    state.tray.emit('click');
+    assert.equal(state.windows[1].shown, true);
+    app.quit(); await settle();
+    assert.equal(state.backends[1].stops, 1);
+    assert.deepEqual(state.exits, [0]);
+  });
+}
+
+test('tray initialization failure cannot leave a background backend', async () => {
+  const { state } = harness({ trayError: new Error('SECRET native diagnostic') });
+  await settle();
+  assert.equal(state.backends.length, 0);
+  assert.equal(state.windows.length, 0);
+  assert.equal(JSON.stringify(state.dialogs).includes('SECRET'), false);
+  assert.deepEqual(state.exits, [0]);
+});
+
 test('startup recovery does not expose raw exceptions or create an interactive window', async () => {
   const { state } = harness({ startError: new Error('SECRET token URL credential path') });
   await settle();
@@ -315,8 +491,10 @@ test('tray and application menus navigate only within the owned dashboard', asyn
   await settle();
   const window = state.windows[0];
   for (const [label, hash] of [['Accounts', '#accounts'], ['Usage dashboard', '#usage'], ['Settings', '#settings']]) {
+    window.close();
     state.trayMenu.find(item => item.label === label).click();
     await settle();
+    assert.equal(window.shown, true);
     const url = new URL(window.loadedURL);
     assert.equal(url.origin, 'http://127.0.0.1:12345');
     assert.equal(url.pathname, '/');

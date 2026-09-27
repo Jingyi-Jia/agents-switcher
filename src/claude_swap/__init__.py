@@ -2,9 +2,10 @@
 
 The import package stays ``claude_swap`` although the distribution is
 ``agents-switcher``: renaming it would touch every module and test and
-conflict with every upstream merge, for no user-visible gain. Installed
-tools get their own environment, so the module name never collides in
-practice; the COMMAND and the distribution are what had to differ.
+conflict with every upstream merge. The desktop bundles its own runtime;
+CLI tools installed with uv or pipx get separate environments. Do not install
+this distribution and upstream claude-swap into the same Python environment,
+because their import packages overlap even though their commands differ.
 """
 
 from importlib.metadata import version

@@ -52,7 +52,7 @@ class DesktopState(DashboardState):
         result["desktop"] = {
             "version": app_version,
             "platform": sys.platform,
-            "windowClose": "quit",
+            "windowClose": "hide",
             "providers": {
                 "claude": {"installed": client_installed("claude")},
                 "codex": {"installed": client_installed("codex")},

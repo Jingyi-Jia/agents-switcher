@@ -9,6 +9,14 @@ Read the implementation and nearby tests before changing a provider's behavior.
 - Distribution: `agents-switcher`; executable: `agent-switch`; import package:
   `claude_swap`. Those names intentionally differ. Do not restore upstream's
   `cswap`/`claude-swap` entry points or silently rename persisted data paths.
+  The bundled desktop runtime and separate uv/pipx environments avoid import
+  collisions; installing both distributions in one Python environment does not.
+  CLI release checks, upgrade commands, update caches and launchd services must
+  target this fork, never upstream's package or service. The saved Claude store
+  remains shared, and regular-file-lock upstream versions cannot coordinate with
+  this fork's directory locks. Do not promise concurrent cross-tool switching or
+  weaken cross-node locks to provide it; changing store ownership requires an
+  explicit migration design.
 - Python 3.12+ with Hatchling; dependencies and pytest configuration live in
   [pyproject.toml](pyproject.toml), with versions locked in [uv.lock](uv.lock).
 - The current providers are Claude Code and file-backed Codex accounts. Codex CLI
@@ -96,6 +104,12 @@ state is `mode: "manual"`, `"install"`, or `"unsupported"`. Validate the IPC
 sender and main frame; expose only sanitized state. The desktop backend drains
 HTTP requests before exiting, including profile and analytics work outside the
 credential-action lock; do not restore daemon request threads for this helper.
+Ordinary desktop window close hides the existing window and keeps that backend
+and its automation alive (`desktop.windowClose: "hide"`). Tray Show app, Dock
+activation and second-instance launch reopen it. Explicit Quit and OS session end
+stop the backend; unexpected last-window destruction must still clean up, and
+renderer/backend crashes must still offer recovery or quit. Do not add renderer
+or HTTP quit APIs or disable the sandbox to smoke-test this lifecycle.
 Retain signed macOS/Windows gates, strict signature checks, separate Mac
 architecture metadata, and the Linux writable-AppImage restriction. A verified
 package or mocked updater test is not proof of a signed end-to-end upgrade or
@@ -255,7 +269,8 @@ are in [desktop/README.md](desktop/README.md) and
    selection based on eligible, sufficiently fresh data, not display-only
    last-good values. Codex automation excludes paid-credit fallback; Claude
    metered API-key fallback requires explicit opt-in. Session UI overrides are
-   not saved rules; closing the server/TUI/app stops only its own automation.
+   not saved rules; stopping the server, exiting the TUI or quitting the app stops
+   only its own automation. Hiding the desktop window does not stop it.
 7. **Never leak secrets.** File backups use base64, not encryption; exports also
    contain credentials. Avoid tokens in arguments, logs, exception bodies, test
    snapshots or attachments. Keep the dashboard loopback-bound by default and

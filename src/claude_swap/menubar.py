@@ -38,7 +38,7 @@ REFRESH_CHOICES: tuple[int, ...] = (30, 60, 300)
 AUTO_THRESHOLD_CHOICES: tuple[int, ...] = (80, 90, 95, 98)
 TITLE_PCT_CHOICES: tuple[str, ...] = ("off", "5h", "7d", "both")
 SWITCH_HISTORY_LIMIT = 10
-NOTIFICATION_BUNDLE_ID = "com.claude-swap.menubar"
+NOTIFICATION_BUNDLE_ID = "io.github.jingyi-jia.agent-switch.menubar"
 
 
 def ensure_notification_identity(
@@ -69,7 +69,7 @@ def ensure_notification_identity(
             data["CFBundleIdentifier"] = NOTIFICATION_BUNDLE_ID
             changed = True
         if not data.get("CFBundleName"):
-            data["CFBundleName"] = "claude-swap"
+            data["CFBundleName"] = "Agent Switch"
             changed = True
         if changed or not path.exists():
             # atomic: an interrupted write must not leave a half-written plist
@@ -495,13 +495,15 @@ def framework_build_warning(
 
     if install_method == "uv":
         remedy = (
-            "  uv tool install --managed-python --force 'claude-swap[menubar]'"
+            "  uv tool install --managed-python --force "
+            "'agents-switcher[menubar] @ git+https://github.com/Jingyi-Jia/agents-switcher.git'"
         )
     elif install_method == "pipx":
         remedy = (
             "  Reinstall against a non-framework interpreter, e.g. one from "
             "`uv python install 3.13`:\n"
-            "  pipx install --force --python <that python> 'claude-swap[menubar]'"
+            "  pipx install --force --python <that python> "
+            "'agents-switcher[menubar] @ git+https://github.com/Jingyi-Jia/agents-switcher.git'"
         )
     else:
         remedy = (
@@ -536,7 +538,8 @@ def run(switcher) -> int:
         # error type the CLI already renders cleanly instead of a traceback.
         raise ClaudeSwitchError(
             "Menu bar mode requires 'rumps'. "
-            "Install with: pip install 'claude-swap[menubar]'"
+            "Install with: pip install "
+            "'agents-switcher[menubar] @ git+https://github.com/Jingyi-Jia/agents-switcher.git'"
         ) from e
 
     # rumps never sets an activation policy, so under a framework Python the
@@ -991,7 +994,7 @@ def run(switcher) -> int:
                     title="claude-swap",
                     message="Couldn't read the active credential. If the menu bar is running "
                             "as a background/login agent, macOS blocks its Keychain access — "
-                            "quit and relaunch it from a Terminal with: cswap --menubar",
+                            "quit and relaunch it from a Terminal with: agent-switch menubar",
                 )
                 return
             except ClaudeSwitchError as e:

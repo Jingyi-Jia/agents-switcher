@@ -1,9 +1,10 @@
-"""Check PyPI for newer versions of claude-swap."""
+"""Check this repository's releases and upgrade only agents-switcher."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -11,12 +12,23 @@ from pathlib import Path
 
 from claude_swap.cache import CACHE_DIR, MISSING, read_cache, write_cache
 
-CACHE_PATH = CACHE_DIR / "update_check.json"
+CACHE_PATH = CACHE_DIR / "agents-switcher-update.json"
 CACHE_TTL = 24 * 3600  # 24 hours
-PYPI_URL = "https://pypi.org/pypi/claude-swap/json"
+RELEASES_URL = "https://github.com/Jingyi-Jia/agents-switcher/releases"
+LATEST_RELEASE_URL = "https://api.github.com/repos/Jingyi-Jia/agents-switcher/releases/latest"
+SOURCE_URL = "git+https://github.com/Jingyi-Jia/agents-switcher.git"
+MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        return None
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
+    if (not isinstance(v, str) or len(v) > 64
+            or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", v)):
+        raise ValueError("A stable release version is required")
     return tuple(int(x) for x in v.split("."))
 
 
@@ -48,40 +60,57 @@ def check_for_update(current_version: str) -> str | None:
     try:
         latest_version = None
 
-        # Try reading cache
         cached_data = read_cache(CACHE_PATH, CACHE_TTL)
         if cached_data is not MISSING:
             latest_version = cached_data
         else:
-            # Fetch from PyPI
             try:
-                req = urllib.request.Request(PYPI_URL)
-                with urllib.request.urlopen(req, timeout=2) as resp:
-                    data = json.loads(resp.read().decode())
-                latest_version = data["info"]["version"]
+                req = urllib.request.Request(LATEST_RELEASE_URL, headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "agents-switcher",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                })
+                with urllib.request.build_opener(_NoRedirect()).open(req, timeout=2) as resp:
+                    body = resp.read(MAX_RESPONSE_BYTES + 1)
+                if len(body) > MAX_RESPONSE_BYTES:
+                    raise ValueError("Release response exceeded its size limit")
+                data = json.loads(body)
+                tag = data["tag_name"]
+                candidate = tag[1:] if isinstance(tag, str) and tag.startswith("v") else ""
+                _parse_version(candidate)
+                if (data.get("draft") is not False or data.get("prerelease") is not False
+                        or data.get("html_url") != f"{RELEASES_URL}/tag/{tag}"):
+                    raise ValueError("Unexpected release metadata")
+                wheel = f"agents_switcher-{candidate}-py3-none-any.whl"
+                assets = data.get("assets")
+                if not isinstance(assets, list) or not 0 < len(assets) <= 100 or not any(
+                    isinstance(asset, dict) and asset.get("name") == wheel
+                    and asset.get("state") == "uploaded"
+                    and type(asset.get("size")) is int and asset["size"] > 0
+                    and asset.get("browser_download_url") == f"{RELEASES_URL}/download/{tag}/{wheel}"
+                    for asset in assets
+                ):
+                    raise ValueError("Release has no compatible CLI distribution")
+                latest_version = candidate
             except Exception:
                 latest_version = None
 
-            # Write cache regardless of success/failure
             write_cache(CACHE_PATH, latest_version)
 
         if latest_version and _parse_version(latest_version) > _parse_version(current_version):
             method = _detect_install_method()
             direct = {
-                "uv": "uv tool upgrade claude-swap",
-                "pipx": "pipx upgrade claude-swap",
+                "uv": "uv tool upgrade agents-switcher",
+                "pipx": "pipx upgrade agents-switcher",
             }.get(method or "")
             if direct and sys.platform != "win32":
-                # cswap upgrade actually performs the upgrade here.
-                hint = "Run `cswap upgrade` to update."
+                hint = "Run `agent-switch upgrade` to update."
             elif direct:
-                # Windows: cswap upgrade only prints, so point at the real command.
                 hint = f"Run `{direct}` to update."
             else:
-                # Unknown install method: cswap upgrade shows manual instructions.
-                hint = "Run `cswap upgrade` for upgrade instructions."
+                hint = "Run `agent-switch upgrade` for upgrade instructions."
             return (
-                f"A newer version of claude-swap is available ({latest_version}). "
+                f"A newer version of agents-switcher is available ({latest_version}). "
                 f"You are using {current_version}. {hint}"
             )
         return None
@@ -99,8 +128,8 @@ def run_self_upgrade() -> int:
 
     method = _detect_install_method()
     commands = {
-        "uv": ["uv", "tool", "upgrade", "claude-swap"],
-        "pipx": ["pipx", "upgrade", "claude-swap"],
+        "uv": ["uv", "tool", "upgrade", "agents-switcher"],
+        "pipx": ["pipx", "upgrade", "agents-switcher"],
     }
     cmd = commands.get(method or "")
     if cmd is None:
@@ -109,19 +138,15 @@ def run_self_upgrade() -> int:
             f"  sys.prefix:     {sys.prefix}\n"
             f"  sys.executable: {sys.executable}\n"
             "To upgrade manually, run one of:\n"
-            "  uv tool upgrade claude-swap\n"
-            "  pipx upgrade claude-swap\n"
-            f"  {sys.executable} -m pip install --upgrade claude-swap\n"
+            "  uv tool upgrade agents-switcher\n"
+            "  pipx upgrade agents-switcher\n"
+            f"  {sys.executable} -m pip install --upgrade {SOURCE_URL}\n"
             "If you installed with `pip install -e .`, use `git pull` instead."
         )
         return 1
 
-    # Windows: the running cswap.exe launcher is locked, so an in-process
-    # uv/pipx upgrade fails when it tries to replace the executable even
-    # though the package itself updates. cswap exits right after this, which
-    # releases the lock, so the user can just run the command themselves.
     if sys.platform == "win32":
-        print(f"To upgrade claude-swap on Windows, run:\n  {accent(' '.join(cmd))}")
+        print(f"To upgrade agents-switcher on Windows, run:\n  {accent(' '.join(cmd))}")
         return 1
 
     try:

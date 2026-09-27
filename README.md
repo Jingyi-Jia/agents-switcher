@@ -422,8 +422,12 @@ an offline test mode or a substitute for a disposable test account store.
 Dashboard/TUI auto modes and threshold overrides belong to that session and are
 not saved as rules. Closing a browser tab or pausing its view does not stop the
 server or automation. Stop it in the UI or stop its server. Closing the standalone
-app's only window quits its backend and session automation; exiting the TUI does
-the same for its session. None of these stops independently launched CLI loops.
+app's window hides it; its backend and session automation keep running. Reopen it
+with **Show app** in the tray/menu bar, the macOS Dock, or by launching Agent Switch
+again. Choose **Quit Agent Switch** (Cmd+Q on macOS, Ctrl+Q on Windows/Linux) to
+stop the app and its automation. Exiting the TUI stops its session automation.
+None of these stops independently launched CLI loops. The app does not keep
+automation running through logout, shutdown, or sleep.
 
 Codex auto-switch waits while Codex processes are running and never selects an
 account that needs paid billing credits. Claude API-key accounts are excluded by
@@ -447,6 +451,37 @@ payload shapes. Claude `auto --json` emits JSON events, while Codex auto emits
 decisions. For `auto --once`, exit codes are 0 for a switch decision (including
 dry-run), 1 for an error, 2 for no change, and 3 for blocked/no viable target
 (including Codex waiting for a restart). See [AGENTS.md](AGENTS.md) for source refs.
+
+### Using Agent Switch alongside upstream `cswap`
+
+The standalone app uses its own bundled backend and does not install or replace
+`cswap`. This repository's CLI command is `agent-switch`, from the
+`agents-switcher` distribution. Use separate `uv tool` or `pipx` environments
+for the two CLIs: both distributions contain a `claude_swap` Python package, so
+installing both into one Python environment can overwrite each other's modules.
+Agent Switch's CLI upgrade command and optional Python menu-bar service target
+only Agent Switch, not upstream's package, executable, or launchd service.
+
+**The default saved Claude account store is shared, not isolated.** Account
+changes, including removal or purge, can affect both tools. Both also control
+the active login of the same Claude Code profile. Do not run upstream `cswap`
+account commands, its menu bar, or its automation against that profile while
+Agent Switch is using it. Our directory locks are not compatible with upstream
+versions that use regular-file locks; even a usage refresh can update credentials.
+Closing Agent Switch's window keeps its backend running—use **Quit Agent
+Switch** before handing that profile to another manager.
+
+The recommended setup is the Agent Switch app plus its matching `agent-switch`
+CLI, with only one automatic-switching controller active per profile. Upstream
+can remain installed in its separate environment, but don't treat simultaneous
+operation as supported. Separate account stores would require an explicit,
+credential-safe import design; changing a folder name alone would not isolate
+the provider's active login.
+
+The optional Python menu-bar service uses
+`io.github.jingyi-jia.agent-switch.menubar`. It leaves any existing
+`com.cswap.menubar` service untouched. If an older service is already running,
+stop it through the tool that installed it before enabling another controller.
 
 ### Local data and privacy
 
