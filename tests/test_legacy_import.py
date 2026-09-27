@@ -54,7 +54,7 @@ def seed(root):
 
 
 def tree(root):
-    return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    return {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()}
 
 
 @pytest.fixture(autouse=True)
@@ -338,7 +338,7 @@ def test_partial_file_failure_rolls_back_only_created_data(stores, monkeypatch, 
 
         def publish_fail(*args, **kwargs):
             original(*args, **kwargs)
-            if args[1] == "accounts.json" or str(args[1]).endswith("/accounts.json"):
+            if Path(args[1]).name == "accounts.json":
                 raise OSError("publish failed")
 
         monkeypatch.setattr(module.os, "link", publish_fail)

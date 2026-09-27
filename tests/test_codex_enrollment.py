@@ -425,7 +425,14 @@ def test_repair_keeps_alias_and_disabled_changes_made_during_login(env):
     assert account["disabled"] is True
 
 
-@pytest.mark.parametrize("raw", [b"", b"{secret-payload", b"[]", b"null", b"\xff", b"x" * (MAX_AUTH_BYTES + 1)])
+@pytest.mark.parametrize("raw", [
+    pytest.param(b"", id="empty"),
+    pytest.param(b"{secret-payload", id="incomplete-json"),
+    pytest.param(b"[]", id="array"),
+    pytest.param(b"null", id="null"),
+    pytest.param(b"\xff", id="invalid-utf8"),
+    pytest.param(b"x" * (MAX_AUTH_BYTES + 1), id="oversized"),
+])
 def test_invalid_or_oversized_auth_is_bounded_and_never_leaks(env, raw):
     save_current(env)
     before = snapshot(env)
