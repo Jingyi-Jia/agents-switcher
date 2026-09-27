@@ -89,9 +89,10 @@ public without paid Apple or Windows signing credentials; a separate signed
 distribution remains a future, optional path. Draft artifacts and package
 versions are not published downloads.
 
-The published v1.2.3 installers still use the earlier shared saved-account store.
 The independent storage/import and isolated Codex sign-in flows documented below
-are available in newer source builds, pending the next installer release.
+require **v1.2.4 or later**, or a current source build. The v1.2.3 installers still
+use the earlier shared saved-account store and do not include the Codex sign-in
+fix. Check the version on the release page before downloading.
 
 For developers, successful runs of
 [Desktop installers](https://github.com/jingyi-jia/agents-switcher/actions/workflows/desktop.yml)
