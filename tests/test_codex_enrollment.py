@@ -513,6 +513,63 @@ def test_torn_auth_can_be_retried_after_official_cli_finishes_writing(env, monke
     assert env.store.read_credentials("1") == complete_login
 
 
+def test_login_read_compares_change_times_from_the_same_stat_api(env, monkeypatch):
+    session_id, home = prepare(env)
+    credentials = env.authority.sign_in(home, "one")
+    original = os.stat
+
+    def path_stat(path, *args, **kwargs):
+        info = original(path, *args, **kwargs)
+        if not isinstance(path, int) and Path(path).name == "auth.json":
+            values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+            values["st_ctime_ns"] = 1
+            return SimpleNamespace(**values)
+        return info
+
+    monkeypatch.setattr(os, "stat", path_stat)
+    result = env.controller.complete(session_id, confirm=True)
+    assert result["ok"]
+    assert env.store.read_credentials("1") == credentials
+
+
+@pytest.mark.parametrize("field", ["st_mtime_ns", "st_ctime_ns", "st_size"])
+def test_login_read_detects_changes_during_path_revalidation(env, monkeypatch, field):
+    session_id, home = prepare(env)
+    env.authority.sign_in(home, "one")
+    identity = (home / "auth.json").stat()
+    path_checked = False
+    observations = 0
+    original_stat, original_fstat = os.stat, os.fstat
+
+    def path_stat(path, *args, **kwargs):
+        nonlocal path_checked
+        info = original_stat(path, *args, **kwargs)
+        if not isinstance(path, int) and Path(path).name == "auth.json":
+            path_checked = True
+        return info
+
+    def handle_stat(descriptor):
+        nonlocal path_checked, observations
+        info = original_fstat(descriptor)
+        if os.path.samestat(info, identity):
+            observations += 1
+            if observations % 2:
+                path_checked = False
+            elif path_checked:
+                values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+                values[field] += 1
+                return SimpleNamespace(**values)
+        return info
+
+    monkeypatch.setattr(os, "stat", path_stat)
+    monkeypatch.setattr(os, "fstat", handle_stat)
+    with pytest.raises(EnrollmentError, match="complete, safe auth.json"):
+        env.controller.complete(session_id, confirm=True)
+    assert observations == 6
+    assert not env.store.accounts()
+    assert read_auth() is None
+
+
 @pytest.mark.parametrize("mutation", [
     "api-key", "missing-access", "empty-refresh", "nonstring-token", "bad-id-token",
     "no-account-identity", "mismatched-account", "keyring-mode", "bad-email", "bad-plan",

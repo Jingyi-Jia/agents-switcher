@@ -299,9 +299,9 @@ class CodexEnrollment:
                                 or before.st_size > MAX_AUTH_BYTES):
                             raise OSError("Invalid login file.")
                         raw = auth.read(MAX_AUTH_BYTES + 1)
+                        current = os.stat(session.directory / "auth.json" if directory_fd is None else "auth.json",
+                                          dir_fd=directory_fd, follow_symlinks=False)
                         after = os.fstat(auth.fileno())
-                    current = os.stat(session.directory / "auth.json" if directory_fd is None else "auth.json",
-                                      dir_fd=directory_fd, follow_symlinks=False)
                     if (
                         len(raw) > MAX_AUTH_BYTES or before.st_size != len(raw)
                         or before.st_mtime_ns != after.st_mtime_ns
@@ -309,7 +309,6 @@ class CodexEnrollment:
                         or before.st_size != after.st_size
                         or not os.path.samestat(before, current) or _linked(current)
                         or after.st_mtime_ns != current.st_mtime_ns
-                        or after.st_ctime_ns != current.st_ctime_ns
                         or after.st_size != current.st_size
                     ):
                         raise ValueError("Login is still being written.")
