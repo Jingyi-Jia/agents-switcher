@@ -8,7 +8,7 @@ const path = require('node:path');
 const net = require('node:net');
 const http = require('node:http');
 const { EventEmitter } = require('node:events');
-const { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, quitApplication, readJSON } = require('../scripts/smoke_app.cjs');
+const { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, closeFullScreenWindow, quitApplication, readJSON } = require('../scripts/smoke_app.cjs');
 
 function localRequests(t) {
   const requests = [];
@@ -199,6 +199,71 @@ test('smoke uses the native cancellable close and demands the existing window st
     await assert.rejects(closeNativeWindow(async () => result), /Native window close did not hide/);
   }
 });
+
+test('full-screen smoke requires native exit before hide rather than merely eventual invisibility', async () => {
+  const vm = require('node:vm');
+  for (const hideBeforeExit of [false, true]) {
+    const window = Object.assign(new EventEmitter(), {
+      shown: true, fullScreen: false, requests: [],
+      setFullScreen(value) {
+        this.requests.push(value);
+        setImmediate(() => { this.fullScreen = value; this.emit('enter-full-screen'); });
+      },
+      isFullScreen() { return this.fullScreen; },
+      isVisible() { return this.shown; },
+      isDestroyed() { return false; },
+      close() {
+        setImmediate(() => {
+          if (hideBeforeExit) { this.shown = false; this.emit('hide'); }
+          this.fullScreen = false;
+          this.emit('leave-full-screen');
+          if (!hideBeforeExit) { this.shown = false; this.emit('hide'); }
+        });
+      },
+    });
+    const smoke = closeFullScreenWindow(async (method, params) => {
+      assert.equal(method, 'Runtime.evaluate');
+      assert.equal(params.awaitPromise, true);
+      assert.equal(params.returnByValue, true);
+      const value = await vm.runInNewContext(params.expression, {setTimeout, clearTimeout, process: {mainModule: {require(name) {
+        assert.equal(name, 'electron');
+        return {BrowserWindow: {getAllWindows: () => [window]}};
+      }}}});
+      return {result: {value}};
+    });
+    if (hideBeforeExit) await assert.rejects(smoke, /did not leave full screen before hiding/);
+    else await smoke;
+    assert.deepEqual(window.requests, [true]);
+    assert.equal(window.shown, false);
+    assert.equal(window.eventNames().length, 0);
+  }
+  for (const result of [{result: {value: false}}, {exceptionDetails: {text: 'SECRET'}}]) {
+    await assert.rejects(closeFullScreenWindow(async () => result), /did not leave full screen before hiding/);
+  }
+});
+
+for (const missing of ['enter-full-screen', 'hide']) {
+  test(`full-screen smoke bounds a missing ${missing} event and removes its listeners`, async t => {
+    t.mock.timers.enable({apis: ['setTimeout']});
+    const vm = require('node:vm');
+    const window = Object.assign(new EventEmitter(), {
+      setFullScreen() { if (missing !== 'enter-full-screen') this.emit('enter-full-screen'); },
+      isFullScreen() { return true; },
+      isVisible() { return true; },
+      close() {},
+    });
+    const rejected = assert.rejects(closeFullScreenWindow(async (method, params) => {
+      const value = await vm.runInNewContext(params.expression, {setTimeout, clearTimeout, process: {mainModule: {require() {
+        return {BrowserWindow: {getAllWindows: () => [window]}};
+      }}}});
+      return {result: {value}};
+    }), /did not leave full screen before hiding/);
+    await new Promise(resolve => setImmediate(resolve));
+    t.mock.timers.tick(10000);
+    await rejected;
+    assert.equal(window.eventNames().length, 0);
+  });
+}
 
 test('smoke rejects a failed exit or a backend left listening after native quit', async t => {
   const socket = {send() {}};

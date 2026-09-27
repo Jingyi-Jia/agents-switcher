@@ -85,6 +85,36 @@ async function closeNativeWindow(command) {
   if (result.exceptionDetails || result.result?.value !== true) throw new SmokeError('Native window close did not hide the existing window');
 }
 
+async function closeFullScreenWindow(command) {
+  const result = await command('Runtime.evaluate', { expression: `(async () => {
+    const windows = process.mainModule.require('electron').BrowserWindow.getAllWindows();
+    if (windows.length !== 1) return false;
+    const window = windows[0];
+    const transition = (event, action) => new Promise(resolve => {
+      const done = () => { clearTimeout(timer); resolve(true); };
+      const timer = setTimeout(() => { window.removeListener(event, done); resolve(false); }, 10000);
+      window.once(event, done);
+      action();
+    });
+    if (!await transition('enter-full-screen', () => window.setFullScreen(true))) return false;
+    if (!window.isFullScreen() || !window.isVisible()) return false;
+    let leftFullScreen = false, hiddenEarly = false;
+    const onLeave = () => { leftFullScreen = true; };
+    const onHide = () => { if (!leftFullScreen) hiddenEarly = true; };
+    window.on('leave-full-screen', onLeave);
+    window.on('hide', onHide);
+    try {
+      const hidden = await transition('hide', () => window.close());
+      return hidden && leftFullScreen && !hiddenEarly && !window.isDestroyed()
+        && !window.isFullScreen() && !window.isVisible();
+    } finally {
+      window.removeListener('leave-full-screen', onLeave);
+      window.removeListener('hide', onHide);
+    }
+  })()`, awaitPromise: true, returnByValue: true });
+  if (result.exceptionDetails || result.result?.value !== true) throw new SmokeError('Native full-screen close did not leave full screen before hiding');
+}
+
 async function connectDebugger(address) {
   const endpoint = new URL(address);
   if (endpoint.protocol !== 'ws:' || endpoint.hostname !== '127.0.0.1' || endpoint.username || endpoint.password) {
@@ -252,26 +282,29 @@ async function exercise({ platform, arch, distribution, disposable, screenshot }
     if (automation.exceptionDetails || automation.result?.value !== true) throw new SmokeError('Isolated automation did not start');
     await verifyWindowState(command, readState, 'visible');
     mainDebugger = await connectDebugger(inspectorAddress);
-    await closeNativeWindow(mainDebugger.command);
+    for (const fullScreen of platform === 'mac' ? [false, true] : [false]) {
+      if (fullScreen) await closeFullScreenWindow(mainDebugger.command);
+      else await closeNativeWindow(mainDebugger.command);
+      await verifyWindowState(command, readState, 'hidden');
+      second = spawn(executable, [`--user-data-dir=${profile}`], { cwd: root, env, stdio: 'ignore', shell: false });
+      const secondExit = await Promise.race([
+        new Promise((resolve, reject) => {
+          second.once('error', () => reject(new SmokeError('Second app launch failed')));
+          second.once('exit', (code, signal) => resolve({ code, signal }));
+        }),
+        delay(10000, null, { ref: false }),
+      ]);
+      if (!secondExit || secondExit.code !== 0 || secondExit.signal !== null) throw new SmokeError('Second launch did not return to the running app');
+      await verifyWindowState(command, readState, 'visible');
+    }
     mainDebugger.socket.close();
-    await verifyWindowState(command, readState, 'hidden');
-    second = spawn(executable, [`--user-data-dir=${profile}`], { cwd: root, env, stdio: 'ignore', shell: false });
-    const secondExit = await Promise.race([
-      new Promise((resolve, reject) => {
-        second.once('error', () => reject(new SmokeError('Second app launch failed')));
-        second.once('exit', (code, signal) => resolve({ code, signal }));
-      }),
-      delay(10000, null, { ref: false }),
-    ]);
-    if (!secondExit || secondExit.code !== 0 || secondExit.signal !== null) throw new SmokeError('Second launch did not return to the running app');
-    await verifyWindowState(command, readState, 'visible');
     if (screenshot) {
       const image = await command('Page.captureScreenshot', { format: 'png' });
       fs.mkdirSync(path.dirname(path.resolve(screenshot)), { recursive: true });
       fs.writeFileSync(screenshot, Buffer.from(image.data, 'base64'));
     }
     await quitApplication(renderer.socket, exited, Number(address.port));
-    console.log(`Packaged ${platform}-${arch} app smoke passed (${distribution}; isolated accounts, native bridge, renderer, close hides, second launch reopens, automation retained, explicit quit stops backend)`);
+    console.log(`Packaged ${platform}-${arch} app smoke passed (${distribution}; isolated accounts, native bridge, renderer, close hides${platform === 'mac' ? ', full-screen exit before hide' : ''}, second launch reopens, automation retained, explicit quit stops backend)`);
   } finally {
     mainDebugger?.socket.close();
     renderer?.socket.close();
@@ -296,4 +329,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, quitApplication, readJSON, exercise };
+module.exports = { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, closeFullScreenWindow, quitApplication, readJSON, exercise };

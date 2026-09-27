@@ -18,6 +18,7 @@ let starting = false;
 let dashboardAddress = null;
 let updates = null;
 let installing = false;
+let fullScreenClose = null;
 
 function installerOwnsShutdown() {
   return installing && updates?.installStarted && backend?.cleanExit;
@@ -25,6 +26,7 @@ function installerOwnsShutdown() {
 
 function showWindow() {
   if (!window || window.isDestroyed() || recovering || quitting || installing) return;
+  if (fullScreenClose) fullScreenClose.hide = false;
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
@@ -33,6 +35,7 @@ function showWindow() {
 function showView(view) {
   if (!['accounts', 'usage', 'settings'].includes(view) || !dashboardAddress
     || !window || window.isDestroyed() || recovering || quitting || installing) return;
+  if (fullScreenClose) fullScreenClose.hide = false;
   const target = new URL(dashboardAddress);
   target.hash = view;
   void window.loadURL(target.href).then(showWindow).catch(() => recover(new BackendError('backend_error')));
@@ -156,11 +159,27 @@ async function startDashboard() {
     window.on('close', (event) => {
       if (quitting || recovering || installerOwnsShutdown()) return;
       event.preventDefault();
+      if (fullScreenClose) {
+        fullScreenClose.hide = true;
+        return;
+      }
+      if (process.platform === 'darwin' && window.isFullScreen()) {
+        const closingWindow = window;
+        const request = { hide: true };
+        fullScreenClose = request;
+        closingWindow.once('leave-full-screen', () => {
+          if (fullScreenClose !== request) return;
+          fullScreenClose = null;
+          if (request.hide && !closingWindow.isDestroyed() && !quitting && !recovering && !installerOwnsShutdown()) closingWindow.hide();
+        });
+        closingWindow.setFullScreen(false);
+        return;
+      }
       window.hide();
     });
     window.on('query-session-end', () => app.quit());
     window.on('session-end', () => app.quit());
-    window.on('closed', () => { window = null; });
+    window.on('closed', () => { fullScreenClose = null; window = null; });
     await window.loadURL(url);
     showWindow();
   } catch (error) {
