@@ -719,8 +719,26 @@ def test_clearing_a_removed_pending_slot_does_not_affect_another_import(env):
     assert env.store.read_credentials("2") == login("two")
 
 
+@pytest.mark.parametrize("refresh_existing", [False, True])
+def test_add_current_protects_a_saved_repair_from_the_old_live_login(env, refresh_existing):
+    save_current(env)
+    session_id, home = prepare(env, number="1")
+    repaired = env.authority.sign_in(home, "one", "repaired")
+    env.controller.complete(session_id, confirm=True)
+    env.controller.cancel(session_id, confirm=True)
+    before = snapshot(env)
+    pending = (env.store.root / ".pending-enrollments.json").read_bytes()
+    with pytest.raises(SwitchError, match="saved login awaiting activation"):
+        CodexSwitcher(env.store).add_current(refresh_existing=refresh_existing)
+    assert snapshot(env) == before
+    assert env.store.read_credentials("1") == repaired
+    assert (env.store.root / ".pending-enrollments.json").read_bytes() == pending
+
+
 def test_add_current_remains_an_explicit_way_to_capture_native_rotation(env):
     env.switcher.import_login(login("one", "saved"))
+    env.switcher.switch_to("1", allow_same=True)
+    assert env.switcher._pending_imports() == {}
     current = login("one", "native")
     write_auth(current)
     env.switcher.add_current(refresh_existing=True)

@@ -255,6 +255,7 @@ class DashboardState:
                     "alias": account.alias,
                     "plan": account.plan,
                     "active": account.number == active,
+                    "activationRequired": self._codex.activation_required(account),
                     "disabled": account.disabled,
                 }
                 if isinstance(result, Exception):
@@ -308,14 +309,14 @@ class DashboardState:
         finally:
             self.invalidate()
 
-    def switch(self, provider: str, number: str) -> dict:
+    def switch(self, provider: str, number: str, *, useSavedLogin: bool = False) -> dict:
         """Switch one provider, returning what the user still has to do."""
         try:
             with self._lock:
                 if provider == "codex":
                     number = account_number(number)
                     self._require_codex_quit()
-                return self.actions.switch(provider, number)
+                return self.actions.switch(provider, number, use_saved_login=useSavedLogin)
         finally:
             self.invalidate()
 
@@ -682,7 +683,7 @@ def _make_handler(state: DashboardState, token: str):
                 "/api/claude-desktop/open": (state.claude_desktop.open, {"profileId", "confirm"}, set()),
                 "/api/claude-desktop/update": (state.claude_desktop.update, {"profileId", "name", "emailLabel", "confirm"}, set()),
                 "/api/claude-desktop/delete": (state.claude_desktop.delete, {"profileId", "confirm"}, set()),
-                "/api/switch": (state.switch, {"provider", "number"}, set()),
+                "/api/switch": (state.switch, {"provider", "number"}, {"useSavedLogin"}),
                 "/api/add": (state.add_current, {"provider"}, set()),
                 "/api/remove": (state.remove, {"provider", "number", "confirm"}, set()),
                 "/api/disabled": (state.set_disabled, {"provider", "number", "disabled"}, set()),

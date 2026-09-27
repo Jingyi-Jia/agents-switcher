@@ -141,8 +141,10 @@ class ProviderActions:
             "followUp": followup,
         }
 
-    def switch(self, provider: str, number) -> dict:
+    def switch(self, provider: str, number, *, use_saved_login: bool = False) -> dict:
         number = account_number(number)
+        if type(use_saved_login) is not bool or (use_saved_login and provider != "codex"):
+            raise ProviderActionError("useSavedLogin must be a boolean and is supported only for Codex.")
         with self.lock:
             switcher = self._require(provider, "switch")
             try:
@@ -154,7 +156,7 @@ class ProviderActions:
                         "and terminal sessions. Then switch here and reopen Codex; "
                         "your current login has not been changed.", code="codex-running",
                     )
-                result = switcher.switch_to(number)
+                result = switcher.switch_to(number, allow_same=True) if use_saved_login else switcher.switch_to(number)
                 message = f"Switched to {result.account.display_label}."
                 if result.restart_required:
                     message += (

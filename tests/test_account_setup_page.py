@@ -33,6 +33,56 @@ const opener = button('codex-actions', 'Add another account');
 """
 
 
+@pytest.mark.parametrize("active", [True, False])
+def test_pending_saved_login_has_a_session_independent_activation_action(node, active):
+    run_page(node, "apiState.codex.accounts[0].active = " + str(active).lower() + r""";
+apiState.codex.accounts[0].activationRequired = true;
+await load();
+const apply = button('codex', 'Use saved login');
+assert.ok(apply);
+assert.equal(apply.disabled, false);
+assert.equal(apply.attributes['aria-label'], 'Use saved login for account 1');
+assert.match($('codex').textContent, /Saved login awaiting activation/);
+assert.equal(codexEnrollmentFlow, null);
+await apply.click();
+assert.equal($('codex-dialog').open, true);
+assert.match($('codex-dialog-title').textContent, /Use saved login/);
+assert.match($('codex-dialog-description').textContent, /already saved.*No new sign-in/);
+assert.equal(posts().length, 0);
+fetchHandler = async path => {
+  if (path === '/api/switch') {
+    apiState.codex.accounts[0].activationRequired = false;
+    apiState.codex.accounts[0].active = true;
+  }
+  return {ok: true, json: async () => path.startsWith('/api/state') ? apiState : path === '/api/codex/status' ? codexStatus : response};
+};
+await $('codex-continue').click(); await settle();
+assert.deepEqual(posts().map(call => [call.path, call.payload]), [
+  ['/api/switch', {provider: 'codex', number: '1', useSavedLogin: true}],
+]);
+assert.equal($('codex-dialog').open, false);
+assert.equal(button('codex', 'Use saved login'), undefined);
+assert.equal(button('codex', 'Current').disabled, true);
+""")
+
+
+def test_pending_saved_login_cannot_bypass_unknown_process_state_and_can_be_cancelled(node):
+    run_page(node, r"""
+apiState.codex.accounts[0].activationRequired = true;
+codexStatus = {available: false, running: null};
+await load();
+const apply = button('codex', 'Use saved login');
+apply.focus(); await apply.click();
+assert.equal($('codex-continue').disabled, true);
+await $('codex-continue').click();
+assert.equal(posts().length, 0);
+await $('codex-cancel').click(); await settle();
+assert.equal($('codex-dialog').open, false);
+assert.equal(document.activeElement, apply);
+assert.equal(apiState.codex.accounts[0].activationRequired, true);
+""")
+
+
 def test_preparing_login_requires_deliberate_confirmation_and_does_not_switch(node):
     run_page(node, ENROLLMENT + r"""
 opener.focus(); opener.click();

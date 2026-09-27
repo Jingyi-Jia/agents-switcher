@@ -393,11 +393,12 @@ function card(provider, a, data) {
   name.title = a.email || name.textContent;
   identity.append(name, el("div", "account-meta", [a.alias ? a.email : null, a.plan, a.org !== "personal" ? a.org : null, "Slot " + a.number].filter(Boolean).join(" · ")));
   top.append(avatar, identity);
-  const b = actionButton(a.active ? "Current" : "Switch", () => provider === "codex" ? requestCodexSwitch(a, b) : act("/api/switch", {provider, number: a.number}, b, "Switching…"));
+  const pending = provider === "codex" && a.activationRequired === true;
+  const b = actionButton(pending ? "Use saved login" : a.active ? "Current" : "Switch", () => provider === "codex" ? requestCodexSwitch(a, b) : act("/api/switch", {provider, number: a.number}, b, "Switching…"));
   b.dataset.focusKey = provider + ":switch:" + a.number;
-  b.className = a.active ? "ghost" : "primary";
-  b.setAttribute("aria-label", a.active ? `Account ${a.number} is active` : `Switch to account ${a.number}`);
-  block(b, !!a.active || a.switchable === false || !supports(data, "switch"));
+  b.className = a.active && !pending ? "ghost" : "primary";
+  b.setAttribute("aria-label", pending ? `Use saved login for account ${a.number}` : a.active ? `Account ${a.number} is active` : `Switch to account ${a.number}`);
+  block(b, (!!a.active && !pending) || a.switchable === false || !supports(data, "switch"));
   c.appendChild(top);
 
   const ws = a.windows || [];
@@ -429,7 +430,7 @@ function card(provider, a, data) {
     c.appendChild(el("div", "state", "usage unknown"));
   }
   const footer = el("div", "account-footer");
-  footer.append(b, el("span", "hint", a.disabled ? "Excluded from auto-switch" : a.onCredits ? "Manual only" : a.active ? "Current saved login" : ""));
+  footer.append(b, el("span", "hint", pending ? "Saved login awaiting activation" : a.disabled ? "Excluded from auto-switch" : a.onCredits ? "Manual only" : a.active ? "Current saved login" : ""));
   const menu = el("details", "account-overflow"), summary = el("summary", null, "···");
   menu.dataset.menu = provider + ":menu:" + a.number;
   summary.dataset.control = "";

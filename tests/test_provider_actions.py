@@ -42,6 +42,9 @@ class Codex:
     def list_accounts(self):
         return list(self.accounts)
 
+    def activation_required(self, account):
+        return False
+
     def status(self):
         account = next((a for a in self.accounts if a.number == self.active), None)
         return CodexStatus(

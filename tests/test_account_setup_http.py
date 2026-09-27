@@ -5,11 +5,16 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from agents_switcher.exceptions import MigrationError, ValidationError
+from agents_switcher.codex.store import CodexAccountStore
+from agents_switcher.codex.switcher import CodexSwitcher
+from agents_switcher.web.server import DashboardState, serve
+from tests.test_codex_enrollment import env, prepare, save_current, snapshot
 from tests.test_web_actions import request, web
 
 
@@ -193,3 +198,79 @@ def test_server_shutdown_discards_owned_enrollment_state(setup_web):
     setup_web.server.shutdown()
     setup_web.server.server_close()
     setup_web.state.codex_enrollment.close.assert_called_once_with()
+
+
+@pytest.fixture
+def pending_repair_web(env, monkeypatch):
+    _, original = save_current(env)
+    session_id, home = prepare(env, number="1")
+    repaired = env.authority.sign_in(home, "one", "repaired")
+    env.controller.complete(session_id, confirm=True)
+    env.controller.cancel(session_id, confirm=True)
+    env.controller.close()
+    switcher = CodexSwitcher(CodexAccountStore(env.store.root))
+    monkeypatch.setattr(switcher, "usage_all", lambda: {})
+    monkeypatch.setattr("agents_switcher.providers.running_codex_processes", list)
+    state = DashboardState(codex_switcher=switcher)
+    state.codex_desktop.status = Mock(return_value={"available": True, "running": False})
+    server, _ = serve(state, host="127.0.0.1", port=0, token="test-web-auth")
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+    thread.start()
+    yield SimpleNamespace(state=state, server=server, token="test-web-auth", env=env,
+                          original=original, repaired=repaired)
+    server.shutdown()
+    server.server_close()
+    thread.join(3)
+
+
+def test_saved_repair_can_be_activated_after_cancellation_and_server_restart(pending_repair_web):
+    service = pending_repair_web
+    assert service.state.codex_enrollment._session is None
+    code, state, _ = request(service, "/api/state", method="GET")
+    assert code == 200
+    account = state["codex"]["accounts"][0]
+    assert account["active"] is True and account["activationRequired"] is True
+    assert service.repaired["tokens"]["refresh_token"] not in json.dumps(state)
+    code, result, _ = request(service, "/api/switch", {"provider": "codex", "number": "1", "useSavedLogin": True})
+    assert code == 200 and result["ok"] and result["switched"]
+    assert snapshot(service.env)[0] == service.repaired
+    assert service.env.store.read_credentials("1") == service.repaired
+    assert service.state._codex._pending_imports() == {}
+    _, state, _ = request(service, "/api/state", method="GET")
+    assert state["codex"]["accounts"][0]["activationRequired"] is False
+
+
+@pytest.mark.parametrize("status,code", [
+    ({"available": True, "running": True}, "codex-running"),
+    ({"available": False, "running": None}, "codex-status-unknown"),
+])
+def test_saved_repair_activation_still_requires_confirmed_exit(pending_repair_web, status, code):
+    service = pending_repair_web
+    before = snapshot(service.env)
+    service.state.codex_desktop.status.return_value = status
+    response, result, _ = request(service, "/api/switch", {"provider": "codex", "number": "1", "useSavedLogin": True})
+    assert response == 400 and result["code"] == code
+    assert snapshot(service.env) == before
+    assert service.state._codex._pending_imports() == {"1": "one"}
+
+
+def test_add_existing_login_cannot_replace_the_saved_repair(pending_repair_web):
+    service = pending_repair_web
+    before = snapshot(service.env)
+    code, result, _ = request(service, "/api/add", {"provider": "codex"})
+    assert code == 400 and "saved login awaiting activation" in result["message"]
+    assert snapshot(service.env) == before
+    assert service.state._codex._pending_imports() == {"1": "one"}
+
+
+@pytest.mark.parametrize("value", [None, "true", 1, [], {}])
+def test_saved_login_switch_intent_is_an_exact_boolean(web, value):
+    code, _, _ = request(web, "/api/switch", {"provider": "codex", "number": "1", "useSavedLogin": value})
+    assert code == 400
+    assert web.state._codex.calls == []
+
+
+def test_saved_login_switch_intent_is_codex_only(web):
+    code, _, _ = request(web, "/api/switch", {"provider": "claude", "number": "1", "useSavedLogin": True})
+    assert code == 400
+    assert web.state._claude.calls == []

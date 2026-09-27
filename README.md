@@ -447,6 +447,10 @@ agent-switch codex login --account 1 --activate
 
 If you saved a repair without `--activate`, quit Codex and run
 `agent-switch codex switch 1 --use-saved-login` to deliberately apply it later.
+In the app, choose **Use saved login** on that account. This action remains
+available after cancelling the sign-in dialog or restarting Agent Switch;
+you don't need to sign in again. **Add existing login** refuses to overwrite
+a saved login awaiting activation.
 The ordinary `codex add` command still rejects an already-managed account;
 it does not start an isolated sign-in. Avoid deleting saved accounts or copying
 old `auth.json` files around to fix a revoked token. For a

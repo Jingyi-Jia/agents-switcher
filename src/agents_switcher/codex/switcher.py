@@ -180,6 +180,15 @@ class CodexSwitcher:
                     "its account cannot be identified. API-key accounts are not "
                     "managed yet."
                 )
+            pending = self._pending_imports()
+            existing = self.store.find_by_account_id(identity.account_id)
+            if existing is not None and pending.get(existing.number) == existing.account_id:
+                raise SwitchError(
+                    f"Slot {existing.number} has a saved login awaiting activation. "
+                    "Choose Use saved login in Agent Switch, or quit Codex and run "
+                    f"'agent-switch codex switch {existing.number} --use-saved-login'. "
+                    "The saved login was not replaced."
+                )
             account = self._save_login(
                 identity, live, alias=alias, refresh_existing=refresh_existing, current=True,
             )
@@ -307,7 +316,7 @@ class CodexSwitcher:
             pending[number] = account_id
         auth_file.write_auth(pending, self.store.root / ".pending-enrollments.json")
 
-    def _has_pending_import(self, account: CodexAccount) -> bool:
+    def activation_required(self, account: CodexAccount) -> bool:
         return self._pending_imports().get(account.number) == account.account_id
 
     def switch_to(
@@ -372,7 +381,7 @@ class CodexSwitcher:
                     raise SwitchError(
                         f"{target.display_label} is already the active Codex account."
                     )
-                if not self._has_pending_import(previous):
+                if not self.activation_required(previous):
                     previous_credentials = self.store.read_credentials(previous.number)
                     synced_back = not _live_login_is_older(previous_credentials or {}, live)
                     if synced_back:
@@ -529,7 +538,7 @@ class CodexSwitcher:
                 f"Slot {account.number} ({account.display_label}) has no saved "
                 "credential."
             )
-        if self._has_pending_import(account):
+        if self.activation_required(account):
             return credentials
         live = read_auth()
         if has_live_login(live) and account.identity.matches(identity_from_auth(live)):
@@ -592,7 +601,7 @@ class CodexSwitcher:
         self.store.write_credentials(account.number, updated)
         live = read_auth()
         if (
-            not self._has_pending_import(account)
+            not self.activation_required(account)
             and account.identity.matches(identity_from_auth(live))
             and live.get("tokens") == tokens
         ):

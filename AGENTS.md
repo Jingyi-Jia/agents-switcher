@@ -194,6 +194,11 @@ activates the same pinned session under the shared action lock. The underlying
 enrollment controller's `complete()` remains save-only; `activate()` is separate.
 Cancel and server shutdown clean only enrollment-owned temporary data, never
 saved accounts or provider processes. Preserve partial-save errors for retry.
+Codex account state exposes `activationRequired` for saved pending logins. The
+dashboard's **Use saved login** action sends exact `useSavedLogin: true` to
+`POST /api/switch`, retains strict quit checks, and does not need an enrollment
+session. Live capture must refuse to overwrite a pending saved login; ordinary
+capture of native rotation resumes only after activation.
 
 ## Setup, tests and builds
 

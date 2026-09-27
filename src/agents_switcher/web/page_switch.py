@@ -80,9 +80,9 @@ async function checkCodexFlow(flow) {
 
 async function requestCodexSwitch(account, opener) {
   if (busy || codexFlow || codexEnrollmentFlow || $("action-dialog").open || activeView !== "accounts") return;
-  const flow = codexFlow = {generation: ++codexGeneration, number: account.number, label: account.alias || account.email || "account " + account.number, opener, phase: "checking", status: null, attempts: 0};
-  $("codex-dialog-title").textContent = "Switch to " + flow.label + "?";
-  $("codex-dialog-description").textContent = "Codex must be fully quit before its saved login can change. This prepares the next launch; it doesn't change the identity of a running app.";
+  const flow = codexFlow = {generation: ++codexGeneration, number: account.number, label: account.alias || account.email || "account " + account.number, useSavedLogin: account.activationRequired === true, opener, phase: "checking", status: null, attempts: 0};
+  $("codex-dialog-title").textContent = (flow.useSavedLogin ? "Use saved login for " : "Switch to ") + flow.label + "?";
+  $("codex-dialog-description").textContent = (flow.useSavedLogin ? "A fresh login is already saved for this account. No new sign-in is needed. " : "") + "Codex must be fully quit before its saved login can change. This prepares the next launch; it doesn't change the identity of a running app.";
   $("codex-dialog").showModal(); $("codex-cancel").focus();
   await checkCodexFlow(flow);
 }
@@ -101,7 +101,7 @@ async function performCodexSwitch(flow, reopen) {
   busy = true; ++requestVersion; flow.phase = "switching"; syncBusy(); updateCodexControls(flow);
   codexMessage("Switching the saved login. Please keep this window open.");
   try {
-    const {ok, body} = await api("/api/switch", {method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify({provider: "codex", number: flow.number})});
+    const {ok, body} = await api("/api/switch", {method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify({provider: "codex", number: flow.number, ...(flow.useSavedLogin ? {useSavedLogin: true} : {})})});
     if (!ok || body.ok === false || body.error || body.switched === false) {
       const expected = body.kind === "action-required" && ["codex-running", "codex-status-unknown"].includes(body.code);
       flow.status = null; flow.phase = "ready";
