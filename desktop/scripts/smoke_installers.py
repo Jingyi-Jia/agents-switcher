@@ -111,7 +111,9 @@ def install_windows(directory, version, work):
     uninstaller = destination / "Uninstall Agent Switch.exe"
     if not uninstaller.is_file():
         raise ValueError("The installed NSIS uninstaller is missing")
-    subprocess.run(f'"{uninstaller}" /S _?={destination}', check=True, timeout=90, env=environment)
+    copied_uninstaller = work / "release-uninstaller.exe"
+    shutil.copyfile(uninstaller, copied_uninstaller)
+    subprocess.run(f'"{copied_uninstaller}" /S /currentuser _?={destination}', check=True, timeout=90, env=environment)
     if (destination / "Agent Switch.exe").exists():
         raise ValueError("The native uninstaller did not remove the app")
     print("NSIS installation, isolated first launch, and native uninstall passed", flush=True)

@@ -126,8 +126,9 @@ def test_nsis_command_preserves_unquoted_destination_with_spaces(installer, monk
         if len(commands) == 1:
             destination.mkdir()
             (destination / "Agent Switch.exe").touch()
-            (destination / "Uninstall Agent Switch.exe").touch()
+            (destination / "Uninstall Agent Switch.exe").write_bytes(b"synthetic uninstaller")
         else:
+            assert (work / "release-uninstaller.exe").read_bytes() == b"synthetic uninstaller"
             (destination / "Agent Switch.exe").unlink()
 
     monkeypatch.setattr(installer.subprocess, "run", run)
@@ -136,7 +137,7 @@ def test_nsis_command_preserves_unquoted_destination_with_spaces(installer, monk
     installer.install_windows(artifacts, "1.2.4", work)
     assert commands == [
         f'"{artifacts / "Agent-Switch-1.2.4-win-x64.exe"}" /S /currentuser /D={destination}',
-        f'"{destination / "Uninstall Agent Switch.exe"}" /S _?={destination}',
+        f'"{work / "release-uninstaller.exe"}" /S /currentuser _?={destination}',
     ]
     smoke.assert_called_once_with(destination, "win", "x64", "1.2.4", work)
 
