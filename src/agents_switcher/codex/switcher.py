@@ -31,8 +31,14 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
-from agents_switcher.codex.auth_file import has_live_login, read_auth, write_auth
-from agents_switcher.codex.identity import CodexIdentity, identity_from_auth
+from agents_switcher.codex import auth_file
+from agents_switcher.codex.auth_file import CodexAuthError, has_live_login, read_auth, write_auth
+from agents_switcher.codex.identity import (
+    OPENAI_AUTH_CLAIM,
+    CodexIdentity,
+    decode_jwt_claims,
+    identity_from_auth,
+)
 from agents_switcher.codex.processes import CodexProcess, running_codex_processes
 from agents_switcher.codex.stats import (
     CodexProfileStats,
@@ -50,7 +56,7 @@ from agents_switcher.codex.tokens import (
 from agents_switcher.codex.usage import CodexUsage, UsageAuthError, UsageError, fetch_usage
 from agents_switcher.exceptions import AccountNotFoundError, SwitchError, ValidationError
 
-_logger = logging.getLogger("claude-swap")
+_logger = logging.getLogger("agents-switcher")
 
 
 def _live_login_is_older(saved: dict, live: dict) -> bool:
@@ -165,7 +171,7 @@ class CodexSwitcher:
             live = read_auth()
             if not has_live_login(live):
                 raise ValidationError(
-                    "Codex is not logged in — run 'codex login' first."
+                    "Codex is not logged in — run 'agent-switch codex login --activate' first."
                 )
             identity = identity_from_auth(live)
             if identity is None:
@@ -174,34 +180,157 @@ class CodexSwitcher:
                     "its account cannot be identified. API-key accounts are not "
                     "managed yet."
                 )
+            pending = self._pending_imports()
             existing = self.store.find_by_account_id(identity.account_id)
-            if existing is not None:
-                if refresh_existing:
-                    updated = replace(
-                        existing, email=identity.email or existing.email,
-                        plan=identity.plan or existing.plan,
-                    )
-                    self.store.write_credentials(existing.number, live)
-                    self.store.update(updated)
-                    self.store.set_active(existing.number)
-                    return updated
+            if existing is not None and pending.get(existing.number) == existing.account_id:
                 raise SwitchError(
-                    f"{identity.display_label} is already managed as slot "
-                    f"{existing.number}."
+                    f"Slot {existing.number} has a saved login awaiting activation. "
+                    "Choose Use saved login in Agent Switch, or quit Codex and run "
+                    f"'agent-switch codex switch {existing.number} --use-saved-login'. "
+                    "The saved login was not replaced."
                 )
-            account = self.store.add(identity, live, alias=alias)
+            account = self._save_login(
+                identity, live, alias=alias, refresh_existing=refresh_existing, current=True,
+            )
+            self._set_pending_import(account.number, None)
             # The credential we just captured IS the live one, so this slot is
             # active by construction -- recording anything else would make the
             # very next switch sync-back into the wrong slot.
             self.store.set_active(account.number)
             return account
 
-    def switch_to(self, identifier: str, *, force: bool = False) -> SwitchResult:
+    def _save_login(
+        self, identity: CodexIdentity, credentials: dict, *, alias: str,
+        refresh_existing: bool, current: bool,
+    ) -> CodexAccount:
+        """Save a validated login while the caller holds the store lock."""
+        existing = self.store.find_by_account_id(identity.account_id)
+        if existing is None:
+            return self.store.add(identity, credentials, alias=alias)
+        if not refresh_existing:
+            raise SwitchError(
+                f"{identity.display_label} is already managed as slot {existing.number}."
+            )
+        self.store.write_credentials(existing.number, credentials)
+        if not current:
+            return existing
+        updated = replace(
+            existing, email=identity.email or existing.email,
+            plan=identity.plan or existing.plan,
+        )
+        self.store.update(updated)
+        return updated
+
+    def import_login(
+        self, credentials: dict, *, alias: str = "", expected: CodexAccount | None = None,
+    ) -> CodexAccount:
+        """Save an isolated ChatGPT login without changing live auth or its marker.
+
+        ``expected`` pins a repair to the saved slot observed before sign-in.
+        Existing slot metadata is retained; only its credential is replaced.
+        No provider request or token refresh is made here.
+        """
+        from agents_switcher.models import normalize_alias
+
+        tokens = credentials.get("tokens") if isinstance(credentials, dict) else None
+        if (
+            not isinstance(tokens, dict)
+            or any(
+                not isinstance(tokens.get(key), str) or not tokens[key].strip()
+                for key in ("id_token", "access_token", "refresh_token")
+            )
+            or credentials.get("auth_mode") not in (None, "chatgpt")
+            or credentials.get("OPENAI_API_KEY") not in (None, "")
+        ):
+            raise ValidationError("Enrollment requires a complete file-backed ChatGPT login, not an API-key login.")
+        try:
+            claims = decode_jwt_claims(tokens["id_token"])
+        except RecursionError:
+            raise ValidationError("Enrollment could not identify a valid ChatGPT account.") from None
+        ns = claims.get(OPENAI_AUTH_CLAIM) if isinstance(claims, dict) else None
+        account_id = ns.get("chatgpt_account_id") if isinstance(ns, dict) else None
+        if (
+            not isinstance(account_id, str) or not account_id.strip()
+            or tokens.get("account_id") not in (None, "", account_id)
+            or ("email" in claims and not isinstance(claims["email"], str))
+            or ("chatgpt_plan_type" in ns and not isinstance(ns["chatgpt_plan_type"], str))
+        ):
+            raise ValidationError("Enrollment could not identify a valid ChatGPT account.")
+        identity = identity_from_auth(credentials)
+        normalized = normalize_alias(alias) if alias else ""
+        with self.store.lock():
+            existing = self.store.find_by_account_id(identity.account_id)
+            if existing is not None and (
+                len(existing.number) > 20 or not existing.number.isascii()
+                or not existing.number.isdecimal() or int(existing.number) <= 0
+                or str(int(existing.number)) != existing.number
+            ):
+                raise SwitchError("The saved Codex slot is invalid. Repair the account roster before signing in.")
+            if expected is not None:
+                current = self.store.get(expected.number)
+                if (
+                    current is None or current.account_id != expected.account_id
+                    or current.added != expected.added
+                ):
+                    raise SwitchError("The saved Codex slot changed during sign-in. Start enrollment again.")
+                if identity.account_id != expected.account_id or existing.number != expected.number:
+                    raise ValidationError("The sign-in belongs to a different Codex account. Nothing was saved.")
+            if existing is None and normalized:
+                if any(a.alias.lower() == normalized.lower() for a in self.store.accounts().values()):
+                    raise ValidationError("That alias already belongs to another Codex account.")
+            number = existing.number if existing else self.store.next_number()
+            pending = self._pending_imports()
+            previous = pending.get(number)
+            self._set_pending_import(number, identity.account_id)
+            try:
+                return self._save_login(
+                    identity, credentials, alias=normalized, refresh_existing=True, current=False,
+                )
+            except BaseException:
+                self._set_pending_import(number, previous)
+                raise
+
+    def _pending_imports(self) -> dict[str, str]:
+        """Read the private save-only barrier; never confuse it with live state."""
+        try:
+            data = auth_file.read_auth(self.store.root / ".pending-enrollments.json")
+        except CodexAuthError:
+            raise SwitchError("Codex enrollment metadata is unreadable; refusing to overwrite saved logins.") from None
+        if data is None:
+            return {}
+        if any(
+            not isinstance(number, str) or not number.isascii() or not number.isdecimal()
+            or not isinstance(account_id, str) or not account_id
+            for number, account_id in data.items()
+        ):
+            raise SwitchError("Codex enrollment metadata is invalid; refusing to overwrite saved logins.")
+        return data
+
+    def _set_pending_import(self, number: str, account_id: str | None) -> None:
+        pending = self._pending_imports()
+        if pending.get(number) == account_id:
+            return
+        if account_id is None:
+            pending.pop(number, None)
+        else:
+            pending[number] = account_id
+        auth_file.write_auth(pending, self.store.root / ".pending-enrollments.json")
+
+    def activation_required(self, account: CodexAccount) -> bool:
+        return self._pending_imports().get(account.number) == account.account_id
+
+    def switch_to(
+        self, identifier: str, *, force: bool = False, allow_same: bool = False,
+        expected: CodexAccount | None = None,
+    ) -> SwitchResult:
         """Make a managed account the live Codex login.
 
         Args:
             force: Proceed even when the current login belongs to no managed
                 slot, discarding it.
+            allow_same: Explicitly activate a newly saved login for the same
+                account. Requires all Codex processes to have exited.
+            expected: Refuse a slot whose identity changed before activation.
 
         Raises:
             AccountNotFoundError: No such managed account.
@@ -210,18 +339,25 @@ class CodexSwitcher:
         """
         with self.store.lock():
             target = self.resolve(identifier)
+            if expected is not None and (
+                target.number != expected.number or target.account_id != expected.account_id
+                or target.added != expected.added
+            ):
+                raise SwitchError("The saved Codex slot changed. Start enrollment again.")
+            if allow_same and running_codex_processes():
+                raise SwitchError("Quit Codex CLI and Desktop before activating this login.")
             target_credentials = self.store.read_credentials(target.number)
             if target_credentials is None:
                 raise SwitchError(
                     f"Slot {target.number} ({target.display_label}) has no saved "
-                    "credential. Log in as that account and re-add it."
+                    f"credential. Run 'agent-switch codex login --account {target.number} --activate' to repair it."
                 )
             if not has_live_login(target_credentials) or not target.identity.matches(
                 identity_from_auth(target_credentials)
             ):
                 raise SwitchError(
                     f"Slot {target.number} has an invalid or mismatched saved login. "
-                    "Sign in to that Codex account and add the existing login again."
+                    f"Run 'agent-switch codex login --account {target.number} --activate' to repair it safely."
                 )
 
             live = read_auth()
@@ -239,17 +375,19 @@ class CodexSwitcher:
                     "or pass force to overwrite it."
                 )
 
+            synced_back = False
             if live_identity is not None and previous is not None:
-                if previous.number == target.number:
+                if previous.number == target.number and not allow_same:
                     raise SwitchError(
                         f"{target.display_label} is already the active Codex account."
                     )
-                previous_credentials = self.store.read_credentials(previous.number)
-                synced_back = not _live_login_is_older(previous_credentials or {}, live)
-                if synced_back:
-                    self.store.write_credentials(previous.number, live)
-            else:
-                synced_back = False
+                if not self.activation_required(previous):
+                    previous_credentials = self.store.read_credentials(previous.number)
+                    synced_back = not _live_login_is_older(previous_credentials or {}, live)
+                    if synced_back:
+                        self.store.write_credentials(previous.number, live)
+                        if previous.number == target.number:
+                            target_credentials = live
 
             target_tokens = target_credentials.get("tokens") or {}
             if (
@@ -265,6 +403,7 @@ class CodexSwitcher:
                         f"Cannot switch; your current login was not replaced. {error}"
                     ) from error
             write_auth(target_credentials)
+            self._set_pending_import(target.number, None)
             self.store.set_active(target.number)
 
         processes = tuple(running_codex_processes())
@@ -286,6 +425,7 @@ class CodexSwitcher:
         """Forget a managed account and delete its saved credential."""
         with self.store.lock():
             target = self.resolve(identifier)
+            self._set_pending_import(target.number, None)
             removed = self.store.remove(target.number)
             if removed is None:  # pragma: no cover - resolve just found it
                 raise AccountNotFoundError(f"slot {target.number} vanished")
@@ -398,6 +538,8 @@ class CodexSwitcher:
                 f"Slot {account.number} ({account.display_label}) has no saved "
                 "credential."
             )
+        if self.activation_required(account):
+            return credentials
         live = read_auth()
         if has_live_login(live) and account.identity.matches(identity_from_auth(live)):
             if _live_login_is_older(credentials, live):
@@ -459,7 +601,8 @@ class CodexSwitcher:
         self.store.write_credentials(account.number, updated)
         live = read_auth()
         if (
-            account.identity.matches(identity_from_auth(live))
+            not self.activation_required(account)
+            and account.identity.matches(identity_from_auth(live))
             and live.get("tokens") == tokens
         ):
             write_auth(updated)

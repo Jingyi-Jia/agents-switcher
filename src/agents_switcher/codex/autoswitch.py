@@ -36,7 +36,7 @@ from agents_switcher.codex.store import CodexAccount
 from agents_switcher.codex.usage import CodexUsage
 from agents_switcher.settings import load_settings
 
-_logger = logging.getLogger("claude-swap")
+_logger = logging.getLogger("agents-switcher")
 
 #: Switch once the active account's binding window passes this utilisation.
 DEFAULT_THRESHOLD_PCT = 80.0

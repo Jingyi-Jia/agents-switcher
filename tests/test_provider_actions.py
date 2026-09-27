@@ -42,6 +42,9 @@ class Codex:
     def list_accounts(self):
         return list(self.accounts)
 
+    def activation_required(self, account):
+        return False
+
     def status(self):
         account = next((a for a in self.accounts if a.number == self.active), None)
         return CodexStatus(
@@ -124,7 +127,7 @@ def watch_event(controller, monkeypatch, kind):
 
 def test_explicit_registry_and_capabilities(actions):
     assert actions.capabilities("claude") == ["switch", "add", "remove", "disable", "switch-best", "auto", "token"]
-    assert actions.capabilities("codex") == ["switch", "add", "remove", "disable", "switch-best", "auto"]
+    assert actions.capabilities("codex") == ["switch", "add", "remove", "disable", "switch-best", "auto", "login"]
     assert "separate sign-in" in actions.switch_notice("claude")
     assert "Code tab" in actions.switch_notice("claude")
     with pytest.raises(ProviderActionError, match="unknown provider"):

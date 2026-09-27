@@ -42,7 +42,7 @@ from agents_switcher.providers import ActionRequired, ProviderActionError, Provi
 from agents_switcher.web.page import PAGE_HTML
 from agents_switcher.web.preferences import UiPreferences
 
-_logger = logging.getLogger("claude-swap")
+_logger = logging.getLogger("agents-switcher")
 
 #: How long a collected view is reused. Long enough that a polling page does not
 #: drive token refreshes, short enough that a switch is visible almost at once.
@@ -132,11 +132,15 @@ class DashboardState:
     def __init__(self, claude_switcher=None, codex_switcher=None) -> None:
         from agents_switcher.analytics import UsageAnalytics
         from agents_switcher.codex.desktop import CodexDesktop
+        from agents_switcher.codex.enrollment import CodexEnrollment
+        from agents_switcher.legacy_import import LegacyImport
 
         self._claude = claude_switcher
         self._codex = codex_switcher
         self.claude_desktop = ClaudeDesktopProfiles()
         self.codex_desktop = CodexDesktop()
+        self.codex_enrollment = CodexEnrollment(codex_switcher) if codex_switcher is not None else None
+        self.legacy_import = LegacyImport()
         self.analytics = UsageAnalytics(codex_switcher)
         self.preferences = UiPreferences()
         self.actions = ProviderActions(
@@ -251,6 +255,7 @@ class DashboardState:
                     "alias": account.alias,
                     "plan": account.plan,
                     "active": account.number == active,
+                    "activationRequired": self._codex.activation_required(account),
                     "disabled": account.disabled,
                 }
                 if isinstance(result, Exception):
@@ -304,14 +309,14 @@ class DashboardState:
         finally:
             self.invalidate()
 
-    def switch(self, provider: str, number: str) -> dict:
+    def switch(self, provider: str, number: str, *, useSavedLogin: bool = False) -> dict:
         """Switch one provider, returning what the user still has to do."""
         try:
             with self._lock:
                 if provider == "codex":
                     number = account_number(number)
                     self._require_codex_quit()
-                return self.actions.switch(provider, number)
+                return self.actions.switch(provider, number, use_saved_login=useSavedLogin)
         finally:
             self.invalidate()
 
@@ -335,6 +340,62 @@ class DashboardState:
     def open_codex(self, *, confirm=False) -> dict:
         with self._lock:
             return self.codex_desktop.open(confirm=confirm)
+
+    def storage_status(self) -> dict:
+        with self._lock:
+            return self.legacy_import.status()
+
+    def import_legacy(self, source, *, confirm=False) -> dict:
+        if confirm is not True:
+            raise ProviderActionError("Confirm that other switchers and provider clients are stopped before importing.")
+        try:
+            with self._lock:
+                if any(self.actions.auto.status(provider)["mode"] != "stopped" for provider in ("claude", "codex")):
+                    raise ProviderActionError("Stop this session's auto-switch and preview modes before importing.")
+                result = self.legacy_import.import_accounts(source, confirm=True)
+                self.actions.revision += 1
+                return result
+        finally:
+            self.invalidate()
+
+    def prepare_codex_login(self, *, number=None, confirm=False) -> dict:
+        if confirm is not True:
+            raise ProviderActionError("Preparing a separate Codex sign-in requires confirm: true.")
+        with self._lock:
+            if self.codex_enrollment is None:
+                raise ProviderActionError("Codex account storage is unavailable.")
+            return self.codex_enrollment.prepare(number=number, confirm=confirm)
+
+    def complete_codex_login(self, sessionId, *, confirm=False) -> dict:
+        if confirm is not True:
+            raise ProviderActionError("Confirm saving and switching to this Codex login.")
+        try:
+            with self._lock:
+                if self.codex_enrollment is None:
+                    raise ProviderActionError("Codex account storage is unavailable.")
+                self._require_codex_quit()
+                saved = self.codex_enrollment.complete(sessionId, confirm=True)
+                if saved.get("ok") is not True:
+                    return saved
+                try:
+                    activated = self.codex_enrollment.activate(sessionId, confirm=True)
+                except Exception as error:
+                    return {
+                        "ok": False, "account": saved["account"], "activationRequired": True,
+                        "message": "The login was saved, but activation was not confirmed. " + safe_error(error),
+                    }
+                self.actions.revision += 1
+                return {**saved, **activated, "activationRequired": activated.get("ok") is not True}
+        finally:
+            self.invalidate()
+
+    def cancel_codex_login(self, sessionId, *, confirm=False) -> dict:
+        if confirm is not True:
+            raise ProviderActionError("Discarding temporary Codex sign-in state requires confirm: true.")
+        with self._lock:
+            if self.codex_enrollment is None:
+                raise ProviderActionError("Codex account storage is unavailable.")
+            return self.codex_enrollment.cancel(sessionId, confirm=confirm)
 
     def set_disabled(self, provider: str, number, disabled: bool) -> dict:
         try:
@@ -371,6 +432,9 @@ class DashboardState:
 
     def close(self) -> None:
         self.actions.close()
+        with self._lock:
+            if self.codex_enrollment is not None:
+                self.codex_enrollment.close()
 
 
 class _Server(ThreadingHTTPServer):
@@ -566,7 +630,7 @@ def _make_handler(state: DashboardState, token: str):
         def do_GET(self) -> None:  # noqa: N802 - stdlib hook
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query, keep_blank_values=True)
-            private_read = parsed.path in {"/api/analytics", "/api/codex/status", "/api/preferences"}
+            private_read = parsed.path in {"/api/analytics", "/api/codex/status", "/api/preferences", "/api/storage"}
             if not self._authorized({} if private_read else query):
                 self._json(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
                 return
@@ -590,6 +654,8 @@ def _make_handler(state: DashboardState, token: str):
                         raise ProviderActionError("This request does not accept query parameters.")
                     elif parsed.path == "/api/preferences":
                         result = state.preferences.get()
+                    elif parsed.path == "/api/storage":
+                        result = state.storage_status()
                     else:
                         result = state.codex_desktop.status()
                     self._json(HTTPStatus.OK, result)
@@ -609,11 +675,15 @@ def _make_handler(state: DashboardState, token: str):
                 "/api/preferences": (state.preferences.update, set(), {"theme", "profileNoticeVersion", "confirm"}),
                 "/api/codex/quit": (state.quit_codex, {"confirm"}, set()),
                 "/api/codex/open": (state.open_codex, {"confirm"}, set()),
+                "/api/codex/login/prepare": (state.prepare_codex_login, {"confirm"}, {"number"}),
+                "/api/codex/login/complete": (state.complete_codex_login, {"sessionId", "confirm"}, set()),
+                "/api/codex/login/cancel": (state.cancel_codex_login, {"sessionId", "confirm"}, set()),
+                "/api/storage/import": (state.import_legacy, {"source", "confirm"}, set()),
                 "/api/claude-desktop/create": (state.claude_desktop.create, {"name", "confirm"}, {"emailLabel"}),
                 "/api/claude-desktop/open": (state.claude_desktop.open, {"profileId", "confirm"}, set()),
                 "/api/claude-desktop/update": (state.claude_desktop.update, {"profileId", "name", "emailLabel", "confirm"}, set()),
                 "/api/claude-desktop/delete": (state.claude_desktop.delete, {"profileId", "confirm"}, set()),
-                "/api/switch": (state.switch, {"provider", "number"}, set()),
+                "/api/switch": (state.switch, {"provider", "number"}, {"useSavedLogin"}),
                 "/api/add": (state.add_current, {"provider"}, set()),
                 "/api/remove": (state.remove, {"provider", "number", "confirm"}, set()),
                 "/api/disabled": (state.set_disabled, {"provider", "number", "disabled"}, set()),

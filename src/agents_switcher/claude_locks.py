@@ -61,7 +61,7 @@ TOUCH_INTERVAL_S = 3.0
 # sequentially, so its worst case is ~2x this value.
 DEFAULT_TIMEOUT_S = 9.0
 
-_logger = logging.getLogger("claude-swap")
+_logger = logging.getLogger("agents-switcher")
 
 
 def credentials_lock_dir() -> Path:

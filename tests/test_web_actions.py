@@ -66,7 +66,7 @@ def test_query_token_cannot_authorize_cross_origin_post(web):
 
 
 def test_get_still_supports_query_token_and_never_logs_it(web, caplog):
-    caplog.set_level(logging.DEBUG, logger="claude-swap")
+    caplog.set_level(logging.DEBUG, logger="agents-switcher")
     code, body, headers = request(web, f"/api/state?token={web.token}", token=False, method="GET")
     assert code == 200
     assert body["claude"]["capabilities"][-1] == "token"
@@ -167,7 +167,7 @@ def test_token_route_guards_implicit_email_and_explicit_slot_overwrite(web):
 
 
 def test_submitted_token_never_appears_in_errors_or_logs(web, caplog):
-    caplog.set_level(logging.DEBUG, logger="claude-swap")
+    caplog.set_level(logging.DEBUG, logger="agents-switcher")
     token = "private-test-sentinel"
     web.state._claude.add_account_from_token = Mock(side_effect=RuntimeError(f"remote rejected {token}"))
     code, body, _ = request(web, "/api/token", {"provider": "claude", "token": token})

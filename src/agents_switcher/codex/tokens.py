@@ -110,7 +110,7 @@ def client_id_for(tokens: dict) -> str:
     if isinstance(audience, str) and audience and audience != CLIENT_ID:
         import logging
 
-        logging.getLogger("claude-swap").warning(
+        logging.getLogger("agents-switcher").warning(
             "Codex id_token aud (%s) differs from the known client id (%s); "
             "refreshing with the known id. If refresh fails, this constant may "
             "be out of date.",
@@ -167,8 +167,10 @@ def refresh_tokens(tokens: dict, *, issuer: str = ISSUER) -> dict:
                 code = error_payload.get("code")
         if isinstance(code, str) and code.lower() in _REAUTH_ERROR_CODES:
             raise TokenRefreshError(
-                "Codex needs a fresh login for this account. Run 'codex login' "
-                "as the affected account, then add the existing login again."
+                "Codex needs a fresh isolated login for this account. In Agent Switch, "
+                "open its account menu and choose Sign in again. Or run "
+                "'agent-switch codex login --account NUMBER --activate' with its saved slot number. "
+                "Quit Codex CLI and Desktop before activation; do not sign in over the current Codex home."
             ) from None
         raise TokenRefreshError(
             f"refresh failed: HTTP {e.code}; try again later"

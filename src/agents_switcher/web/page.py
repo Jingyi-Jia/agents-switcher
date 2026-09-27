@@ -6,6 +6,7 @@ from .page_style import PAGE_STYLE
 from .page_switch import SWITCH_SCRIPT
 from .page_updates import UPDATES_SCRIPT
 from .page_usage import USAGE_SCRIPT
+from .page_accounts import ACCOUNTS_SCRIPT
 
 PAGE_HTML = r"""<!doctype html>
 <html lang="en">
@@ -36,6 +37,7 @@ PAGE_HTML = r"""<!doctype html>
     <span class="stamp" id="stamp">Connecting to your local service…</span>
   </header>
   <div id="state-error" class="load-error" role="status" hidden></div>
+  <section id="storage-notice" class="adopt storage-notice" aria-label="Previous saved accounts" hidden><span>Previous saved accounts were found. Agent Switch now keeps its own independent store.</span><button type="button" id="storage-review" data-action>Review import</button></section>
   <div id="guide-slot">
   <section class="guide" id="desktop-guide" aria-labelledby="guide-title" hidden>
     <div class="guide-heading">
@@ -47,7 +49,7 @@ PAGE_HTML = r"""<!doctype html>
     <ol class="guide-steps">
       <li><strong>Set up a provider.</strong> Sign in through Claude Code's CLI or Codex's Desktop app or CLI, using its official setup guide. Then return here and choose Check again.</li>
       <li><strong>Save the current login.</strong> Add existing login saves that provider's current local credentials for switching later. It doesn't start a new sign-in. Codex keyring-only and API-key logins aren't supported.</li>
-      <li><strong>Add another account when you're ready.</strong> Sign in to a different account in that provider, then add that login here. Switch by hand, or preview automatic switching before choosing Start.</li>
+      <li><strong>Add another account safely.</strong> For Codex, use Add another account below: it gives you an isolated terminal sign-in command. Running plain <code>codex login</code> or <code>codex logout</code> in the usual folder can revoke a saved login. For Claude Code, sign in to another account through its CLI, then add that login here.</li>
     </ol>
     <p class="guide-boundary" id="guide-boundary">The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
     <p class="hint">Paid-credit accounts remain manual-only; auto-switch never chooses them. After switching, follow any provider restart notice shown below.</p>
@@ -97,6 +99,15 @@ PAGE_HTML = r"""<!doctype html>
       <p id="settings-lifecycle">Pausing live updates only pauses this view. Use Stop in an account's auto-switch controls to stop automation.</p>
       <p class="hint">Usage history refreshes when you open Usage or choose Refresh activity, not on every live update. Profile readiness is checked while Profiles is visible.</p>
     </div>
+    <section class="settings-panel" id="account-storage" aria-labelledby="storage-title">
+      <h3 id="storage-title">Saved account storage</h3>
+      <p>Agent Switch keeps its saved accounts and settings separate from claude-swap. Provider-owned live login files stay in their usual locations.</p>
+      <p id="storage-location" class="storage-path"></p>
+      <p id="storage-status" role="status" aria-live="polite">Reading storage status…</p>
+      <ul id="storage-warnings" class="hint" hidden></ul>
+      <div class="actions"><button type="button" id="storage-import" data-action disabled>Import previous accounts…</button><button type="button" id="storage-refresh" data-action>Check storage</button></div>
+      <p class="hint">Import is optional and copy-only: the old store is never moved or deleted. Desktop profiles and terminal session data are not imported. Accounts already saved here will not be overwritten.</p>
+    </section>
     <section class="settings-panel" id="app-updates" aria-labelledby="app-updates-title" hidden>
       <h3 id="app-updates-title">App updates</h3>
       <p class="eyebrow" id="update-kind"></p>
@@ -136,6 +147,21 @@ PAGE_HTML = r"""<!doctype html>
   <div id="codex-dialog-status" class="switch-status" role="status" aria-live="polite"></div>
   <p>We never stop terminal sessions. A running process's signed-in identity isn't verified here.</p>
   <div class="actions dialog-actions"><button type="button" id="codex-cancel">Cancel</button><button type="button" id="codex-check">Check again</button><button type="button" id="codex-continue" class="primary" disabled>Continue &amp; switch</button><button type="button" id="codex-assist" class="primary" hidden>Quit, switch &amp; reopen</button></div>
+</dialog>
+<dialog id="codex-login-dialog" aria-labelledby="codex-login-title" aria-describedby="codex-login-description">
+  <div class="eyebrow">Keep every login intact</div><h2 id="codex-login-title">Add a Codex account</h2>
+  <p id="codex-login-description"></p>
+  <div class="switch-steps" aria-hidden="true"><span id="login-step-prepare">01 · Prepare</span><span id="login-step-signin">02 · Sign in</span><span id="login-step-save">03 · Save &amp; switch</span></div>
+  <p>Codex can revoke the previous login when you sign in again in its usual folder. This flow uses a fresh private folder, without copying your current credentials.</p>
+  <p class="hint">Requires the Codex CLI in your terminal. An existing file-backed Desktop login can still be saved with Add existing login, without installing the CLI.</p>
+  <div id="codex-login-terminal" hidden>
+    <label class="field" for="codex-login-command"><span id="codex-login-shell">Terminal command</span><textarea id="codex-login-command" rows="4" readonly spellcheck="false"></textarea></label>
+    <div class="actions"><button type="button" id="codex-login-copy" data-action>Copy command</button></div>
+    <ol class="guide-steps"><li>Run this exact command in your terminal and finish the official Codex sign-in.</li><li>Wait for the command to finish, then fully quit Codex Desktop and every Codex terminal session.</li><li>Choose Save &amp; switch to save this login and use it on your next Codex launch.</li></ol>
+    <p class="hint">Do not use plain codex login or codex logout to add another account. Stop the terminal sign-in before cancelling. Cancel discards only this temporary sign-in; it does not sign out or remove your saved accounts.</p>
+  </div>
+  <p id="codex-login-status" class="switch-status" role="status" aria-live="polite"></p>
+  <div class="actions dialog-actions"><button type="button" id="codex-login-cancel" data-action>Cancel</button><button type="button" id="codex-login-next" class="primary" data-action>Prepare sign-in</button></div>
 </dialog>
 <script>
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
@@ -367,11 +393,12 @@ function card(provider, a, data) {
   name.title = a.email || name.textContent;
   identity.append(name, el("div", "account-meta", [a.alias ? a.email : null, a.plan, a.org !== "personal" ? a.org : null, "Slot " + a.number].filter(Boolean).join(" · ")));
   top.append(avatar, identity);
-  const b = actionButton(a.active ? "Current" : "Switch", () => provider === "codex" ? requestCodexSwitch(a, b) : act("/api/switch", {provider, number: a.number}, b, "Switching…"));
+  const pending = provider === "codex" && a.activationRequired === true;
+  const b = actionButton(pending ? "Use saved login" : a.active ? "Current" : "Switch", () => provider === "codex" ? requestCodexSwitch(a, b) : act("/api/switch", {provider, number: a.number}, b, "Switching…"));
   b.dataset.focusKey = provider + ":switch:" + a.number;
-  b.className = a.active ? "ghost" : "primary";
-  b.setAttribute("aria-label", a.active ? `Account ${a.number} is active` : `Switch to account ${a.number}`);
-  block(b, !!a.active || a.switchable === false || !supports(data, "switch"));
+  b.className = a.active && !pending ? "ghost" : "primary";
+  b.setAttribute("aria-label", pending ? `Use saved login for account ${a.number}` : a.active ? `Account ${a.number} is active` : `Switch to account ${a.number}`);
+  block(b, (!!a.active && !pending) || a.switchable === false || !supports(data, "switch"));
   c.appendChild(top);
 
   const ws = a.windows || [];
@@ -403,7 +430,7 @@ function card(provider, a, data) {
     c.appendChild(el("div", "state", "usage unknown"));
   }
   const footer = el("div", "account-footer");
-  footer.append(b, el("span", "hint", a.disabled ? "Excluded from auto-switch" : a.onCredits ? "Manual only" : a.active ? "Current saved login" : ""));
+  footer.append(b, el("span", "hint", pending ? "Saved login awaiting activation" : a.disabled ? "Excluded from auto-switch" : a.onCredits ? "Manual only" : a.active ? "Current saved login" : ""));
   const menu = el("details", "account-overflow"), summary = el("summary", null, "···");
   menu.dataset.menu = provider + ":menu:" + a.number;
   summary.dataset.control = "";
@@ -426,6 +453,12 @@ function card(provider, a, data) {
   remove.dataset.focusKey = provider + ":remove:" + a.number;
   remove.setAttribute("aria-label", `Remove account ${a.number}`);
   block(remove, !supports(data, "remove"));
+  if (provider === "codex" && supports(data, "login")) {
+    const login = actionButton("Sign in again…", () => startCodexEnrollment(login, a));
+    login.dataset.focusKey = "codex:login:" + a.number;
+    login.setAttribute("aria-label", `Sign in again to Codex account ${a.number}`);
+    actions.appendChild(login);
+  }
   actions.append(disable, remove);
   menu.appendChild(actions); footer.appendChild(menu); c.appendChild(footer);
   return c;
@@ -469,7 +502,7 @@ function syncBusy() {
     input.disabled = busy || input.dataset.blocked === "true";
   });
   $("dialog-cancel").disabled = busy;
-  for (const view of ["accounts", "usage", "settings"]) $("nav-" + view).disabled = busy;
+  for (const view of ["accounts", "usage", "settings"]) $("nav-" + view).disabled = busy || !!codexEnrollmentFlow;
   $("dialog-form").setAttribute("aria-busy", String(busy));
 }
 
@@ -692,6 +725,12 @@ function setupProvider(id) {
     host.appendChild(button);
   }
   ui.buttons.add.title = "Save or refresh the currently signed-in account, including one already managed.";
+  if (id === "codex") {
+    const login = actionButton("Add another account", () => startCodexEnrollment(login));
+    ui.buttons.login = login;
+    block(login, true);
+    host.appendChild(login);
+  }
   const refresh = actionButton("Refresh usage", () => refreshUsage(refresh));
   host.appendChild(refresh);
   if (id === "claude") {
@@ -892,8 +931,9 @@ async function act(path, payload, button, pending) {
     const refreshed = await load(true, true);
     if (!refreshed) message += isDesktop() ? " State could not be refreshed; try Refresh usage or reopen the app." : " State could not be refreshed; check the local dashboard server.";
     if (success && body.followUp) message += " " + safeMessage(body.followUp, payload.token);
+    if (path === "/api/storage/import" && Array.isArray(body.warnings)) message += " " + body.warnings.map(warning => safeMessage(warning)).join(" ");
     const actionRequired = body.kind === "action-required" && ["codex-running", "codex-status-unknown"].includes(body.code);
-    toast(message, (!success && !actionRequired) || !refreshed, noSwitch || !!body.followUp || !!body.restartRequired || actionRequired);
+    toast(message, (!success && !actionRequired) || !refreshed, noSwitch || !!body.followUp || !!body.restartRequired || actionRequired || path === "/api/storage/import");
     if ($("action-dialog").open && !success) {
       $("dialog-feedback").textContent = message;
       $("dialog-feedback").hidden = false;
@@ -919,7 +959,7 @@ async function act(path, payload, button, pending) {
 }
 
 function confirmAction({title, description, label, opener, submit, fields, kind = "action", replace = false, danger = false}) {
-  if (busy || codexFlow || ($("action-dialog").open && !replace)) return;
+  if (busy || codexFlow || codexEnrollmentFlow || ($("action-dialog").open && !replace)) return;
   dialogKind = kind;
   dialogOpener = opener;
   dialogAction = submit;
@@ -1015,6 +1055,7 @@ function tokenDialog(opener) {
 
 __USAGE_SCRIPT__
 __SWITCH_SCRIPT__
+__ACCOUNTS_SCRIPT__
 __UPDATES_SCRIPT__
 
 let preferenceQueue = Promise.resolve();
@@ -1057,6 +1098,7 @@ async function saveProfileConsent() {
 }
 
 function navigate(view, updateHash = true) {
+  if (codexEnrollmentFlow) return;
   view = ["accounts", "usage", "settings"].includes(view) ? view : "accounts";
   if (busy) { if (location.hash !== "#" + activeView) location.hash = activeView; return; }
   if (codexFlow) cancelCodexSwitch();
@@ -1132,13 +1174,14 @@ setupUpdates();
 for (const view of ["accounts", "usage", "settings"]) $("nav-" + view).onclick = () => navigate(view);
 window.addEventListener("hashchange", () => navigate(location.hash.slice(1), false));
 loadPreferences();
+loadStorage();
 load();
 navigate((location.hash || "").slice(1), false);
-setInterval(() => { if ($("watch").checked && !busy && !$("action-dialog").open) load(); }, 20000);
+setInterval(() => { if ($("watch").checked && !busy && !codexEnrollmentFlow && !$("action-dialog").open) load(); }, 20000);
 setInterval(() => {
-  if (!busy && (dialogKind === "profile" || (activeView === "accounts" && !$("claude-desktop-panel").hidden && ($("watch").checked || state.claudeDesktop?.running !== false))) && (!$("action-dialog").open || dialogKind === "profile")) load(false, true);
+  if (!busy && !codexEnrollmentFlow && (dialogKind === "profile" || (activeView === "accounts" && !$("claude-desktop-panel").hidden && ($("watch").checked || state.claudeDesktop?.running !== false))) && (!$("action-dialog").open || dialogKind === "profile")) load(false, true);
 }, 5000);
 </script>
 </body>
 </html>
-""".replace("__PAGE_STYLE__", PAGE_STYLE).replace("__USAGE_SCRIPT__", USAGE_SCRIPT).replace("__SWITCH_SCRIPT__", SWITCH_SCRIPT).replace("__UPDATES_SCRIPT__", UPDATES_SCRIPT)
+""".replace("__PAGE_STYLE__", PAGE_STYLE).replace("__USAGE_SCRIPT__", USAGE_SCRIPT).replace("__SWITCH_SCRIPT__", SWITCH_SCRIPT).replace("__UPDATES_SCRIPT__", UPDATES_SCRIPT).replace("__ACCOUNTS_SCRIPT__", ACCOUNTS_SCRIPT)

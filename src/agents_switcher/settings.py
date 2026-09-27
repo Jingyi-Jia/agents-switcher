@@ -26,7 +26,7 @@ from agents_switcher.fsutil import replace_with_retry
 SETTINGS_SCHEMA_VERSION = 1
 SETTINGS_FILENAME = "settings.json"
 
-_logger = logging.getLogger("claude-swap")
+_logger = logging.getLogger("agents-switcher")
 
 
 @dataclass(frozen=True)

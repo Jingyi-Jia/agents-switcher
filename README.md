@@ -58,8 +58,10 @@ account shows simulated quota data.
 ![Agent Switch on macOS in light mode, showing appearance preferences and manual community updates](assets/screenshots/macos-settings-light.png)
 
 To get started, [get the desktop app](#get-the-app), or
-[install the CLI from source](#install-the-cli-from-source). Sign in through your
-provider first, then choose **Add existing login** in Agent Switch.
+[install the CLI from source](#install-the-cli-from-source). Save your current
+provider login with **Add existing login** in Agent Switch.
+For additional Codex accounts, use the [isolated sign-in flow](#save-and-switch-codex-accounts-safely)
+instead of signing in over the current login.
 
 ### What it switches
 
@@ -69,7 +71,8 @@ provider first, then choose **Add existing login** in Agent Switch.
 | Codex | File-backed ChatGPT/OAuth accounts, quota, activity stats and automatic selection | Supports Codex CLI and Desktop when they use the same `auth.json`, not keyring-only or API-key logins. Quit both before switching; running processes keep their old account until restarted. |
 | Claude Desktop profiles | Experimental, manual launcher for separate local profiles on macOS/Linux | Sign in inside each profile. Mac account persistence and Code/Cowork behavior are unverified; custom profiles disable local Claude-in-Chrome pairing. No quota-based switching or Windows support. |
 
-Agent Switch does not install provider apps or sign you in. For Claude Code,
+Agent Switch does not install provider apps. Sign-in happens through the official
+provider. For Claude Code,
 install its [CLI](https://code.claude.com/docs/en/setup). For Codex, use the
 Desktop app or
 [CLI](https://developers.openai.com/codex/cli) with a file-backed login; the Codex
@@ -85,6 +88,10 @@ for your platform and architecture. The community distribution is
 public without paid Apple or Windows signing credentials; a separate signed
 distribution remains a future, optional path. Draft artifacts and package
 versions are not published downloads.
+
+The published v1.2.3 installers still use the earlier shared saved-account store.
+The independent storage/import and isolated Codex sign-in flows documented below
+are available in newer source builds, pending the next installer release.
 
 For developers, successful runs of
 [Desktop installers](https://github.com/jingyi-jia/agents-switcher/actions/workflows/desktop.yml)
@@ -355,7 +362,11 @@ update its shared OS-integration metadata outside a named profile.
 
 ### Save and switch Codex accounts safely
 
-Sign in with `codex login`, then save the login:
+**Do not run plain `codex login` or `codex logout` over a login you want to keep.**
+Recent Codex versions revoke the previous session during sign-in. A local backup
+cannot undo that revocation.
+
+To save an existing file-backed login without starting a new sign-in:
 
 ```bash
 agent-switch codex add --alias work
@@ -364,6 +375,29 @@ agent-switch codex status
 agent-switch codex usage
 agent-switch codex stats work
 ```
+
+To add another account in the app or browser dashboard, choose **Add another
+account → Prepare sign-in**. Copy the generated command into your terminal,
+finish the official Codex sign-in, and fully quit Codex. Then choose **Save &
+switch**, reopen Codex, and verify the account. The command uses a fresh private
+`CODEX_HOME` with file-backed credentials, so the old login is not available to
+revoke. This flow requires an installed Codex CLI; the standalone app does not
+bundle it or run the terminal command for you. Cancel only discards the temporary
+sign-in state, never another saved account.
+
+The CLI provides the same isolated enrollment:
+
+```bash
+agent-switch codex login --alias personal
+```
+
+This runs the official Codex CLI and saves the result without changing the live
+login. Add `--activate` to deliberately switch after sign-in, with all Codex
+clients closed. Saving an account still makes it subject to any automatic-switch
+rules you have already enabled.
+On Windows, the CLI wrapper requires `codex.exe` on `PATH`. If your installation
+exposes only an npm command shim, use the generated PowerShell command in the
+app or browser dashboard instead.
 
 For every switch:
 
@@ -397,14 +431,29 @@ an unmanaged current login.
 A revoked, expired or reused refresh token cannot be repaired by switching back
 and forth. Stop auto-switching and quit Codex, then:
 
-1. Run `codex login` and sign in as the **affected account**.
-2. In Agent Switch, choose **Add existing login** (browser dashboard: **Add current**).
-   This replaces that account's saved credentials while preserving its slot.
-3. Refresh the account view, then reopen Codex and verify the login.
+1. Open the affected account's **··· menu → Sign in again…**, then prepare and
+   run its isolated sign-in command. Sign in as that exact account; a different
+   identity is refused.
+2. After the command finishes and all Codex clients are closed, choose **Save &
+   switch**. The saved slot, alias, and auto-switch exclusion are preserved.
+3. Reopen Codex and verify the account. Repeat only for other accounts whose
+   previous sessions were already revoked.
 
-The CLI's `agent-switch codex add` currently rejects an already-managed account;
-it is not the same recovery action as the UI button. Avoid deleting saved
-accounts or copying old `auth.json` files around to fix a revoked token. For a
+The CLI equivalent for slot 1 is:
+
+```bash
+agent-switch codex login --account 1 --activate
+```
+
+If you saved a repair without `--activate`, quit Codex and run
+`agent-switch codex switch 1 --use-saved-login` to deliberately apply it later.
+In the app, choose **Use saved login** on that account. This action remains
+available after cancelling the sign-in dialog or restarting Agent Switch;
+you don't need to sign in again. **Add existing login** refuses to overwrite
+a saved login awaiting activation.
+The ordinary `codex add` command still rejects an already-managed account;
+it does not start an isolated sign-in. Avoid deleting saved accounts or copying
+old `auth.json` files around to fix a revoked token. For a
 Claude Code re-login warning, sign in again through Claude Code and re-add that
 current login; signing in to Claude Desktop will not repair CLI credentials.
 
@@ -484,20 +533,24 @@ Agent Switch 1.2.1 or earlier, reinstall upstream after upgrading Agent Switch:
 those older releases owned overlapping module files. Separate `uv tool` or
 `pipx` environments remain a convenient way to keep dependencies independent.
 
-**The default saved Claude account store is shared, not isolated.** Account
-changes, including removal or purge, can affect both tools. Both also control
-the active login of the same Claude Code profile. Do not run upstream `cswap`
-account commands, its menu bar, or its automation against that profile while
-Agent Switch is using it. Our directory locks are not compatible with upstream
-versions that use regular-file locks; even a usage refresh can update credentials.
+**Saved storage is now independent.** Agent Switch uses its own data directory,
+saved Claude Keychain service, settings, and logs. Startup never moves or adopts
+claude-swap's accounts; removal and purge affect only Agent Switch's store.
+Older accounts can be copied explicitly as described below.
+
+Both tools still control the provider-owned live login of the same profile.
+Do not run upstream `cswap` account commands, its menu bar, or its automation
+against that profile while Agent Switch is using it. Separate backups do not
+make concurrent token refresh safe: even a usage refresh can rotate credentials.
 Closing Agent Switch's window keeps its backend running—use **Quit Agent
 Switch** before handing that profile to another manager.
 
 The recommended setup is the Agent Switch app plus its matching `agent-switch`
 CLI, with only one automatic-switching controller active per profile. Upstream
 can remain installed but unused; no handoff wrapper or coordination service is
-required. The package rename does not move accounts, change Keychain entries,
-or make simultaneous account management safe.
+required. Copied accounts are not synchronized between the tools. Stop using the
+old manager for an imported account rather than alternating between two stale
+credential copies.
 
 The optional Python menu-bar service uses
 `io.github.jingyi-jia.agent-switch.menubar`. It leaves any existing
@@ -506,10 +559,37 @@ stop it through the tool that installed it before enabling another controller.
 
 ### Local data and privacy
 
-Saved accounts use `~/.local/share/claude-swap` on Linux/WSL (or
-`$XDG_DATA_HOME/claude-swap`), and `~/.claude-swap-backup` on macOS/Windows.
-Codex backups occupy a separate `codex/` subdirectory. The historical names remain
-for compatibility; do not assume this fork's data is isolated from upstream.
+| Platform | Agent Switch's saved data |
+| --- | --- |
+| Linux / WSL | `$XDG_DATA_HOME/agents-switcher`, or `~/.local/share/agents-switcher` |
+| macOS | `~/Library/Application Support/agents-switcher` |
+| Windows | `%LOCALAPPDATA%\agents-switcher` |
+
+Codex backups occupy the `codex/` subdirectory. Saved macOS Claude credentials
+use the separate `agents-switcher` Keychain service; the official provider's live
+credential service is unchanged.
+
+On an upgrade from the shared-store layout, open **Settings → Saved account
+storage → Import previous accounts…**. Import is optional: you can start fresh
+instead. Stop other account managers, their background automation, and provider
+clients before confirming. If two historical stores exist, choose one; Agent
+Switch will not merge them or overwrite accounts already saved in its destination.
+Import copies validated saved accounts and supported preferences and leaves the
+source intact. It does not copy Desktop profile cookies/data, terminal session
+trees, caches, or logs. Existing preferences here take precedence.
+
+From the CLI:
+
+```bash
+agent-switch storage status --json
+agent-switch storage import --source legacy --confirm
+```
+
+Use a source ID reported by `storage status`; Linux may also report `xdg`.
+`--confirm` confirms that the other tools are stopped and consents to copying
+saved credentials. No import can restore a provider-revoked session. Claude OAuth
+credentials are opaque: import validates their saved account/config pairing and
+shape offline, not the provider's current authentication status.
 
 `CLAUDE_CONFIG_DIR` and `CODEX_HOME` affect which CLI profile is read and switched.
 macOS Claude credentials can use Keychain; file backups are permission-restricted
@@ -529,7 +609,7 @@ safety rules, and validation requirements. Read
 
 1. **Use the right names.** The command is `agent-switch`, the distribution is
    `agents-switcher`, and the import package is `agents_switcher`. Do not restore
-   upstream's `cswap` entry point or rename persisted account directories.
+   upstream's `cswap` entry point or silently move historical account directories.
 2. **Keep provider boundaries explicit.** Claude Code logins, Codex accounts, and
    Claude Desktop profiles are distinct. Analytics do not authorize switching;
    a profile label does not verify an account identity.

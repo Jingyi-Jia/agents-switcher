@@ -36,6 +36,9 @@ class StubCodex:
     def list_accounts(self):
         return list(self._accounts)
 
+    def activation_required(self, account):
+        return False
+
     def status(self):
         account = next((a for a in self._accounts if a.number == self.active), None)
         return CodexStatus(

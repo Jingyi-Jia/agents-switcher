@@ -58,7 +58,7 @@ from agents_switcher.usage_store import due_candidate, plan_oversleeps_interval
 STATE_FILENAME = "autoswitch_state.json"
 STATE_SCHEMA_VERSION = 1
 
-_logger = logging.getLogger("claude-swap")
+_logger = logging.getLogger("agents-switcher")
 
 # Systemic freshen refusals, MOST ACTIONABLE FIRST. Deterministic conditions
 # that every candidate hits identically, so the tick reports one of them —
