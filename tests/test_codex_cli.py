@@ -5,12 +5,14 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agents_switcher.codex import cli as codex_cli
 from agents_switcher.codex import switcher as switcher_mod
 from agents_switcher.codex.auth_file import write_auth
+from agents_switcher.codex.enrollment import LOGIN_ARGUMENTS
 from agents_switcher.codex.identity import OPENAI_AUTH_CLAIM
 from agents_switcher.codex.processes import CodexProcess
 from agents_switcher.codex.store import CodexAccountStore
@@ -234,3 +236,169 @@ class TestAlias:
         with pytest.raises(SystemExit) as exc:
             run(["alias", "1"])
         assert exc.value.code == 2  # argparse usage error
+
+
+class TestIsolatedLogin:
+    @pytest.fixture
+    def official(self, env, monkeypatch):
+        calls = []
+        revoked = []
+        credentials = auth_for(account_id="acct-2", email="two@example.com", refresh="new-login")
+        monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/installed/codex")
+
+        def child(command, *, env, check):
+            assert command == ["/installed/codex", *LOGIN_ARGUMENTS]
+            assert check is False
+            home = Path(env["CODEX_HOME"])
+            old_auth = home / "auth.json"
+            if old_auth.exists():
+                revoked.append(json.loads(old_auth.read_text())["tokens"]["refresh_token"])
+            assert (home / "config.toml").read_text() == 'cli_auth_credentials_store = "file"\n'
+            calls.append((command, home))
+            write_auth(credentials, old_auth)
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(codex_cli.subprocess, "run", child)
+        return SimpleNamespace(calls=calls, revoked=revoked, credentials=credentials)
+
+    def test_login_saves_a_second_slot_without_revoking_or_activating(self, env, official, capsys):
+        env.login_as()
+        run(["add", "--alias", "first"])
+        live = env.auth_path.read_bytes()
+        first = env.store.read_credentials("1")
+        capsys.readouterr()
+        run(["login", "--alias", "second"])
+        output = capsys.readouterr().out
+        assert "Saved Codex login" in output
+        assert "--use-saved-login" in output
+        assert "new-login" not in output
+        assert env.auth_path.read_bytes() == live
+        assert env.store.active_number() == "1"
+        assert env.store.get("2").alias == "second"
+        assert env.store.read_credentials("2") == official.credentials
+        assert env.store.read_credentials("1") == first
+        assert not official.revoked
+        assert len(official.calls) == 1
+        assert not official.calls[0][1].exists()
+
+    def test_activate_is_explicit(self, env, official, capsys):
+        env.login_as()
+        run(["add"])
+        capsys.readouterr()
+        run(["login", "--activate"])
+        assert "Switched to" in capsys.readouterr().out
+        assert json.loads(env.auth_path.read_text()) == official.credentials
+        assert env.store.active_number() == "2"
+        assert not official.revoked
+
+    def test_repair_preserves_saved_slot_metadata_and_activates_same_account(self, env, official, capsys):
+        env.login_as()
+        run(["add", "--alias", "personal"])
+        env.switcher.set_account_disabled("1", True)
+        official.credentials.update(auth_for(refresh="fresh-repair"))
+        capsys.readouterr()
+        run(["login", "--account", "1", "--activate"])
+        assert "Switched to" in capsys.readouterr().out
+        assert len(env.store.accounts()) == 1
+        assert env.store.get("1").alias == "personal"
+        assert env.store.get("1").disabled is True
+        assert json.loads(env.auth_path.read_text()) == official.credentials
+        assert not official.revoked
+
+    def test_save_only_repair_can_be_activated_by_a_later_explicit_switch(self, env, official, capsys):
+        env.login_as()
+        run(["add"])
+        official.credentials.update(auth_for(refresh="fresh-repair"))
+        run(["login", "--account", "1"])
+        capsys.readouterr()
+        with pytest.raises(SystemExit) as error:
+            run(["switch", "1"])
+        assert error.value.code == 1
+        run(["switch", "1", "--use-saved-login"])
+        assert json.loads(env.auth_path.read_text()) == official.credentials
+
+    def test_repeated_explicit_switch_keeps_the_native_rotation(self, env, official, capsys, monkeypatch):
+        env.login_as()
+        run(["add"])
+        official.credentials.update(auth_for(refresh="fresh-repair"))
+        run(["login", "--account", "1", "--activate"])
+        assert env.switcher._pending_imports() == {}
+        env.login_as(refresh="rotated-after-activation")
+        rotated = json.loads(env.auth_path.read_text())
+
+        def forbidden(tokens):
+            pytest.fail("Repeated activation must not refresh provider tokens")
+
+        monkeypatch.setattr(switcher_mod, "refresh_tokens", forbidden)
+        run(["switch", "1", "--use-saved-login"])
+        assert json.loads(env.auth_path.read_text()) == rotated
+        assert env.store.read_credentials("1") == rotated
+
+    @pytest.mark.parametrize("argv", [["login", "--json"], ["--json", "login"]])
+    def test_json_is_rejected_before_any_spawn(self, env, official, argv, capsys):
+        with pytest.raises(SystemExit) as error:
+            run(argv)
+        assert error.value.code == 2
+        assert "interactive" in capsys.readouterr().err
+        assert not official.calls
+
+    def test_repair_alias_is_not_accepted(self, env, official, capsys):
+        with pytest.raises(SystemExit) as error:
+            run(["login", "--account", "1", "--alias", "replacement"])
+        assert error.value.code == 2
+        assert not official.calls
+
+    @pytest.mark.parametrize("outcome", ["failure", "cancel", "launch-error"])
+    def test_failed_login_cleans_only_its_home_and_preserves_accounts(self, env, official, capsys, monkeypatch, outcome):
+        env.login_as()
+        run(["add"])
+        live = env.auth_path.read_bytes()
+        saved = env.store.read_credentials("1")
+        homes = []
+
+        def child(command, *, env, check):
+            home = Path(env["CODEX_HOME"])
+            homes.append(home)
+            write_auth(official.credentials, home / "auth.json")
+            if outcome == "cancel":
+                raise KeyboardInterrupt
+            if outcome == "launch-error":
+                raise OSError("secret-subprocess-payload")
+            return SimpleNamespace(returncode=1)
+
+        monkeypatch.setattr(codex_cli.subprocess, "run", child)
+        capsys.readouterr()
+        with pytest.raises(SystemExit) as error:
+            run(["login"])
+        assert error.value.code == (130 if outcome == "cancel" else 1)
+        output = capsys.readouterr()
+        assert "secret-subprocess-payload" not in output.out + output.err
+        assert env.auth_path.read_bytes() == live
+        assert env.store.read_credentials("1") == saved
+        assert len(env.store.accounts()) == 1
+        assert env.store.active_number() == "1"
+        assert len(homes) == 1 and not homes[0].exists()
+
+    def test_running_clients_block_activation_but_keep_the_saved_login(self, env, official, capsys, monkeypatch):
+        env.login_as()
+        run(["add"])
+        live = env.auth_path.read_bytes()
+        monkeypatch.setattr(switcher_mod, "running_codex_processes", lambda: [object()])
+        capsys.readouterr()
+        with pytest.raises(SystemExit) as error:
+            run(["login", "--activate"])
+        assert error.value.code == 1
+        output = capsys.readouterr()
+        assert "Saved Codex login" in output.out
+        assert "Quit Codex" in output.err
+        assert env.auth_path.read_bytes() == live
+        assert env.store.read_credentials("2") == official.credentials
+        assert env.store.active_number() == "1"
+
+    def test_missing_cli_never_prepares_or_spawns(self, env, official, capsys, monkeypatch):
+        monkeypatch.setattr(codex_cli.shutil, "which", lambda name: None)
+        with pytest.raises(SystemExit) as error:
+            run(["login"])
+        assert error.value.code == 1
+        assert "official Codex CLI" in capsys.readouterr().err
+        assert not official.calls
