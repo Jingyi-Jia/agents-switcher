@@ -6,7 +6,92 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
-const { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, quitApplication } = require('../scripts/smoke_app.cjs');
+const http = require('node:http');
+const { EventEmitter } = require('node:events');
+const { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, quitApplication, readJSON } = require('../scripts/smoke_app.cjs');
+
+function localRequests(t) {
+  const requests = [];
+  t.mock.method(http, 'get', (options, respond) => {
+    const request = new EventEmitter();
+    request.destroy = () => { request.destroyed = true; };
+    const response = Object.assign(new EventEmitter(), {statusCode: 200, setEncoding() {}});
+    requests.push({request, response, options, respond: () => respond(response)});
+    return request;
+  });
+  return requests;
+}
+
+test('state collection outlasts short debugger discovery and a full Windows process-probe budget', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const requests = localRequests(t);
+  const discovery = readJSON(1234, '/json/list');
+  const state = readJSON(5678, '/api/state', {'X-Auth-Token': 'SYNTHETIC_PRIVATE'});
+  const expired = assert.rejects(discovery, /^Error: Debugger discovery request timed out after 3 seconds$/);
+  assert.equal(requests[0].options.timeout, undefined);
+  assert.equal(requests[1].options.timeout, undefined);
+  assert.equal(requests[1].options.headers['X-Auth-Token'], 'SYNTHETIC_PRIVATE');
+  t.mock.timers.tick(3000);
+  await expired;
+  assert.equal(requests[0].request.destroyed, true);
+  assert.equal(requests[1].request.destroyed, undefined);
+  t.mock.timers.tick(17000);
+  assert.equal(requests[1].request.destroyed, undefined);
+  requests[1].respond();
+  requests[1].response.emit('data', '{"ok":true}');
+  requests[1].response.emit('end');
+  assert.deepEqual(await state, {ok: true});
+  t.mock.timers.tick(30000);
+  assert.equal(requests[1].request.destroyed, undefined);
+});
+
+test('both local request budgets are hard deadlines, including trickling response bodies', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const requests = localRequests(t);
+  for (const [pathname, budget, phase] of [['/json/list', 3000, 'Debugger discovery'], ['/api/state', 30000, 'Backend state collection']]) {
+    for (const bodyStarted of [false, true]) {
+      const pending = readJSON(1234, pathname, {'X-Auth-Token': 'SYNTHETIC_PRIVATE'});
+      const expired = assert.rejects(pending, new RegExp(`^Error: ${phase} request timed out after ${budget / 1000} seconds$`));
+      const local = requests.at(-1);
+      if (bodyStarted) local.respond();
+      t.mock.timers.tick(budget - 1);
+      assert.equal(local.request.destroyed, undefined);
+      if (bodyStarted) local.response.emit('data', '{');
+      t.mock.timers.tick(1);
+      await expired;
+      assert.equal(local.request.destroyed, true);
+    }
+  }
+});
+
+test('local request failures identify their phase without exposing credentials or debug diagnostics', async t => {
+  const requests = localRequests(t);
+  for (const [pathname, phase] of [['/json/list', 'Debugger discovery'], ['/api/state', 'Backend state collection']]) {
+    for (const failure of ['request', 'response', 'aborted', 'invalid', 'http', 'oversized']) {
+      const pending = readJSON(1234, pathname, {'X-Auth-Token': 'SYNTHETIC_PRIVATE'});
+      const rejected = assert.rejects(pending, error => {
+        assert.equal(error.message.startsWith(phase + ' '), true);
+        assert.doesNotMatch(error.message, /SYNTHETIC_PRIVATE|ws:\/\/|1234/);
+        return true;
+      });
+      const local = requests.at(-1);
+      const diagnostic = new Error('SYNTHETIC_PRIVATE ws://127.0.0.1:1234/private');
+      if (failure === 'request') local.request.emit('error', diagnostic);
+      else {
+        local.respond();
+        if (failure === 'response') local.response.emit('error', diagnostic);
+        else if (failure === 'aborted') local.response.emit('aborted');
+        else {
+          if (failure === 'http') local.response.statusCode = 500;
+          local.response.emit('data', failure === 'oversized' ? 'x'.repeat(65537) : diagnostic.message);
+          local.response.emit('end');
+        }
+      }
+      await rejected;
+      assert.equal(local.request.destroyed, true);
+    }
+  }
+});
 
 test('packaged app smoke isolates all account paths and strips ambient credentials and overrides', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-switch-smoke-env-'));
@@ -62,6 +147,22 @@ test('window smoke requires the same isolated renderer, backend and automation w
     await assert.rejects(verifyWindowState(hidden, async () => ({...state, ...mutation}), 'hidden'), /did not retain/);
   }
   await assert.rejects(verifyWindowState(async () => ({exceptionDetails: {text: 'SECRET'}}), async () => state, 'hidden'), /did not retain/);
+});
+
+test('window visibility settles before spending the independent backend state budget', async () => {
+  let commands = 0, reads = 0;
+  await verifyWindowState(async () => {
+    assert.equal(reads, 0);
+    commands += 1;
+    return {result: {value: {sameDocument: true, visibility: commands === 1 ? 'visible' : 'hidden'}}};
+  }, async () => {
+    reads += 1;
+    return {desktop: {windowClose: 'hide'},
+      claude: {available: true, accounts: [], auto: {mode: 'dry-run'}},
+      codex: {available: true, accounts: [], auto: {mode: 'dry-run'}}};
+  }, 'hidden');
+  assert.equal(commands, 2);
+  assert.equal(reads, 1);
 });
 
 test('smoke quits through native Browser.close without waiting for its nonexistent protocol response', async t => {

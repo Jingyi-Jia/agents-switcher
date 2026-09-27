@@ -44,13 +44,18 @@ async function verifyWindowState(command, readState, visibility) {
     const result = await command('Runtime.evaluate', { expression:
       '({visibility: document.visibilityState, sameDocument: window.__agentSwitchSmoke === true})', returnByValue: true });
     const renderer = result.result?.value;
-    const state = await readState();
-    if (result.exceptionDetails || !renderer || renderer.sameDocument !== true || state?.desktop?.windowClose !== 'hide'
-      || !['claude', 'codex'].every(provider => state[provider]?.available === true
-        && state[provider]?.accounts?.length === 0 && state[provider]?.auto?.mode === 'dry-run')) {
+    if (result.exceptionDetails || !renderer || renderer.sameDocument !== true) {
       throw new SmokeError('Window lifecycle did not retain the isolated renderer, backend and automation');
     }
-    if (renderer.visibility === visibility) return;
+    if (renderer.visibility === visibility) {
+      const state = await readState();
+      if (state?.desktop?.windowClose !== 'hide'
+        || !['claude', 'codex'].every(provider => state[provider]?.available === true
+          && state[provider]?.accounts?.length === 0 && state[provider]?.auto?.mode === 'dry-run')) {
+        throw new SmokeError('Window lifecycle did not retain the isolated renderer, backend and automation');
+      }
+      return;
+    }
     await delay(250);
   }
   throw new SmokeError('Window did not reach the expected visibility');
@@ -127,24 +132,40 @@ async function connectDebugger(address) {
 }
 
 function readJSON(port, pathname, headers = {}) {
+  const backend = pathname === '/api/state';
+  const timeoutMs = backend ? 30000 : 3000;
+  const phase = backend ? 'Backend state collection' : 'Debugger discovery';
   return new Promise((resolve, reject) => {
-    const request = http.get({ hostname: '127.0.0.1', port, path: pathname, headers, timeout: 3000 }, response => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', chunk => {
-        body += chunk;
-        if (body.length > 65536) request.destroy(new SmokeError('Local response exceeded its bound'));
+    let request, settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        request?.destroy();
+        reject(new SmokeError(`${phase} ${error}`));
+      } else resolve(value);
+    };
+    const timer = setTimeout(() => finish(`request timed out after ${timeoutMs / 1000} seconds`), timeoutMs);
+    try {
+      request = http.get({ hostname: '127.0.0.1', port, path: pathname, headers }, response => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => {
+          body += chunk;
+          if (body.length > 65536) finish('response exceeded its bound');
+        });
+        response.on('error', () => finish('response failed'));
+        response.on('aborted', () => finish('response was interrupted'));
+        response.on('end', () => {
+          try {
+            if (response.statusCode !== 200) throw new SmokeError();
+            finish(null, JSON.parse(body));
+          } catch { finish('response was invalid'); }
+        });
       });
-      response.on('error', reject);
-      response.on('end', () => {
-        try {
-          if (response.statusCode !== 200) throw new SmokeError();
-          resolve(JSON.parse(body));
-        } catch { reject(new SmokeError('Local response was invalid')); }
-      });
-    });
-    request.on('timeout', () => request.destroy(new SmokeError('Local request timed out')));
-    request.on('error', reject);
+      request.on('error', () => finish('request failed'));
+    } catch { finish('request failed'); }
   });
 }
 
@@ -275,4 +296,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, quitApplication, exercise };
+module.exports = { isolatedEnvironment, validateRenderer, verifyWindowState, closeNativeWindow, quitApplication, readJSON, exercise };
