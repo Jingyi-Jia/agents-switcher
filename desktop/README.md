@@ -257,6 +257,17 @@ completing native installation checks. Keep Python and desktop package versions
 aligned for each release; a package version or private preview is not evidence
 that a public release exists.
 
+The **Desktop installers** manual workflow also accepts `verification_run_id`
+and `verification_source_sha` to test the existing artifacts from a successful
+**Prepare desktop release** run instead of building previews. It verifies the
+reviewed main source, checksums and provenance before installing each Mac DMG/ZIP
+into Applications and the Windows NSIS installer into a disposable test directory.
+Fresh GitHub-hosted runners check the installed backend, isolated first launch,
+window lifecycle and Windows uninstall. It never publishes or rebuilds the release,
+uses no signing secrets, and refuses personal or self-hosted machines. Silent
+installation does not verify interactive Gatekeeper or SmartScreen approval prompts;
+those limitations must remain explicit in the release notes.
+
 The packaged-app smoke can also be run locally on Linux after packaging:
 
 ```bash
