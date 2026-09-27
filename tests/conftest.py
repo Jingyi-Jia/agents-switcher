@@ -118,6 +118,7 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
         return (
             (_paths.get_backup_root(), True),
             (_paths.get_legacy_backup_root(), True),
+            (_paths.get_legacy_xdg_backup_root(), True),
             (_paths.get_claude_config_home(), False),
             (_paths.get_default_claude_config_home(), False),
             (_paths.get_global_config_path().parent, False),
@@ -138,6 +139,7 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
             # interrupted" and rmtree's the live store instead of refusing
             # the collision.
             (_paths.migration_flag_for(_paths.get_backup_root()), False),
+            (_paths.migration_flag_for(_paths.get_legacy_xdg_backup_root()), False),
             # TWO LEVELS DOWN, so the non-recursive `~/.claude` above does
             # not reach them. `--share-history` moves real transcripts to
             # `~/.claude/projects/<slug>/<uuid>.jsonl`, and `_mkdir_private`
@@ -172,7 +174,7 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
 
     default_specs = _resolve_with_cleared(
         "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "XDG_DATA_HOME",
-        "CODEX_HOME",
+        "CODEX_HOME", "LOCALAPPDATA",
     )
     # C-0: a THIRD snapshot, additive to (not replacing) default_specs above.
     # The mandated review/CI isolation recipe sets HOME/USERPROFILE (and
@@ -192,7 +194,7 @@ def _freeze_real_store_specs() -> tuple[tuple[Path, bool], ...]:
     # used to protect.
     home_default_specs = _resolve_with_cleared(
         "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "XDG_DATA_HOME",
-        "CODEX_HOME", "HOME", "USERPROFILE",
+        "CODEX_HOME", "LOCALAPPDATA", "HOME", "USERPROFILE",
     )
 
     seen: set[Path] = set()
@@ -264,7 +266,7 @@ def _derive_real_store_hints(
     (computed once, correctly, at conftest import time) excluding it.
     """
     return tuple(
-        {".claude", "claude-swap"}
+        {".claude", "claude-swap", "agents-switcher"}
         | {root.name for root, _r in specs if root.name and root != home}
     )
 
@@ -280,6 +282,7 @@ _WRITE_EVENTS = frozenset(
     {
         "open", "os.rename", "os.mkdir", "os.remove", "os.rmdir",
         "shutil.rmtree", "os.symlink", "os.truncate",
+        "agents_switcher.legacy_import",
     }
 )
 
@@ -532,6 +535,7 @@ def _isolate_real_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.delenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
     if "temp_home" in request.fixturenames:
         return  # temp_home provides its own isolated home
     if "tmp_keychain" in request.fixturenames:

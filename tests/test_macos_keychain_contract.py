@@ -4,7 +4,7 @@ Two layers of coverage:
 
 1. **Mocked tests** (run on every PR, every platform): assert that the macOS
    backup-credentials path passes the correct `(service, account)` tuple to the
-   `macos_keychain` security wrapper, under the new `claude-swap` service. This
+   `macos_keychain` security wrapper, under the independent `agents-switcher` service. This
    guards the multi-account backup namespace on every CI run.
 
 2. **Real-keychain integration tests** (GHA macOS only): exercise
@@ -70,7 +70,7 @@ class TestBackupCredentialsSecurity:
             result = macos_switcher._read_account_credentials("1", "user@example.com")
 
             mock_kc.get_password.assert_called_once_with(
-                "claude-swap", "account-1-user@example.com"
+                "agents-switcher", "account-1-user@example.com"
             )
             assert result == "fake-token"
 
@@ -86,7 +86,7 @@ class TestBackupCredentialsSecurity:
             )
 
             mock_kc.set_password.assert_called_once_with(
-                "claude-swap", "account-2-alice@example.com", "secret-token"
+                "agents-switcher", "account-2-alice@example.com", "secret-token"
             )
 
     def test_write_retains_prev_generation_in_keychain_not_a_file(
@@ -101,9 +101,9 @@ class TestBackupCredentialsSecurity:
             )
 
             mock_kc.set_password.assert_has_calls([
-                call("claude-swap", "account-2-alice@example.com.prev",
+                call("agents-switcher", "account-2-alice@example.com.prev",
                      "old-generation"),
-                call("claude-swap", "account-2-alice@example.com",
+                call("agents-switcher", "account-2-alice@example.com",
                      "secret-token"),
             ])
         prev_file = macos_switcher._store._prev_backup_path(
@@ -118,10 +118,10 @@ class TestBackupCredentialsSecurity:
             macos_switcher._delete_account_credentials("3", "bob@example.com")
 
             mock_kc.delete_password.assert_has_calls([
-                call("claude-swap", "account-3-bob@example.com"),
-                call("claude-swap", "account-3-bob@example.com.prev"),
-                call("claude-swap", "account-None-bob@example.com"),
-                call("claude-swap", "account-None-bob@example.com.prev"),
+                call("agents-switcher", "account-3-bob@example.com"),
+                call("agents-switcher", "account-3-bob@example.com.prev"),
+                call("agents-switcher", "account-None-bob@example.com"),
+                call("agents-switcher", "account-None-bob@example.com.prev"),
             ])
 
 

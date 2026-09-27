@@ -342,8 +342,8 @@ def test_frozen_specs_cover_the_migration_flag_and_the_transcript_tree(
     # arms resolve the same store, and the legacy coverage this test exists
     # for disappears with nothing failing.
     assert paths.get_backup_root() == (
-        home / ".claude-swap-backup" if platform is Platform.MACOS
-        else home / ".local" / "share" / "claude-swap"
+        home / "Library" / "Application Support" / "agents-switcher" if platform is Platform.MACOS
+        else home / ".local" / "share" / "agents-switcher"
     )
 
     specs = conftest._freeze_real_store_specs()
@@ -451,6 +451,8 @@ def test_frozen_specs_include_the_ambient_xdg_override_backup_root(
     assert home / ".local" / "share" / "claude-swap" in recursive_roots, (
         "the genuinely-default root must still be protected too"
     )
+    assert xdg / "agents-switcher" in recursive_roots
+    assert home / ".local" / "share" / "agents-switcher" in recursive_roots
 
 
 def test_layout_a_runtime_real_store_is_refused_and_unrelated_tmp_still_writes(
@@ -478,7 +480,7 @@ def test_layout_a_runtime_real_store_is_refused_and_unrelated_tmp_still_writes(
     monkeypatch.setattr(conftest, "_REAL_STORE_SPECS", conftest._freeze_real_store_specs())
 
     runtime_real_store = paths.get_backup_root()
-    assert runtime_real_store == xdg / "claude-swap"  # sanity: the hole's target
+    assert runtime_real_store == xdg / "agents-switcher"
 
     # YES-arm: the runtime real store must be refused.
     yes_target = runtime_real_store / "sequence.json"
@@ -910,3 +912,28 @@ def test_c0_a_scratch_home_still_protects_the_os_account_home_store(monkeypatch,
     assert scratch_root in roots, (
         "the scratch HOME's own root must stay protected too"
     )
+
+
+@pytest.mark.parametrize("platform", list(Platform))
+def test_independent_and_historical_roots_are_all_protected(monkeypatch, tmp_path, platform):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    monkeypatch.setattr(Platform, "detect", staticmethod(lambda: platform))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-override"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-override"))
+    specs = conftest._freeze_real_store_specs()
+    recursive = {path for path, recurse in specs if recurse}
+    assert {paths.get_backup_root(), paths.get_legacy_backup_root(), paths.get_legacy_xdg_backup_root()} <= recursive
+    if platform == Platform.WINDOWS:
+        assert home / "AppData/Local/agents-switcher" in recursive
+
+
+def test_importer_descriptor_writes_are_blocked_before_any_mutation(monkeypatch, tmp_path):
+    from agents_switcher.legacy_import import LegacyImport
+
+    root = tmp_path / "agents-switcher"
+    monkeypatch.setattr(conftest, "_REAL_STORE_SPECS", ((root, True),))
+    with pytest.raises(conftest.RealStoreWriteBlocked):
+        LegacyImport(root).import_accounts("legacy", confirm=True)
+    assert not root.exists()
