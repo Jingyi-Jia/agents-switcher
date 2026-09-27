@@ -231,14 +231,18 @@ test('full-screen smoke requires native exit before hide rather than merely even
       }}}});
       return {result: {value}};
     });
-    if (hideBeforeExit) await assert.rejects(smoke, /did not leave full screen before hiding/);
+    if (hideBeforeExit) await assert.rejects(smoke, /did not leave full screen before hiding \(hidden-before-exit\)/);
     else await smoke;
     assert.deepEqual(window.requests, [true]);
     assert.equal(window.shown, false);
     assert.equal(window.eventNames().length, 0);
   }
-  for (const result of [{result: {value: false}}, {exceptionDetails: {text: 'SECRET'}}]) {
-    await assert.rejects(closeFullScreenWindow(async () => result), /did not leave full screen before hiding/);
+  for (const result of [{result: {value: false}}, {result: {value: 'SECRET ws://127.0.0.1:1234/private'}}, {exceptionDetails: {text: 'SECRET'}}]) {
+    await assert.rejects(closeFullScreenWindow(async () => result), error => {
+      assert.match(error.message, /did not leave full screen before hiding \(evaluation-failed\)/);
+      assert.doesNotMatch(error.message, /SECRET|ws:\/\/|1234/);
+      return true;
+    });
   }
 });
 
@@ -257,7 +261,7 @@ for (const missing of ['enter-full-screen', 'hide']) {
         return {BrowserWindow: {getAllWindows: () => [window]}};
       }}}});
       return {result: {value}};
-    }), /did not leave full screen before hiding/);
+    }), new RegExp(`did not leave full screen before hiding \\(${missing === 'hide' ? 'hide' : 'enter'}-timeout\\)`));
     await new Promise(resolve => setImmediate(resolve));
     t.mock.timers.tick(10000);
     await rejected;

@@ -88,7 +88,7 @@ async function closeNativeWindow(command) {
 async function closeFullScreenWindow(command) {
   const result = await command('Runtime.evaluate', { expression: `(async () => {
     const windows = process.mainModule.require('electron').BrowserWindow.getAllWindows();
-    if (windows.length !== 1) return false;
+    if (windows.length !== 1) return 'window-count';
     const window = windows[0];
     const transition = (event, action) => new Promise(resolve => {
       const done = () => { clearTimeout(timer); resolve(true); };
@@ -96,8 +96,9 @@ async function closeFullScreenWindow(command) {
       window.once(event, done);
       action();
     });
-    if (!await transition('enter-full-screen', () => window.setFullScreen(true))) return false;
-    if (!window.isFullScreen() || !window.isVisible()) return false;
+    if (!await transition('enter-full-screen', () => window.setFullScreen(true))) return 'enter-timeout';
+    if (!window.isFullScreen()) return 'not-full-screen-after-entry';
+    if (!window.isVisible()) return 'not-visible-after-entry';
     let leftFullScreen = false, hiddenEarly = false;
     const onLeave = () => { leftFullScreen = true; };
     const onHide = () => { if (!leftFullScreen) hiddenEarly = true; };
@@ -105,14 +106,23 @@ async function closeFullScreenWindow(command) {
     window.on('hide', onHide);
     try {
       const hidden = await transition('hide', () => window.close());
-      return hidden && leftFullScreen && !hiddenEarly && !window.isDestroyed()
-        && !window.isFullScreen() && !window.isVisible();
+      if (!hidden) return 'hide-timeout';
+      if (!leftFullScreen) return 'exit-event-missing';
+      if (hiddenEarly) return 'hidden-before-exit';
+      if (window.isDestroyed()) return 'window-destroyed';
+      if (window.isFullScreen()) return 'still-full-screen';
+      if (window.isVisible()) return 'still-visible';
+      return true;
     } finally {
       window.removeListener('leave-full-screen', onLeave);
       window.removeListener('hide', onHide);
     }
   })()`, awaitPromise: true, returnByValue: true });
-  if (result.exceptionDetails || result.result?.value !== true) throw new SmokeError('Native full-screen close did not leave full screen before hiding');
+  if (!result.exceptionDetails && result.result?.value === true) return;
+  const phases = ['window-count', 'enter-timeout', 'not-full-screen-after-entry', 'not-visible-after-entry',
+    'hide-timeout', 'exit-event-missing', 'hidden-before-exit', 'window-destroyed', 'still-full-screen', 'still-visible'];
+  const phase = !result.exceptionDetails && phases.includes(result.result?.value) ? result.result.value : 'evaluation-failed';
+  throw new SmokeError(`Native full-screen close did not leave full screen before hiding (${phase})`);
 }
 
 async function connectDebugger(address) {
