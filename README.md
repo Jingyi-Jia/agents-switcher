@@ -265,8 +265,7 @@ no separate analytics dashboard.
 **Settings** contains appearance and view preferences. System, light, and dark
 appearance and acknowledgement of the profile notice persist in the private
 `ui-preferences.json` file under Agent Switch's data directory. This file contains
-no credentials. Closing the standalone app still stops its backend and its own
-automatic-switching session; the menu-bar icon does not imply background mode.
+no credentials. Closing the window hides the app while its backend and automatic-switching session keep running. Reopen it from the tray/menu bar, the macOS Dock, or by launching Agent Switch again. Choose Quit Agent Switch to stop its backend and automatic switching.
 
 The native **View** menu and menu-bar menu open Accounts, Usage, and Settings.
 Keyboard shortcuts are **⌘/Ctrl+1**, **⌘/Ctrl+2**, and **⌘/Ctrl+,** respectively.
