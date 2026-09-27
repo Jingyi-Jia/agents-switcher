@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
 
 from agents_switcher.codex.auth_file import CodexAuthError
 from agents_switcher.codex.autoswitch import Action, AutoSettings, run_once
+from agents_switcher.codex.enrollment import CodexEnrollment, EnrollmentError, LOGIN_ARGUMENTS
 from agents_switcher.codex.switcher import CodexSwitcher
 from agents_switcher.codex.usage import CodexUsage
 from agents_switcher.exceptions import ClaudeSwitchError
@@ -60,7 +63,7 @@ def _print_status(switcher: CodexSwitcher, as_json: bool) -> None:
         return
 
     if not status.logged_in:
-        print(dimmed("Codex is not logged in.") + "  Run 'codex login' to sign in.")
+        print(dimmed("Codex is not logged in.") + f"  Run '{_cmd()} codex login --activate' to sign in safely.")
         return
     label = status.identity.display_label if status.identity else "unknown account"
     if status.account:
@@ -82,7 +85,7 @@ def _print_list(switcher: CodexSwitcher, as_json: bool) -> None:
 
     if not accounts:
         print(dimmed("No Codex accounts are managed yet."))
-        print(dimmed(f"  Log in with 'codex login', then run '{_cmd()} codex add'."))
+        print(dimmed(f"  Run '{_cmd()} codex login' to save a new isolated sign-in."))
         return
     print(bolded("Codex accounts:"))
     for account in accounts:
@@ -436,6 +439,41 @@ def _auto_command(switcher, args) -> None:
         time.sleep(settings.interval_seconds)
 
 
+def _login_command(switcher: CodexSwitcher, args) -> None:
+    executable = shutil.which("codex.exe" if sys.platform == "win32" else "codex")
+    if executable is None:
+        raise EnrollmentError("Install the official Codex CLI executable and put it on PATH before signing in.")
+    enrollment = CodexEnrollment(switcher, alias=args.alias)
+    try:
+        prepared = enrollment.prepare(number=args.account, confirm=True)
+        session_id = prepared["sessionId"]
+        print(dimmed("Signing in with an empty, private Codex home. Your current login will not be replaced."), flush=True)
+        try:
+            result = subprocess.run(
+                [executable, *LOGIN_ARGUMENTS], env=enrollment.cli_environment(session_id), check=False,
+            )
+        except OSError:
+            raise EnrollmentError("The official Codex login could not start. No account was saved or activated.") from None
+        if result.returncode != 0:
+            raise EnrollmentError("Codex sign-in failed or was cancelled. No account was saved or activated.")
+        saved = enrollment.complete(session_id, confirm=True)
+        print(f"{accent('Saved Codex login')} {saved['account']['email']} "
+              f"{muted('as slot ' + saved['account']['number'])}")
+        if saved.get("warning"):
+            print(yellowed(saved["message"]))
+        if args.activate:
+            activated = enrollment.activate(session_id, confirm=True)
+            print(f"{accent('Switched to')} {activated['account']['email']} "
+                  f"{muted('as slot ' + activated['account']['number'])}")
+            if activated["restartRequired"]:
+                print(yellowed("Restart Codex to use the new login."))
+        else:
+            print(dimmed("  The current Codex login has not changed. Quit Codex CLI and Desktop, then run:"))
+            print(dimmed(f"  {_cmd()} codex switch {saved['account']['number']} --use-saved-login"))
+    finally:
+        enrollment.close()
+
+
 def codex_command(argv: list[str]) -> None:
     """Handle ``<prog> codex <subcommand>``."""
     # Imported here, not at module level: cli.py pulls this module in inside
@@ -486,6 +524,12 @@ auth.json once at startup and will not adopt a different account mid-run.
                            help="Manage the account Codex is logged in as")
     p_add.add_argument("--alias", default="", metavar="NAME", help="Short name for it")
 
+    p_login = sub.add_parser("login", parents=[common],
+                             help="Sign in safely with the official CLI using an empty private home")
+    p_login.add_argument("--account", metavar="NUMBER", help="Repair this saved slot; the identity must match")
+    p_login.add_argument("--alias", default="", metavar="NAME", help="Short name for a new account")
+    p_login.add_argument("--activate", action="store_true", help="Also activate after sign-in; quit all Codex clients first")
+
     p_switch = sub.add_parser("switch", parents=[common],
                               help="Make a managed account the live login")
     p_switch.add_argument("account", metavar="NUM|EMAIL|ALIAS")
@@ -493,6 +537,10 @@ auth.json once at startup and will not adopt a different account mid-run.
         "--force",
         action="store_true",
         help="Proceed even if the current login is unmanaged (discards it)",
+    )
+    p_switch.add_argument(
+        "--use-saved-login", action="store_true",
+        help="Explicitly activate a saved repair even for the same account; quit all Codex clients first",
     )
 
     p_remove = sub.add_parser("remove", aliases=["rm"], parents=[common],
@@ -536,6 +584,10 @@ auth.json once at startup and will not adopt a different account mid-run.
     p_alias.add_argument("--unset", action="store_true", help="Remove the alias")
 
     args = parser.parse_args(argv)
+    if args.command == "login" and args.json:
+        parser.error("codex login is interactive and cannot be combined with --json")
+    if args.command == "login" and args.account is not None and args.alias:
+        parser.error("--alias is for new accounts; --account preserves the saved slot's alias")
     if args.command == "alias" and not args.unset and not args.name:
         parser.error("NAME is required (or pass --unset to remove the alias)")
     if args.command == "tui":
@@ -558,6 +610,8 @@ auth.json once at startup and will not adopt a different account mid-run.
             else:
                 print(f"{accent('Now managing')} {account.display_label} "
                       f"{muted(f'as slot {account.number}')}")
+        elif command == "login":
+            _login_command(switcher, args)
         elif command == "auto":
             _auto_command(switcher, args)
         elif command == "stats":
@@ -565,7 +619,9 @@ auth.json once at startup and will not adopt a different account mid-run.
         elif command == "usage":
             _print_usage(switcher, args.account, args.json)
         elif command == "switch":
-            _report_switch(switcher.switch_to(args.account, force=args.force), args.json)
+            _report_switch(switcher.switch_to(
+                args.account, force=args.force, allow_same=args.use_saved_login,
+            ), args.json)
         elif command in ("remove", "rm"):
             removed = switcher.remove_account(args.account)
             if args.json:

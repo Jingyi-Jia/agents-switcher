@@ -17,8 +17,9 @@ _SECRET = "test-only-opaque-credential"
 _ISSUER = f"https://issuer.invalid/private/{_SECRET}"
 _TOKENS = {"refresh_token": _SECRET, "access_token": "test-only-access-credential"}
 _REAUTH_MESSAGE = (
-    "Codex needs a fresh login for this account. Run 'codex login' "
-    "as the affected account, then add the existing login again."
+    "Codex needs a fresh isolated login for this account. Run "
+    "'agent-switch codex login --account NUMBER --activate' with its saved slot number. "
+    "Quit Codex CLI and Desktop before activation; do not sign in over the current Codex home."
 )
 
 
