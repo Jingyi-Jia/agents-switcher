@@ -17,7 +17,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from xml.parsers.expat import ExpatError
 
 _BUNDLE_ID = "com.openai.codex"
@@ -241,6 +241,13 @@ def _posix_processes() -> list[_Process]:
             read_executable = _read_mac_executable if sys.platform == "darwin" else _read_linux_executable
             try:
                 executable = read_executable(process.pid)
+            except FileNotFoundError as error:
+                if sys.platform != "darwin" or error.errno != errno.ENOENT:
+                    raise
+                executable, arguments = _read_mac_arguments(process.pid)
+                path = PurePosixPath(executable)
+                if not path.is_absolute() or ".." in path.parts:
+                    raise ValueError
             except PermissionError:
                 if sys.platform != "linux":
                     raise
@@ -252,7 +259,7 @@ def _posix_processes() -> list[_Process]:
                     raise
                 executable = arguments[0]
             name = _basename(executable).lower()
-            if (name.startswith("codex") or name in _INTERPRETERS
+            if not arguments and (name.startswith("codex") or name in _INTERPRETERS
                     or "/Codex.app/Contents/" in executable):
                 reader = _read_mac_arguments if sys.platform == "darwin" else _read_linux_arguments
                 executable, arguments = reader(process.pid)
@@ -414,10 +421,13 @@ class CodexDesktop:
             status["message"] = "Quit Codex apps, terminal sessions, and background clients manually, then check again. App assistance is macOS-only."
         elif not _compatible_home():
             status["message"] = "App assistance requires the usual home folder and default CODEX_HOME (~/.codex). Quit Codex manually for this configuration."
+        elif status["terminalCount"] or status["backgroundCount"]:
+            status["message"] = (
+                "If Codex is already quit, check ChatGPT and editor integrations for remaining Codex clients. "
+                "Close them manually, then check again; they will not be closed for you."
+            )
         elif app is None:
             status["message"] = "Install the official Codex app in /Applications or ~/Applications to use app assistance. Quit any Codex clients manually."
-        elif status["terminalCount"] or status["backgroundCount"]:
-            status["message"] = "Quit Codex terminal sessions, background clients, and other apps using Codex manually, then check again. They will not be closed for you."
         elif len(mains) > 1:
             status["message"] = "More than one Codex app is running. Quit them manually, then check again."
         else:

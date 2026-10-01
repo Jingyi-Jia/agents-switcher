@@ -104,6 +104,14 @@ launch must be checked after publication.
 Versions predating the community release flow need one manual installation from
 the GitHub Releases page. No update mode installs during ordinary Quit.
 
+Quit Agent Switch before replacing the installed app. Saved Codex and Claude
+Code accounts and named Claude Desktop profile directories live in the separate
+[Agent Switch data directory](../README.md#local-data-and-privacy), not in the
+app bundle or installer. Updating the app under the same OS user retains them;
+do not delete that directory or use a cleanup tool that removes it. Changing
+computer/user requires a separate data-transfer plan. Provider-revoked logins
+still need a new sign-in even when the saved account entry survives.
+
 Closing the window hides it without stopping the backend or session-owned
 auto-switching. Reopen it with **Show app** in the tray/menu bar, the macOS Dock,
 or by launching Agent Switch again. **Quit Agent Switch** (Cmd+Q on macOS,

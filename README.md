@@ -604,6 +604,21 @@ Codex backups occupy the `codex/` subdirectory. Saved macOS Claude credentials
 use the separate `agents-switcher` Keychain service; the official provider's live
 credential service is unchanged.
 
+Replacing or updating the Agent Switch app on the same computer and OS user
+keeps this data: saved Codex and Claude Code accounts, aliases, settings, and
+named Claude Desktop profile directories. Quit Agent Switch before replacing
+it; closing its window only hides it. Replace the app, not this data directory,
+and avoid uninstall/cleanup tools that remove application support data. A new
+computer or OS user does not automatically receive these local profiles.
+The app reloads entries previously saved in its current data directory
+automatically; you do not need to add those accounts or profiles again.
+
+If saved entries disappear after an update, check **Settings → Saved account
+storage** before adding them again. Confirm that you are using the same OS user
+and storage location. Entries that remain listed but require sign-in have a
+different problem: replacing Agent Switch cannot restore a login revoked by the
+provider, and Claude Desktop owns authentication inside its named profiles.
+
 On an upgrade from the shared-store layout, open **Settings → Saved account
 storage → Import previous accounts…**. Import is optional: you can start fresh
 instead. Stop other account managers, their background automation, and provider

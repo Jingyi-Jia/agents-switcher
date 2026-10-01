@@ -356,6 +356,73 @@ def test_process_metadata_race_is_unknown_not_stopped(scan, monkeypatch):
     exists.assert_called_once_with(100, 0)
 
 
+@pytest.mark.parametrize("reported_command", [None, "/bin/sh"])
+@pytest.mark.parametrize("executable,arguments,blocked", [
+    ("/Applications/Browser.app/Contents/MacOS/chrome-native-host", (), False),
+    ("/opt/bin/codex", (), True),
+    ("/opt/bin/node", ("/opt/codex/bin/codex.js",), True),
+])
+def test_macos_unlinked_executable_uses_native_kernel_identity(scan, monkeypatch, executable, arguments, blocked, reported_command):
+    scan.add(100, executable, *arguments)
+    if reported_command:
+        scan.output[-1] = f"100 1 501 S ?? {reported_command}"
+    read_executable = Mock(side_effect=[cd._read_mac_executable(50), FileNotFoundError(errno.ENOENT, "unlinked")])
+    native_arguments = Mock(wraps=cd._read_mac_arguments)
+    monkeypatch.setattr(cd, "_read_mac_executable", read_executable)
+    monkeypatch.setattr(cd, "_read_mac_arguments", native_arguments)
+    status = scan.backend.status()
+    assert status["available"] is True
+    assert status["running"] is blocked
+    assert status["backgroundCount"] == int(blocked)
+    assert status["canOpen"] is not blocked
+    native_arguments.assert_called_once_with(100)
+    cd.os.kill.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [
+    FileNotFoundError(errno.ENOENT, "private metadata"),
+    PermissionError(errno.EPERM, "private metadata"),
+    ValueError("private truncated metadata"),
+])
+def test_unlinked_executable_with_unreadable_kernel_identity_still_blocks(scan, monkeypatch, failure):
+    scan.add(100, "/opt/bin/codex")
+    monkeypatch.setattr(cd, "_read_mac_executable", Mock(side_effect=[
+        cd._read_mac_executable(50), FileNotFoundError(errno.ENOENT, "private path"),
+    ]))
+    monkeypatch.setattr(cd, "_read_mac_arguments", Mock(side_effect=failure))
+    monkeypatch.setattr(cd.os, "kill", Mock())
+    status = scan.backend.status()
+    assert status["available"] is False
+    assert status["running"] is None
+    assert status["canOpen"] is status["canAssist"] is False
+    assert "private" not in json.dumps(status)
+    cd.os.kill.assert_called_once_with(100, 0)
+
+
+@pytest.mark.parametrize("path", ["chrome-native-host", "", "/opt/../bin/chrome-native-host"])
+def test_unlinked_executable_rejects_incomplete_kernel_identity(scan, monkeypatch, path):
+    scan.add(100, "/opt/bin/codex")
+    monkeypatch.setattr(cd, "_read_mac_executable", Mock(side_effect=[
+        cd._read_mac_executable(50), FileNotFoundError(errno.ENOENT, "private path"),
+    ]))
+    monkeypatch.setattr(cd, "_read_mac_arguments", Mock(return_value=(path, (path,))))
+    monkeypatch.setattr(cd.os, "kill", Mock())
+    assert scan.backend.status()["running"] is None
+
+
+def test_linux_unlinked_executable_does_not_use_macos_kernel_identity(scan, monkeypatch):
+    monkeypatch.setattr(cd, "sys", SimpleNamespace(platform="linux"))
+    scan.add(100, "/opt/bin/codex")
+    monkeypatch.setattr(cd, "_read_linux_executable", Mock(side_effect=[
+        cd._read_linux_executable(50), FileNotFoundError(errno.ENOENT, "private path"),
+    ]))
+    native_arguments = Mock(side_effect=AssertionError("Mac metadata on Linux"))
+    monkeypatch.setattr(cd, "_read_mac_arguments", native_arguments)
+    monkeypatch.setattr(cd.os, "kill", Mock())
+    assert scan.backend.status()["running"] is None
+    native_arguments.assert_not_called()
+
+
 @pytest.mark.parametrize("failure", [
     FileNotFoundError(errno.ENOENT, "private process"),
     OSError("private native metadata"), ValueError("private truncated metadata"),
@@ -458,6 +525,18 @@ def test_unverified_or_uninstalled_bundle_helpers_remain_manual_blockers(scan, m
     assert status["running"] is True
     assert status["backgroundCount"] == 1
     assert status["canAssist"] is False
+
+
+def test_background_clients_are_actionable_even_without_the_official_codex_app(scan, monkeypatch):
+    scan.add(100, "/Applications/ChatGPT.app/Contents/Resources/codex", "app-server")
+    monkeypatch.setattr(cd, "_installed_apps", lambda: [])
+    status = scan.backend.status()
+    assert status["available"] is status["running"] is True
+    assert status["backgroundCount"] == 1
+    assert status["canOpen"] is status["canAssist"] is False
+    assert "ChatGPT and editor integrations" in status["message"]
+    assert "Install" not in status["message"]
+    assert "will not be closed for you" in status["message"]
 
 
 def test_two_running_installations_are_not_auto_closed(scan, monkeypatch):

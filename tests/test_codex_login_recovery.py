@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -19,7 +20,7 @@ from agents_switcher.codex.processes import CodexProcess
 from agents_switcher.codex.store import CodexAccountStore
 from agents_switcher.codex.switcher import CodexSwitcher
 from agents_switcher.codex.tokens import TokenRefreshError
-from agents_switcher.codex.usage import CodexUsage, UsageAuthError
+from agents_switcher.codex.usage import CodexUsage, UsageAuthError, UsageError, UsageLoginRequiredError
 from agents_switcher.exceptions import SwitchError
 from agents_switcher.providers import ProviderActionError, ProviderActions, safe_error
 
@@ -112,6 +113,49 @@ def test_live_credentials_never_get_filed_under_another_account(account_env, mon
     monkeypatch.setattr(switcher_mod, "fetch_usage", fetch)
     account_env.switcher.usage_for("1")
     assert account_env.store.read_credentials("1") == original
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_rejected_report_explains_running_client_refresh_guard_without_rotating(account_env, monkeypatch, pending):
+    original = login()
+    write_auth(original)
+    account_env.switcher.add_current()
+    if pending:
+        account_env.switcher.import_login(login(refresh="pending-repair"))
+    saved = account_env.store.read_credentials("1")
+    monkeypatch.setattr(switcher_mod, "running_codex_processes", lambda: [object()])
+    fetch = Mock(side_effect=UsageAuthError("private provider detail"))
+    refresh = Mock(side_effect=AssertionError("Unsafe token refresh"))
+    monkeypatch.setattr(switcher_mod, "fetch_usage", fetch)
+    monkeypatch.setattr(switcher_mod, "refresh_tokens", refresh)
+    with pytest.raises(UsageAuthError) as error:
+        account_env.switcher.usage_for("1")
+    assert "Token refresh is paused" in str(error.value)
+    assert "ChatGPT" in str(error.value)
+    assert "private provider detail" not in str(error.value)
+    assert ("Use saved login" in str(error.value)) is pending
+    fetch.assert_called_once_with(saved["tokens"])
+    refresh.assert_not_called()
+    assert account_env.store.read_credentials("1") == saved
+    assert read_auth() == original
+    assert account_env.switcher.activation_required(account_env.store.get("1")) is pending
+
+
+def test_transient_refresh_server_failure_preserves_the_saved_and_live_login(account_env, monkeypatch):
+    original = login(expired=True)
+    write_auth(original)
+    account_env.switcher.add_current()
+    refresh = Mock(side_effect=TokenRefreshError("refresh failed: HTTP 500; try again later"))
+    quota = Mock(side_effect=AssertionError("No report without successful refresh"))
+    monkeypatch.setattr(switcher_mod, "refresh_tokens", refresh)
+    monkeypatch.setattr(switcher_mod, "fetch_usage", quota)
+    result = account_env.switcher.usage_all()["1"]
+    assert isinstance(result, UsageError) and not isinstance(result, UsageLoginRequiredError)
+    assert "HTTP 500" in str(result)
+    refresh.assert_called_once_with(original["tokens"])
+    quota.assert_not_called()
+    assert account_env.store.read_credentials("1") == original
+    assert read_auth() == original
 
 
 def test_a_reused_slot_is_not_polled_as_its_previous_owner(account_env):

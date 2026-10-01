@@ -526,8 +526,19 @@ class CodexSwitcher:
                 latest = self._credentials_with_live_updates(account)
                 if latest.get("tokens") != tokens:
                     credentials = latest
-                elif refreshed or not allow_refresh or not self._refresh_is_safe(account):
+                elif refreshed or not allow_refresh:
                     raise
+                elif not self._refresh_is_safe(account):
+                    action = (
+                        "Choose Use saved login to activate the login already saved for this account."
+                        if self.activation_required(account)
+                        else "Then refresh usage to retry safely."
+                    )
+                    raise UsageAuthError(
+                        "Codex rejected authentication for this report. Token refresh is paused while "
+                        "Codex clients are still running. Quit Codex, ChatGPT, and any Codex "
+                        f"terminal or editor sessions first. {action}"
+                    ) from None
                 else:
                     credentials = self._refresh_and_persist(account, latest)
             return fetcher(credentials.get("tokens") or {})
