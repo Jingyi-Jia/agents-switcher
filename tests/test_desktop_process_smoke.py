@@ -101,6 +101,33 @@ def test_packaged_probe_hides_subprocess_failure_output(monkeypatch, packaging_s
         smoke.check_processes(Path("helper"))
 
 
+@pytest.mark.parametrize("failure,reason", [
+    ("timeout", "helper timeout"),
+    ("readiness", "helper exit 1; native readiness unavailable"),
+    ("exit", "helper exit 17"),
+    ("launch", "helper launch or output error"),
+])
+def test_packaged_probe_reports_only_safe_failure_category_and_duration(
+    monkeypatch, packaging_script, capsys, failure, reason,
+):
+    smoke = packaging_script("smoke_backend")
+    errors = {
+        "timeout": smoke.subprocess.TimeoutExpired("private-command", 30, output="private-data", stderr="private-data"),
+        "readiness": smoke.subprocess.CalledProcessError(
+            1, "private-command", output="private-data", stderr="Frozen helper process smoke failed\n",
+        ),
+        "exit": smoke.subprocess.CalledProcessError(17, "private-command", output="private-data", stderr="private-data"),
+        "launch": OSError("private-data"),
+    }
+    monkeypatch.setattr(smoke.time, "monotonic", Mock(side_effect=[100, 112.5]))
+    monkeypatch.setattr(smoke.subprocess, "run", Mock(side_effect=errors[failure]))
+    with pytest.raises(RuntimeError, match="^Frozen helper process smoke failed$"):
+        smoke.check_processes(Path("helper"))
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == f"Frozen helper process check failed after 12.5 seconds ({reason})\n"
+
+
 @pytest.mark.parametrize("platform", ["darwin", "linux", "win32", "freebsd"])
 @pytest.mark.parametrize("enabled", [False, True])
 def test_process_probe_is_explicit_and_only_runs_on_supported_platforms(monkeypatch, packaging_script, tmp_path, platform, enabled):
