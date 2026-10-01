@@ -123,6 +123,7 @@ def test_nsis_command_preserves_unquoted_destination_with_spaces(installer, monk
     def run(command, **kwargs):
         commands.append(command)
         assert kwargs["check"] and kwargs["env"] == environment
+        assert kwargs["timeout"] == (300 if len(commands) == 1 else 180)
         if len(commands) == 1:
             destination.mkdir()
             (destination / "Agent Switch.exe").touch()
