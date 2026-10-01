@@ -1,4 +1,4 @@
-"""Isolated official-Codex sign-in sessions; never log in over live credentials."""
+"""Isolated Codex sign-in sessions; never log in over live credentials."""
 
 from __future__ import annotations
 
@@ -16,8 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agents_switcher.codex.auth_file import CodexAuthError
+from agents_switcher.codex.browser_login import BrowserLogin, BrowserLoginError
 from agents_switcher.codex.store import CodexAccount
-from agents_switcher.codex.switcher import CodexSwitcher
+from agents_switcher.codex.switcher import CodexSwitcher, LoginIdentityError
 from agents_switcher.exceptions import AccountNotFoundError, ClaudeSwitchError, SwitchError, ValidationError
 
 LOGIN_ARGUMENTS = ("-c", 'cli_auth_credentials_store="file"', "login")
@@ -26,10 +27,17 @@ SESSION_TTL_SECONDS = 30 * 60
 _CLEANUP_WARNING = (
     "Private temporary login files remain. Stop the terminal login and retry cancellation to clean them up."
 )
+_BROWSER_CLEANUP_WARNING = (
+    "Private temporary login files remain. Retry cancellation or quit Agent Switch to clean them up."
+)
 
 
 class EnrollmentError(ClaudeSwitchError):
     """A safe, user-facing enrollment failure without credential contents."""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _linked(info: os.stat_result) -> bool:
@@ -109,12 +117,13 @@ class _Session:
     account: CodexAccount | None = None
     result: dict | None = None
     cancelled: bool = False
+    browser: BrowserLogin | None = None
 
 
 class CodexEnrollment:
-    """Prepare/import one private login session; never spawn a GUI-owned process."""
+    """Prepare/import one private browser or official-CLI login session."""
 
-    def __init__(self, switcher: CodexSwitcher, *, alias: str = "") -> None:
+    def __init__(self, switcher: CodexSwitcher, *, alias: str = "", browser: bool = False) -> None:
         from agents_switcher.models import normalize_alias
 
         self.switcher = switcher
@@ -123,6 +132,7 @@ class CodexEnrollment:
         self._closed_session_id: str | None = None
         self._lock = threading.RLock()
         self._closed = False
+        self._browser = browser
 
     @staticmethod
     def _confirm(confirm: bool) -> None:
@@ -145,6 +155,8 @@ class CodexEnrollment:
             session.cancelled = True
             if self._cleanup(session):
                 self._forget(session)
+            if self._browser:
+                raise EnrollmentError("Codex sign-in expired. Start sign-in again.")
             raise EnrollmentError("Codex enrollment expired. Stop its terminal login and start again.")
         return session
 
@@ -183,11 +195,15 @@ class CodexEnrollment:
                     expected_number = self._session.expected.number if self._session.expected else None
                     if number == expected_number:
                         return self._prepared(self._session)
+                    if self._browser:
+                        raise EnrollmentError("A different Codex sign-in is pending. Cancel it before choosing another account.")
                     raise EnrollmentError(
                         "A different Codex sign-in is pending. Stop that terminal login, "
                         "then quit and reopen Agent Switch before choosing another account."
                     )
                 if not self._cleanup(self._session):
+                    if self._browser:
+                        raise EnrollmentError("The previous sign-in could not be cleaned up. Retry cancellation or quit Agent Switch.")
                     raise EnrollmentError("Stop the previous terminal login before preparing another sign-in.")
                 self._forget(self._session)
             expected = None
@@ -219,6 +235,15 @@ class CodexEnrollment:
                                  os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=descriptor)
                     with os.fdopen(fd, "w", encoding="utf-8") as config:
                         config.write('cli_auth_credentials_store = "file"\n')
+                if self._browser:
+                    session.browser = BrowserLogin(expires_at=session.expires_at)
+                    session.browser.start()
+            except BrowserLoginError:
+                if self._session is not None:
+                    self._session.cancelled = True
+                    if self._cleanup(self._session):
+                        self._forget(self._session)
+                raise
             except OSError:
                 if self._session is not None:
                     self._session.cancelled = True
@@ -228,6 +253,11 @@ class CodexEnrollment:
             return self._prepared(session)
 
     def _prepared(self, session: _Session) -> dict:
+        if session.browser is not None:
+            return {
+                "sessionId": session.session_id, "method": "browser",
+                **session.browser.status(),
+            }
         try:
             with self._home(session):
                 pass
@@ -256,10 +286,38 @@ class CodexEnrollment:
             ),
         }
 
+    def open_browser(self, session_id: str, *, confirm: bool = False) -> dict:
+        self._confirm(confirm)
+        with self._lock:
+            session = self._get(session_id)
+            if session.browser is None or session.account is not None:
+                raise EnrollmentError("This session is not waiting for browser sign-in.")
+            browser = session.browser
+        return browser.open_browser()
+
+    def status(self, session_id: str, *, confirm: bool = False) -> dict:
+        self._confirm(confirm)
+        with self._lock:
+            session = self._get(session_id, cleanup=True)
+            if session.result is not None:
+                return {**session.result, "status": "saved", "account": dict(session.result["account"])}
+            if time.monotonic() >= session.expires_at:
+                session.cancelled = True
+                self._cleanup(session)
+                return {
+                    "ok": False, "status": "expired",
+                    "message": "Codex sign-in expired. Start sign-in again; no account was saved.",
+                }
+            if session.browser is None:
+                raise EnrollmentError("This session uses terminal sign-in, not browser sign-in.")
+            return session.browser.status()
+
     def cli_environment(self, session_id: str) -> dict[str, str]:
         """Build the fixed CLI child's environment without inherited auth overrides."""
         with self._lock:
             session = self._get(session_id)
+            if session.browser is not None:
+                raise EnrollmentError("Browser sign-in does not use a terminal command.")
             if session.account is not None:
                 raise EnrollmentError("This Codex sign-in was already saved.")
             try:
@@ -275,6 +333,8 @@ class CodexEnrollment:
             return environment
 
     def _read_login(self, session: _Session) -> dict:
+        if session.browser is not None:
+            return session.browser.credentials()
         for attempt in range(3):
             try:
                 with self._home(session) as directory_fd:
@@ -333,6 +393,8 @@ class CodexEnrollment:
             credentials = self._read_login(session)
             try:
                 account = self.switcher.import_login(credentials, alias=self._alias, expected=session.expected)
+            except LoginIdentityError as error:
+                raise EnrollmentError(str(error), code="wrong-account") from None
             except (ValidationError, SwitchError) as error:
                 raise EnrollmentError(str(error)) from None
             except (OSError, ClaudeSwitchError, ValueError):
@@ -347,8 +409,8 @@ class CodexEnrollment:
             }
             if not cleaned:
                 result["warning"] = True
-                result["cleanupWarning"] = _CLEANUP_WARNING
-                result["message"] += " " + _CLEANUP_WARNING
+                result["cleanupWarning"] = _BROWSER_CLEANUP_WARNING if self._browser else _CLEANUP_WARNING
+                result["message"] += " " + result["cleanupWarning"]
             session.result = result
             return {**result, "account": dict(result["account"])}
 
@@ -371,6 +433,8 @@ class CodexEnrollment:
             }
 
     def _cleanup(self, session: _Session) -> bool:
+        if session.browser is not None:
+            session.browser.close()
         try:
             with self._home(session) as descriptor:
                 if os.name == "nt":
@@ -415,16 +479,17 @@ class CodexEnrollment:
                 cleaned = self._cleanup(session)
                 if cleaned:
                     self._forget(session)
+            warning = _BROWSER_CLEANUP_WARNING if self._browser else _CLEANUP_WARNING
             result = {
                 "ok": cleaned, "warning": not cleaned,
                 "message": (
                     "Codex sign-in session closed. Saved accounts and the current login are unchanged."
                     if cleaned else
-                    "Codex sign-in cancelled. " + _CLEANUP_WARNING
+                    "Codex sign-in cancelled. " + warning
                 ),
             }
             if not cleaned:
-                result["cleanupWarning"] = _CLEANUP_WARNING
+                result["cleanupWarning"] = warning
             return result
 
     def close(self) -> None:

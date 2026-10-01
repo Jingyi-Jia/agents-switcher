@@ -48,6 +48,10 @@ class UsageAuthError(UsageError):
     """The token was rejected — refresh it and retry once."""
 
 
+class UsageLoginRequiredError(UsageError):
+    """This saved account requires a fresh provider sign-in, not another refresh."""
+
+
 def _window_label(seconds: int | None) -> str:
     """A human label for a window length, derived because the API sends none."""
     if not seconds or seconds <= 0:

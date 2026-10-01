@@ -38,6 +38,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from agents_switcher.claude_desktop import ClaudeDesktopProfiles
+from agents_switcher.codex.enrollment import EnrollmentError
+from agents_switcher.codex.usage import UsageLoginRequiredError
 from agents_switcher.providers import ActionRequired, ProviderActionError, ProviderActions, account_number, safe_error
 from agents_switcher.web.page import PAGE_HTML
 from agents_switcher.web.preferences import UiPreferences
@@ -139,7 +141,7 @@ class DashboardState:
         self._codex = codex_switcher
         self.claude_desktop = ClaudeDesktopProfiles()
         self.codex_desktop = CodexDesktop()
-        self.codex_enrollment = CodexEnrollment(codex_switcher) if codex_switcher is not None else None
+        self.codex_enrollment = CodexEnrollment(codex_switcher, browser=True) if codex_switcher is not None else None
         self.legacy_import = LegacyImport()
         self.analytics = UsageAnalytics(codex_switcher)
         self.preferences = UiPreferences()
@@ -260,6 +262,7 @@ class DashboardState:
                 }
                 if isinstance(result, Exception):
                     entry["error"] = safe_error(result, include_detail=True)
+                    entry["loginRequired"] = isinstance(result, UsageLoginRequiredError)
                 elif result is not None:
                     entry.update({
                         "windows": [
@@ -366,16 +369,36 @@ class DashboardState:
                 raise ProviderActionError("Codex account storage is unavailable.")
             return self.codex_enrollment.prepare(number=number, confirm=confirm)
 
-    def complete_codex_login(self, sessionId, *, confirm=False) -> dict:
+    def open_codex_login(self, sessionId, *, confirm=False) -> dict:
         if confirm is not True:
-            raise ProviderActionError("Confirm saving and switching to this Codex login.")
+            raise ProviderActionError("Opening Codex sign-in requires confirm: true.")
+        if self.codex_enrollment is None:
+            raise ProviderActionError("Codex account storage is unavailable.")
+        return self.codex_enrollment.open_browser(sessionId, confirm=True)
+
+    def codex_login_status(self, sessionId, *, confirm=False) -> dict:
+        if confirm is not True:
+            raise ProviderActionError("Checking Codex sign-in requires confirm: true.")
+        if self.codex_enrollment is None:
+            raise ProviderActionError("Codex account storage is unavailable.")
+        return self.codex_enrollment.status(sessionId, confirm=True)
+
+    def complete_codex_login(self, sessionId, *, confirm=False, activate=True) -> dict:
+        if confirm is not True:
+            raise ProviderActionError("Confirm saving this Codex login.")
+        if type(activate) is not bool:
+            raise ProviderActionError("activate must be a boolean.")
         try:
             with self._lock:
                 if self.codex_enrollment is None:
                     raise ProviderActionError("Codex account storage is unavailable.")
-                self._require_codex_quit()
+                if activate:
+                    self._require_codex_quit()
                 saved = self.codex_enrollment.complete(sessionId, confirm=True)
                 if saved.get("ok") is not True:
+                    return saved
+                self.actions.revision += 1
+                if not activate:
                     return saved
                 try:
                     activated = self.codex_enrollment.activate(sessionId, confirm=True)
@@ -384,7 +407,6 @@ class DashboardState:
                         "ok": False, "account": saved["account"], "activationRequired": True,
                         "message": "The login was saved, but activation was not confirmed. " + safe_error(error),
                     }
-                self.actions.revision += 1
                 return {**saved, **activated, "activationRequired": activated.get("ok") is not True}
         finally:
             self.invalidate()
@@ -392,10 +414,9 @@ class DashboardState:
     def cancel_codex_login(self, sessionId, *, confirm=False) -> dict:
         if confirm is not True:
             raise ProviderActionError("Discarding temporary Codex sign-in state requires confirm: true.")
-        with self._lock:
-            if self.codex_enrollment is None:
-                raise ProviderActionError("Codex account storage is unavailable.")
-            return self.codex_enrollment.cancel(sessionId, confirm=confirm)
+        if self.codex_enrollment is None:
+            raise ProviderActionError("Codex account storage is unavailable.")
+        return self.codex_enrollment.cancel(sessionId, confirm=confirm)
 
     def set_disabled(self, provider: str, number, disabled: bool) -> dict:
         try:
@@ -676,7 +697,9 @@ def _make_handler(state: DashboardState, token: str):
                 "/api/codex/quit": (state.quit_codex, {"confirm"}, set()),
                 "/api/codex/open": (state.open_codex, {"confirm"}, set()),
                 "/api/codex/login/prepare": (state.prepare_codex_login, {"confirm"}, {"number"}),
-                "/api/codex/login/complete": (state.complete_codex_login, {"sessionId", "confirm"}, set()),
+                "/api/codex/login/open": (state.open_codex_login, {"sessionId", "confirm"}, set()),
+                "/api/codex/login/status": (state.codex_login_status, {"sessionId", "confirm"}, set()),
+                "/api/codex/login/complete": (state.complete_codex_login, {"sessionId", "confirm"}, {"activate"}),
                 "/api/codex/login/cancel": (state.cancel_codex_login, {"sessionId", "confirm"}, set()),
                 "/api/storage/import": (state.import_legacy, {"source", "confirm"}, set()),
                 "/api/claude-desktop/create": (state.claude_desktop.create, {"name", "confirm"}, {"emailLabel"}),
@@ -706,6 +729,8 @@ def _make_handler(state: DashboardState, token: str):
                 result = {"ok": False, "message": safe_error(e)}
                 if isinstance(e, ActionRequired):
                     result.update({"kind": "action-required", "code": e.code})
+                elif isinstance(e, EnrollmentError) and e.code is not None:
+                    result["code"] = e.code
                 self._reject(HTTPStatus.BAD_REQUEST, result)
                 return
             self._json(HTTPStatus.OK, result)

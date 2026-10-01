@@ -11,8 +11,10 @@ from unittest.mock import Mock
 import pytest
 
 from agents_switcher.exceptions import MigrationError, ValidationError
+from agents_switcher.codex.enrollment import EnrollmentError
 from agents_switcher.codex.store import CodexAccountStore
 from agents_switcher.codex.switcher import CodexSwitcher
+from agents_switcher.codex.usage import UsageError, UsageLoginRequiredError
 from agents_switcher.web.server import DashboardState, serve
 from tests.test_codex_enrollment import env, prepare, save_current, snapshot
 from tests.test_web_actions import request, web
@@ -28,6 +30,8 @@ def setup_web(web):
     web.state.codex_enrollment.complete.return_value = {
         "ok": True, "account": {"number": "2", "email": "two@example.test"}, "activationRequired": True,
     }
+    web.state.codex_enrollment.open_browser.return_value = {"ok": True, "status": "waiting"}
+    web.state.codex_enrollment.status.return_value = {"ok": True, "status": "ready"}
     web.state.codex_enrollment.activate.return_value = {"ok": True, "switched": True, "message": "Saved and switched."}
     web.state.codex_enrollment.cancel.return_value = {"ok": True}
     web.state.legacy_import = Mock()
@@ -42,6 +46,8 @@ def setup_web(web):
 
 ROUTES = [
     ("codex/login/prepare", {"confirm": True}),
+    ("codex/login/open", {"sessionId": "synthetic-session", "confirm": True}),
+    ("codex/login/status", {"sessionId": "synthetic-session", "confirm": True}),
     ("codex/login/complete", {"sessionId": "synthetic-session", "confirm": True}),
     ("codex/login/cancel", {"sessionId": "synthetic-session", "confirm": True}),
     ("storage/import", {"source": "legacy", "confirm": True}),
@@ -92,6 +98,78 @@ def test_preparation_does_not_require_quitting_or_start_a_provider_process(setup
     setup_web.state.codex_enrollment.complete.assert_not_called()
     setup_web.state.codex_enrollment.activate.assert_not_called()
     assert setup_web.state._codex.calls == []
+
+
+@pytest.mark.parametrize("route,method", [("open", "open_browser"), ("status", "status")])
+def test_browser_open_and_status_cannot_save_activate_or_collect_usage(setup_web, route, method):
+    setup_web.state.get = Mock(side_effect=AssertionError("Must not collect quota"))
+    setup_web.state.codex_desktop.status.side_effect = AssertionError("Must not inspect processes for sign-in")
+    code, result, _ = request(setup_web, f"/api/codex/login/{route}", {"sessionId": "synthetic-session", "confirm": True})
+    assert code == 200 and result["ok"]
+    getattr(setup_web.state.codex_enrollment, method).assert_called_once_with("synthetic-session", confirm=True)
+    setup_web.state.codex_enrollment.complete.assert_not_called()
+    setup_web.state.codex_enrollment.activate.assert_not_called()
+    setup_web.state.get.assert_not_called()
+
+
+def test_browser_save_only_is_allowed_while_codex_runs_and_retains_pending_activation(setup_web):
+    setup_web.state.codex_desktop.status.side_effect = AssertionError("Save-only must not need process readiness")
+    setup_web.state._cached = {"old": True}
+    revision = setup_web.state.actions.revision
+    code, result, _ = request(setup_web, "/api/codex/login/complete", {
+        "sessionId": "synthetic-session", "confirm": True, "activate": False,
+    })
+    assert code == 200 and result["ok"] and result["activationRequired"] is True
+    setup_web.state.codex_enrollment.complete.assert_called_once_with("synthetic-session", confirm=True)
+    setup_web.state.codex_enrollment.activate.assert_not_called()
+    assert setup_web.state._cached is None
+    assert setup_web.state.actions.revision == revision + 1
+
+
+@pytest.mark.parametrize("activate", [None, "false", 0, 1, [], {}])
+def test_browser_activation_option_requires_an_exact_boolean(setup_web, activate):
+    code, result, _ = request(setup_web, "/api/codex/login/complete", {
+        "sessionId": "synthetic-session", "confirm": True, "activate": activate,
+    })
+    assert code == 400 and "boolean" in result["message"]
+    setup_web.state.codex_enrollment.complete.assert_not_called()
+    setup_web.state.codex_enrollment.activate.assert_not_called()
+
+
+def test_wrong_browser_repair_account_offers_restart_not_retrying_the_same_save(setup_web):
+    setup_web.state.codex_enrollment.complete.side_effect = EnrollmentError(
+        "The sign-in belongs to a different Codex account. Nothing was saved.", code="wrong-account",
+    )
+    code, result, _ = request(setup_web, "/api/codex/login/complete", {
+        "sessionId": "synthetic-session", "confirm": True, "activate": False,
+    })
+    assert code == 400 and result["code"] == "wrong-account"
+    assert "Nothing was saved" in result["message"]
+    setup_web.state.codex_enrollment.activate.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["open", "status", "cancel"])
+def test_browser_controls_remain_responsive_outside_the_quota_action_lock(setup_web, route):
+    with setup_web.state._lock:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(request, setup_web, f"/api/codex/login/{route}", {
+                "sessionId": "synthetic-session", "confirm": True,
+            })
+            assert pending.result(timeout=2)[0] == 200
+
+
+@pytest.mark.parametrize("permanent", [True, False])
+def test_private_account_state_distinguishes_signin_required_from_transient_errors(web, permanent):
+    web.state._codex.usage["1"] = (
+        UsageLoginRequiredError("Sign in again to repair this login.") if permanent
+        else UsageError("The provider could not be reached.")
+    )
+    code, state, _ = request(web, "/api/state", method="GET")
+    assert code == 200
+    account = state["codex"]["accounts"][0]
+    assert account["loginRequired"] is permanent
+    assert account["error"]
+    assert len(state["codex"]["accounts"]) == 3
 
 
 @pytest.mark.parametrize("status,code", [

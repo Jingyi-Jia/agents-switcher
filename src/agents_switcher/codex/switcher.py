@@ -48,15 +48,20 @@ from agents_switcher.codex.stats import (
 )
 from agents_switcher.codex.store import CodexAccount, CodexAccountStore
 from agents_switcher.codex.tokens import (
+    LoginRequiredError,
     TokenRefreshError,
     access_token_expiry,
     needs_refresh,
     refresh_tokens,
 )
-from agents_switcher.codex.usage import CodexUsage, UsageAuthError, UsageError, fetch_usage
+from agents_switcher.codex.usage import CodexUsage, UsageAuthError, UsageError, UsageLoginRequiredError, fetch_usage
 from agents_switcher.exceptions import AccountNotFoundError, SwitchError, ValidationError
 
 _logger = logging.getLogger("agents-switcher")
+
+
+class LoginIdentityError(ValidationError):
+    """A repair returned a different account from the pinned saved identity."""
 
 
 def _live_login_is_older(saved: dict, live: dict) -> bool:
@@ -274,7 +279,7 @@ class CodexSwitcher:
                 ):
                     raise SwitchError("The saved Codex slot changed during sign-in. Start enrollment again.")
                 if identity.account_id != expected.account_id or existing.number != expected.number:
-                    raise ValidationError("The sign-in belongs to a different Codex account. Nothing was saved.")
+                    raise LoginIdentityError("The sign-in belongs to a different Codex account. Nothing was saved.")
             if existing is None and normalized:
                 if any(a.alias.lower() == normalized.lower() for a in self.store.accounts().values()):
                     raise ValidationError("That alias already belongs to another Codex account.")
@@ -593,6 +598,8 @@ class CodexSwitcher:
         tokens = credentials.get("tokens") or {}
         try:
             rotated = refresh_tokens(tokens)
+        except LoginRequiredError as e:
+            raise UsageLoginRequiredError(f"{account.display_label}: {e}") from e
         except TokenRefreshError as e:
             raise UsageError(f"{account.display_label}: {e}") from e
         updated = dict(credentials)

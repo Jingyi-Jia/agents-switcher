@@ -44,7 +44,8 @@ assert.equal($('help-toggle').hidden, true);
 assert.equal($('desktop-guide').hidden, true);
 assert.equal($('app-title').textContent, 'Agent Switch');
 assert.match($('claude').textContent, /agent-switch add/);
-assert.match($('codex').textContent, /agent-switch codex add/);
+assert.match($('codex').textContent, /Save an existing file-backed Codex login with Add current/);
+assert.doesNotMatch($('codex').textContent, /agent-switch codex add/);
 for (const id of ['claude', 'codex']) {
   assert(button(id + '-actions', 'Add current'));
   assert.match(providerUI[id].lifecycle.textContent, /Closing this tab.*does not stop it/);
@@ -99,9 +100,9 @@ assert.deepEqual(links.map(node => node.href), [
 assert(links.every(node => node.target === '_blank' && node.rel === 'noopener noreferrer'));
 assert.match($('desktop-guide').textContent, /includes its own runtime/);
 assert.match($('desktop-guide').textContent, /Claude Code needs its CLI and sign-in/);
-assert.match($('desktop-guide').textContent, /Codex CLI is not required for a Desktop login/);
+assert.match($('desktop-guide').textContent, /No Codex CLI is needed/);
 assert.match($('desktop-guide').textContent, /Claude Desktop, including its Code tab, has a separate sign-in/);
-assert.match($('desktop-guide').textContent, /doesn't install provider CLIs, start sign-in flows, or change Desktop cookies/);
+assert.match($('desktop-guide').textContent, /can start Codex browser sign-in; it doesn't install provider CLIs or change Desktop cookies/);
 assert.match($('desktop-guide').textContent, /doesn't start a new sign-in/);
 assert.equal(posts().length, 0);
 """)
@@ -113,7 +114,7 @@ apiState = desktopFixture();
 await load();
 for (const id of ['claude', 'codex']) {
   assert.equal(helpUI[id].installed.textContent, 'CLI detected');
-  assert.match(helpUI[id].next.textContent, id === 'claude' ? /Sign in through this provider's CLI/ : /Sign in through Codex Desktop or CLI/);
+  assert.match(helpUI[id].next.textContent, id === 'claude' ? /Sign in through this provider's CLI/ : /Use Add existing login to save a file-backed/);
   assert.equal(helpUI[id].add.disabled, true);
 }
 assert.equal(posts().length, 0);
@@ -123,6 +124,31 @@ assert.equal(calls.at(-1).path, '/api/state?force=1');
 assert.equal(helpUI.codex.add.disabled, false);
 assert.equal(helpUI.claude.add.disabled, true);
 assert.match(helpUI.codex.login.textContent, /codex-new@example.com.*not managed yet/);
+assert.equal(posts().length, 0);
+""")
+
+
+@pytest.mark.parametrize("desktop", [True, False])
+def test_codex_browser_signin_does_not_require_a_cli_or_an_existing_login(node, desktop):
+    run_page(node, DESKTOP + "const desktop = " + str(desktop).lower() + r""";
+apiState = desktopFixture();
+apiState.codex.capabilities.push('login');
+apiState.desktop.providers.codex.installed = false;
+if (!desktop) delete apiState.desktop;
+await load();
+assert.equal(button('codex-actions', 'Add another account').disabled, false);
+assert.match($('codex').textContent, /Add another account.*ChatGPT.*browser.*No Codex CLI is needed/);
+assert.doesNotMatch($('codex').textContent, /command|terminal|codex login/);
+if (desktop) {
+  assert.match(helpUI.codex.next.textContent, /Add another account.*ChatGPT.*browser/);
+  assert.match($('desktop-guide').textContent, /Browser sign-in saves.*does not switch accounts/);
+  assert.doesNotMatch($('desktop-guide').textContent, /isolated terminal|codex login|start sign-in flows/);
+  assert.equal(helpUI.codex.add.disabled, true);
+}
+assert.equal(posts().length, 0);
+button('codex-actions', 'Add another account').click();
+assert.equal($('codex-login-dialog').open, true);
+assert.match($('codex-login-description').textContent, /automatically save/);
 assert.equal(posts().length, 0);
 """)
 

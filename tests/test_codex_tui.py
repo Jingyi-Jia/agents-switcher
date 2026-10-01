@@ -39,10 +39,12 @@ class StubCodexSwitcher:
     """Stands in for CodexSwitcher so the screen never touches the network."""
 
     def __init__(self, accounts=(), usage=None, active="1", switch_result=None,
-                 switch_error=None):
+                 switch_error=None, pending=()):
         self._accounts = list(accounts)
         self._usage = usage or {}
         self.switched_to: list[str] = []
+        self.switch_options: list[dict] = []
+        self.pending = set(pending)
         self._switch_result = switch_result
         self._switch_error = switch_error
         self.active = active
@@ -68,12 +70,24 @@ class StubCodexSwitcher:
     def usage_all(self):
         return dict(self._usage)
 
+    def activation_required(self, account):
+        return account.number in self.pending
+
     def switch_to(self, number, **kw):
         self.switched_to.append(number)
+        self.switch_options.append(kw)
         if self._switch_error:
             raise self._switch_error
         self.active = number
         return self._switch_result
+
+
+@pytest.fixture(autouse=True)
+def codex_readiness(monkeypatch):
+    monkeypatch.setattr(codex_screen_mod.CodexDesktop, "status", lambda _: {
+        "available": True, "running": False,
+    })
+    monkeypatch.setattr("agents_switcher.providers.running_codex_processes", lambda: ())
 
 
 @pytest.fixture

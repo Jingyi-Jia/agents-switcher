@@ -72,111 +72,214 @@ function importStorage(opener) {
 }
 
 function enrollmentMessage(message, error = false) {
-  $("codex-login-status").textContent = safeMessage(message);
+  const text = safeMessage(message);
+  if ($("codex-login-status").textContent !== text) $("codex-login-status").textContent = text;
   $("codex-login-status").className = "switch-status" + (error ? " dialog-error" : "");
+}
+
+function currentCodexEnrollment(flow) {
+  return codexEnrollmentFlow === flow && $("codex-login-dialog").open && flow.phase !== "cancelling";
+}
+
+function updateEnrollmentControls(flow) {
+  if (codexEnrollmentFlow !== flow) return;
+  $("codex-login-next").textContent = {
+    consent: "Continue in browser", preparing: "Preparing…", opening: "Opening browser…",
+    waiting: flow.openFailed ? "Retry opening browser" : "Reopen browser", exchanging: "Finishing sign-in…",
+    saving: "Saving account…", saved: "Use saved login", "save-error": "Retry save",
+    "status-error": "Check again", error: "Start again", expired: "Start again", cancelling: "Closing…",
+  }[flow.phase];
+  block($("codex-login-next"), flow.phase === "exchanging" || (flow.phase === "saved" && (!flow.account?.number || flow.refreshFailed || !supports(state.codex || {}, "switch"))));
+  $("codex-login-cancel").textContent = flow.phase === "saved" ? "Close" : "Cancel";
+  $("codex-login-refresh").hidden = flow.phase !== "save-error" && !(flow.phase === "saved" && (flow.refreshFailed || !flow.account?.number || !supports(state.codex || {}, "switch")));
+  $("codex-login-auto-notice").hidden = state.codex?.auto?.mode !== "live";
+}
+
+function stopEnrollmentPolling(flow) {
+  clearTimeout(flow.timer); flow.timer = null;
+  clearTimeout(flow.pollTimeout); flow.pollTimeout = null;
+  const controller = flow.controller; flow.controller = null;
+  controller?.abort();
 }
 
 function startCodexEnrollment(opener, account = null) {
   if (busy || codexFlow || codexEnrollmentFlow || $("action-dialog").open || !supports(state.codex || {}, "login")) return;
-  codexEnrollmentFlow = {opener, number: account?.number, sessionId: null};
+  const flow = codexEnrollmentFlow = {opener, target: account, number: account?.number, sessionId: null, phase: "consent", timer: null, polling: false};
   $("codex-login-title").textContent = account ? "Sign in again to Codex" : "Add a Codex account";
   $("codex-login-description").textContent = account
-    ? `Repair ${account.alias || account.email || "account " + account.number} in slot ${account.number}. Sign in to that exact account; a different identity will be refused. Other saved accounts stay intact.`
-    : "Sign in to another account without signing out the one you already saved. Your current login stays unchanged until you choose Save & switch.";
-  $("codex-login-terminal").hidden = true;
-  $("codex-login-command").value = "";
-  $("codex-login-next").textContent = "Prepare sign-in";
-  $("codex-login-next").hidden = false;
-  $("codex-login-cancel").textContent = "Cancel";
-  for (const stage of ["prepare", "signin", "save"]) $("login-step-" + stage).className = stage === "prepare" ? "current" : "";
-  enrollmentMessage("Nothing has changed yet. Prepare sign-in creates an empty private folder and a command for your terminal.");
-  $("codex-login-dialog").showModal(); $("codex-login-cancel").focus(); syncBusy();
+    ? `Continue to sign in with ChatGPT and automatically replace the saved login for ${account.alias || account.email || "account " + account.number} in slot ${account.number}. Sign in to that exact account; a different identity will be refused. Signing in saves this account; it does not switch accounts.`
+    : "Continue to sign in with ChatGPT in your browser and automatically save the account in Agent Switch. Signing in saves this account; it does not switch accounts.";
+  enrollmentMessage("Nothing has changed yet. No Codex CLI is needed.");
+  updateEnrollmentControls(flow);
+  $("codex-login-dialog").showModal(); syncBusy(); $("codex-login-next").focus();
 }
 
 function closeCodexEnrollment(flow) {
   if (codexEnrollmentFlow !== flow) return;
+  stopEnrollmentPolling(flow);
   codexEnrollmentFlow = null;
-  $("codex-login-command").value = "";
   if ($("codex-login-dialog").open) $("codex-login-dialog").close();
   const opener = flow.opener?.isConnected ? flow.opener : providerUI.codex.buttons.login;
   syncBusy();
-  queueMicrotask(() => { if (opener && !opener.disabled) opener.focus(); });
+  queueMicrotask(() => { if (!codexEnrollmentFlow && !codexFlow && opener && !opener.disabled) opener.focus(); });
+}
+
+async function enrollmentRequest(action, payload, signal) {
+  return api("/api/codex/login/" + action, {method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify({...payload, confirm: true}), ...(signal ? {signal} : {})});
+}
+
+function scheduleEnrollmentPoll(flow) {
+  if (!currentCodexEnrollment(flow) || flow.polling || !["waiting", "exchanging"].includes(flow.phase)) return;
+  clearTimeout(flow.timer);
+  flow.timer = setTimeout(() => { flow.timer = null; return pollCodexEnrollment(flow); }, 1000);
+}
+
+async function showEnrollmentSaved(flow, body) {
+  flow.phase = "saved";
+  flow.account = body.account || null;
+  stopEnrollmentPolling(flow);
+  $("codex-login-title").textContent = "Codex account saved";
+  $("codex-login-description").textContent = "Signing in saves this account; it does not switch accounts.";
+  const account = flow.account?.email || flow.account?.alias || (flow.account?.number ? "account " + flow.account.number : "your account");
+  const warning = body.cleanupWarning || (body.warning || body.ok === false ? body.message || "Sign-in cleanup needs attention. Close to retry cleanup; the saved account will remain." : "");
+  enrollmentMessage(`Account saved: ${account}. Choose Use saved login when you're ready to quit Codex and switch.` + (warning ? " " + warning : ""), !!warning);
+  updateEnrollmentControls(flow);
+  flow.refreshFailed = !await load(true, true);
+  if (!currentCodexEnrollment(flow)) return;
+  if (flow.refreshFailed) toast("Account saved, but Accounts could not be refreshed. Refresh Accounts before switching.", true, true);
+  else if (warning) toast("Account saved. " + warning, true, true);
+}
+
+async function saveCodexEnrollment(flow) {
+  if (!currentCodexEnrollment(flow) || busy || !["waiting", "exchanging", "save-error"].includes(flow.phase)) return;
+  flow.phase = "saving"; stopEnrollmentPolling(flow);
+  busy = true; ++requestVersion; syncBusy(); updateEnrollmentControls(flow);
+  enrollmentMessage("Saving the account. Sign-in does not switch accounts. Keep this window open.");
+  try {
+    const {ok, body} = await enrollmentRequest("complete", {sessionId: flow.sessionId, activate: false});
+    if (!currentCodexEnrollment(flow)) return;
+    if (body.activationRequired === true && body.account && body.switched !== true) {
+      await showEnrollmentSaved(flow, {...body, warning: !ok || body.ok !== true || !!body.error || body.warning});
+      return;
+    }
+    const terminal = body.code === "wrong-account" || ["error", "expired"].includes(body.status);
+    flow.phase = terminal ? "error" : "save-error";
+    enrollmentMessage((body.message || body.error || "The save result could not be confirmed.") + (terminal ? " Choose Start again to sign in to the expected account." : " Refresh Accounts or choose Retry save using this same sign-in; do not sign in again."), true);
+  } catch {
+    if (!currentCodexEnrollment(flow)) return;
+    flow.phase = "save-error";
+    enrollmentMessage("The save result could not be confirmed. Refresh Accounts or choose Retry save using this same sign-in; do not sign in again.", true);
+  } finally {
+    busy = false; syncBusy(); updateEnrollmentControls(flow);
+  }
+}
+
+async function pollCodexEnrollment(flow) {
+  if (!currentCodexEnrollment(flow) || flow.polling || !["waiting", "exchanging"].includes(flow.phase)) return;
+  clearTimeout(flow.timer); flow.timer = null; flow.polling = true;
+  const controller = new AbortController(); flow.controller = controller;
+  const timeout = flow.pollTimeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const {ok, body} = await enrollmentRequest("status", {sessionId: flow.sessionId}, controller.signal);
+    if (!currentCodexEnrollment(flow) || flow.controller !== controller || !["waiting", "exchanging"].includes(flow.phase)) return;
+    if (["error", "expired"].includes(body.status) || !ok || body.ok !== true || body.error) {
+      flow.phase = body.status === "expired" ? "expired" : "error";
+      enrollmentMessage(body.message || body.error || "Sign-in could not finish. Choose Start again to retry.", true);
+    } else if (body.status === "ready") {
+      await saveCodexEnrollment(flow);
+    } else if (body.status === "saved") {
+      busy = true; ++requestVersion; syncBusy();
+      try { await showEnrollmentSaved(flow, body); }
+      finally { busy = false; syncBusy(); }
+    } else if (["waiting", "exchanging"].includes(body.status)) {
+      flow.phase = body.status;
+      if (!flow.openFailed || body.status === "exchanging") enrollmentMessage(body.message || (body.status === "waiting" ? "Waiting for sign-in in your browser. You can cancel at any time." : "Finishing sign-in. You can still cancel."));
+    } else {
+      flow.phase = "status-error";
+      enrollmentMessage("Sign-in status could not be confirmed. Choose Check again to check this same sign-in.", true);
+    }
+  } catch {
+    if (!currentCodexEnrollment(flow) || flow.controller !== controller || !["waiting", "exchanging"].includes(flow.phase)) return;
+    flow.phase = "status-error";
+    enrollmentMessage("Sign-in status could not be checked. Choose Check again to check this same sign-in.", true);
+  } finally {
+    clearTimeout(timeout);
+    if (flow.pollTimeout === timeout) flow.pollTimeout = null;
+    if (flow.controller === controller) flow.controller = null;
+    flow.polling = false;
+    updateEnrollmentControls(flow); scheduleEnrollmentPoll(flow);
+  }
 }
 
 async function continueCodexEnrollment() {
   const flow = codexEnrollmentFlow;
-  if (!flow || flow.completed || busy) return;
-  const completing = !!flow.sessionId;
+  if (!flow || !currentCodexEnrollment(flow) || busy) return;
+  if (flow.phase === "save-error") { await saveCodexEnrollment(flow); return; }
+  if (flow.phase === "status-error") { flow.phase = "waiting"; await pollCodexEnrollment(flow); return; }
+  if (flow.phase === "saved") {
+    if (!flow.account?.number || flow.refreshFailed || !supports(state.codex || {}, "switch")) return;
+    const account = (state.codex.accounts || []).find(account => account.number === flow.account.number) || flow.account;
+    if (await cancelCodexEnrollment()) await requestCodexSwitch({...account, activationRequired: true}, providerUI.codex.buttons.login);
+    return;
+  }
+  if (["error", "expired"].includes(flow.phase) && flow.sessionId) {
+    if (!await cancelCodexEnrollment()) return;
+    startCodexEnrollment(flow.opener, flow.target);
+    await continueCodexEnrollment();
+    return;
+  }
+  if (!["consent", "waiting", "error", "expired"].includes(flow.phase)) return;
+  stopEnrollmentPolling(flow);
   busy = true; ++requestVersion; syncBusy();
-  $("codex-login-next").textContent = completing ? "Saving & switching…" : "Preparing…";
-  enrollmentMessage(completing ? "Checking that Codex is closed, then saving and switching. Keep this window open." : "Preparing a fresh private sign-in folder…");
   try {
-    const path = completing ? "/api/codex/login/complete" : "/api/codex/login/prepare";
-    const payload = completing ? {sessionId: flow.sessionId, confirm: true} : {confirm: true, ...(flow.number ? {number: flow.number} : {})};
-    const {ok, body} = await api(path, {method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify(payload)});
-    if (!ok || body.ok === false || body.error) {
-      if (body.activationRequired === true && body.account) {
-        flow.saved = true;
-        $("codex-login-terminal").hidden = true;
-        $("codex-login-command").value = "";
-        $("login-step-signin").className = ""; $("login-step-save").className = "current";
-      }
-      enrollmentMessage((body.message || body.error || "The sign-in request failed. Check the terminal result before retrying.") + (flow.saved ? " Choose Retry switch after fixing the problem; do not sign in again." : ""), body.kind !== "action-required");
-      return;
-    }
-    if (!completing) {
-      if (typeof body.sessionId !== "string" || !body.sessionId || typeof body.command !== "string" || !body.command) {
-        enrollmentMessage("The service did not return a sign-in command. Close this dialog and try again.", true);
+    if (!flow.sessionId) {
+      flow.phase = "preparing"; updateEnrollmentControls(flow); enrollmentMessage("Preparing browser sign-in…");
+      const {ok, body} = await enrollmentRequest("prepare", flow.number ? {number: flow.number} : {});
+      if (!currentCodexEnrollment(flow)) return;
+      if (typeof body.sessionId === "string" && body.sessionId) flow.sessionId = body.sessionId;
+      if (!ok || body.ok !== true || body.error || !flow.sessionId || body.method !== "browser" || !["waiting", "exchanging", "ready"].includes(body.status)) {
+        flow.phase = body.status === "expired" ? "expired" : "error";
+        enrollmentMessage(body.message || body.error || "Browser sign-in could not be prepared. Choose Start again to retry.", true);
         return;
       }
-      flow.sessionId = body.sessionId;
-      $("codex-login-command").value = body.command;
-      $("codex-login-shell").textContent = body.shell === "powershell" ? "PowerShell command" : "Terminal command";
-      $("codex-login-terminal").hidden = false;
-      $("login-step-prepare").className = ""; $("login-step-signin").className = "current";
-      enrollmentMessage("Ready for your terminal. No sign-in has been launched and your current login is unchanged.");
-      $("codex-login-command").focus();
-    } else {
-      $("login-step-signin").className = ""; $("login-step-save").className = "current";
-      const refreshed = await load(true, true);
-      toast((body.message || "Codex account saved and switched.") + " Open Codex when you're ready and confirm the account there." + (refreshed ? "" : " Refresh Accounts to check the result."), !refreshed, true);
-      if (body.warning) {
-        flow.completed = true;
-        $("codex-login-terminal").hidden = true;
-        $("codex-login-command").value = "";
-        $("codex-login-next").hidden = true;
-        $("codex-login-cancel").textContent = "Close & clean up";
-        enrollmentMessage("The account was saved and switched, but temporary sign-in cleanup needs attention. Stop the terminal sign-in, then choose Close & clean up. " + (body.cleanupWarning || ""), true);
-      } else closeCodexEnrollment(flow);
+      if (body.status !== "waiting") {
+        flow.phase = "exchanging";
+        enrollmentMessage("Resuming your existing browser sign-in. The account will be saved automatically; sign-in does not switch accounts.");
+        return;
+      }
     }
+    flow.phase = "opening"; updateEnrollmentControls(flow); enrollmentMessage("Opening sign-in in your default browser…");
+    const {ok, body} = await enrollmentRequest("open", {sessionId: flow.sessionId});
+    if (!currentCodexEnrollment(flow)) return;
+    flow.phase = "waiting"; flow.openFailed = !ok || body.ok !== true || !!body.error;
+    enrollmentMessage(flow.openFailed ? body.message || body.error || "The browser could not be opened. Choose Retry opening browser." : "Waiting for sign-in in your browser. The account will be saved automatically; sign-in does not switch accounts.", flow.openFailed);
   } catch {
-    enrollmentMessage(completing
-      ? "The save & switch result could not be confirmed. Close this dialog and refresh Accounts before retrying; don't repeat the terminal sign-in command."
-      : "The local service couldn't prepare sign-in. Close this dialog and try again.", true);
+    if (!currentCodexEnrollment(flow)) return;
+    flow.phase = flow.sessionId ? "waiting" : "error"; flow.openFailed = true;
+    enrollmentMessage(flow.sessionId ? "The browser request could not be confirmed. Choose Retry opening browser." : "Browser sign-in could not be prepared. Choose Start again to retry.", true);
   } finally {
-    busy = false;
-    $("codex-login-next").textContent = flow.saved ? "Retry switch" : flow.sessionId ? "Save & switch" : "Prepare sign-in";
-    syncBusy();
+    busy = false; syncBusy(); updateEnrollmentControls(flow); scheduleEnrollmentPoll(flow);
   }
 }
 
 async function cancelCodexEnrollment() {
   const flow = codexEnrollmentFlow;
   if (!flow || busy) return false;
+  flow.phase = "cancelling"; stopEnrollmentPolling(flow);
   if (!flow.sessionId) { closeCodexEnrollment(flow); return true; }
-  busy = true; syncBusy();
+  busy = true; syncBusy(); updateEnrollmentControls(flow);
   try {
-    const {ok, body} = await api("/api/codex/login/cancel", {method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify({sessionId: flow.sessionId, confirm: true})});
-    if (!ok || body.ok === false || body.error) {
+    const {ok, body} = await enrollmentRequest("cancel", {sessionId: flow.sessionId});
+    if (!ok || body.ok !== true || body.error) {
       closeCodexEnrollment(flow);
-      toast((body.message || body.error || "Temporary sign-in cleanup was not confirmed.") + " Stop the terminal sign-in, then quit Agent Switch to retry cleanup. Saved accounts are not removed.", true, true);
+      toast((body.message || body.error || "Sign-in cleanup was not confirmed.") + " Quit Agent Switch to retry cleanup. Saved accounts are not removed.", true, true);
       return false;
     }
     closeCodexEnrollment(flow);
     return true;
   } catch {
     closeCodexEnrollment(flow);
-    toast("The local service couldn't confirm cleanup. Stop the terminal sign-in, then quit Agent Switch to retry cleanup of its temporary state. Saved accounts are not removed.", true, true);
+    toast("The local service couldn't confirm sign-in cleanup. Quit Agent Switch to retry cleanup. Saved accounts are not removed.", true, true);
     return false;
   } finally { busy = false; syncBusy(); }
 }
@@ -187,16 +290,19 @@ $("storage-refresh").onclick = () => loadStorage();
 $("codex-login-next").onclick = continueCodexEnrollment;
 $("codex-login-cancel").onclick = cancelCodexEnrollment;
 $("codex-login-dialog").addEventListener("cancel", event => { event.preventDefault(); cancelCodexEnrollment(); });
-$("codex-login-copy").onclick = async () => {
-  const command = $("codex-login-command");
-  if (!codexEnrollmentFlow?.sessionId || busy) return;
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
-    await navigator.clipboard.writeText(command.value);
-    enrollmentMessage("Command copied. Run it in your terminal, finish sign-in, then fully quit Codex before saving.");
-  } catch {
-    command.focus(); command.select?.();
-    enrollmentMessage("Select and copy the command above, then run it in your terminal. Clipboard access wasn't available.");
+$("codex-login-dialog").addEventListener("close", () => {
+  if (codexEnrollmentFlow && !$("codex-login-dialog").open) {
+    if (busy) $("codex-login-dialog").showModal();
+    else cancelCodexEnrollment();
   }
+});
+$("codex-login-refresh").onclick = async () => {
+  const flow = codexEnrollmentFlow;
+  if (!flow || busy || !["save-error", "saved"].includes(flow.phase)) return;
+  busy = true; syncBusy();
+  try {
+    flow.refreshFailed = !await load(true, true);
+    toast(flow.refreshFailed ? flow.phase === "saved" ? "Accounts could not be refreshed. The account is saved; try refreshing again." : "Accounts could not be refreshed. Your sign-in is still available for Retry save." : "Accounts refreshed. No switch was requested.", flow.refreshFailed, true);
+  } finally { busy = false; syncBusy(); updateEnrollmentControls(flow); }
 };
 """

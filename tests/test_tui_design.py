@@ -18,7 +18,7 @@ from agents_switcher.tui.theme import CSWAP_DARK, CSWAP_LIGHT, Palette
 from agents_switcher.tui.widgets import (
     AccountCard, AccountItem, AccountsPanel, AppHeader, account_card_text, mini_account_text,
 )
-from tests.test_codex_tui import account, on_credits
+from tests.test_codex_tui import account, codex_readiness, on_credits
 from tests.test_provider_navigation import ManagedCodexSwitcher, choose_menu
 from tests.test_theme import _contrast
 from tests.test_tui import FakeSwitcher, _FakeEngine, make_account, make_entry, settle
