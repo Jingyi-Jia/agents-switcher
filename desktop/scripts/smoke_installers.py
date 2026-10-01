@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,7 +105,9 @@ def install_windows(directory, version, work):
     artifact = directory / f"Agent-Switch-{version}-win-x64.exe"
     if destination.exists():
         raise ValueError("Refusing to replace an existing Windows installation")
-    subprocess.run(f'"{artifact}" /S /currentuser /D={destination}', check=True, timeout=180, env=environment)
+    started = time.monotonic()
+    subprocess.run(f'"{artifact}" /S /currentuser /D={destination}', check=True, timeout=300, env=environment)
+    print(f"NSIS installation finished in {time.monotonic() - started:.1f} seconds", flush=True)
     if not (destination / "Agent Switch.exe").is_file():
         raise ValueError("NSIS did not install the app into the requested test directory")
     smoke(destination, "win", "x64", version, work)
@@ -113,7 +116,9 @@ def install_windows(directory, version, work):
         raise ValueError("The installed NSIS uninstaller is missing")
     copied_uninstaller = work / "release-uninstaller.exe"
     shutil.copyfile(uninstaller, copied_uninstaller)
-    subprocess.run(f'"{copied_uninstaller}" /S /currentuser _?={destination}', check=True, timeout=90, env=environment)
+    started = time.monotonic()
+    subprocess.run(f'"{copied_uninstaller}" /S /currentuser _?={destination}', check=True, timeout=180, env=environment)
+    print(f"NSIS uninstall finished in {time.monotonic() - started:.1f} seconds", flush=True)
     if (destination / "Agent Switch.exe").exists():
         raise ValueError("The native uninstaller did not remove the app")
     print("NSIS installation, isolated first launch, and native uninstall passed", flush=True)

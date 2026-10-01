@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 
@@ -149,12 +150,13 @@ def check_tls(executable: Path) -> None:
             raise RuntimeError("Frozen helper TLS smoke failed") from None
         except (OSError, ValueError, subprocess.SubprocessError):
             raise RuntimeError("Frozen helper TLS smoke failed") from None
-    print("Frozen helper TLS smoke passed")
+    print("Frozen helper TLS smoke passed", flush=True)
 
 
 def check_processes(executable: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="agent-switch-process-smoke-") as directory:
         root = Path(directory)
+        started = time.monotonic()
         try:
             result = subprocess.run(
                 [str(executable), "--smoke-processes"],
@@ -164,9 +166,21 @@ def check_processes(executable: Path) -> None:
             )
             if result.stdout.strip() != "Frozen helper process smoke passed":
                 raise RuntimeError("Frozen helper did not confirm process smoke success")
-        except (OSError, ValueError, subprocess.SubprocessError):
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            if isinstance(exc, subprocess.TimeoutExpired):
+                reason = "helper timeout"
+            elif isinstance(exc, subprocess.CalledProcessError):
+                reason = f"helper exit {exc.returncode}"
+                if (exc.stderr or "").strip() == "Frozen helper process smoke failed":
+                    reason += "; native readiness unavailable"
+            else:
+                reason = "helper launch or output error"
+            print(
+                f"Frozen helper process check failed after {time.monotonic() - started:.1f} seconds ({reason})",
+                file=sys.stderr, flush=True,
+            )
             raise RuntimeError("Frozen helper process smoke failed") from None
-    print("Frozen helper process smoke passed")
+    print("Frozen helper process smoke passed", flush=True)
 
 
 def main() -> None:
