@@ -94,3 +94,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: uv run --no-project python desktop/scripts/smoke_installers.py --run-id "$RELEASE_RUN" --source-sha "$RELEASE_SOURCE" --platform "$TARGET_PLATFORM" --arch "$TARGET_ARCH" --directory installer-artifacts --disposable-runner
+      - name: Diagnose stalled Windows installer processes
+        if: failure() && matrix.platform == 'win'
+        timeout-minutes: 1
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Process -OperationTimeoutSec 15 |
+            Where-Object {
+              $_.Name -match '^(powershell|pwsh|Agent Switch|Agent-Switch-.*|release-uninstaller|Un_A|Au_)\.exe$'
+            } |
+            Select-Object Name, ProcessId, ParentProcessId, ExecutablePath,
+              @{Name='AgeSeconds'; Expression={[int]((Get-Date) - $_.CreationDate).TotalSeconds}},
+              @{Name='InstallerProbe'; Expression={
+                if ($_.CommandLine -like '*Get-Command Get-CimInstance*') { 'PowerShell availability' }
+                elseif ($_.CommandLine -like '*Get-ExecutionPolicy -Scope Process*') { 'PowerShell execution policy' }
+                elseif ($_.CommandLine -like '*Get-CimInstance -ClassName Win32_Process*' -and $_.CommandLine -like '*Stop-Process*') { 'NSIS process stop' }
+                elseif ($_.CommandLine -like '*Get-CimInstance -ClassName Win32_Process*') { 'NSIS process detection' }
+                else { 'Not an NSIS PowerShell probe' }
+              }} |
+            ConvertTo-Json -Depth 3
