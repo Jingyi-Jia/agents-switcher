@@ -151,7 +151,6 @@ h1,h2,h3 { line-height:1.25; }
 .storage-notice { margin-bottom:22px; }
 .storage-path { overflow-wrap:anywhere; font:11px/1.7 ui-monospace,monospace; }
 #codex-login-dialog { width:min(580px,calc(100% - 32px)); }
-#codex-login-command { width:100%; resize:vertical; min-height:100px; font:11px/1.7 ui-monospace,monospace; }
 code { font:11px ui-monospace,monospace; color:var(--ink); padding:2px 5px; background:var(--canvas); border-radius:3px; }
 #claude-desktop-panel { margin-top:30px; padding-top:24px; border-top:1px solid var(--hairline); }
 #claude-desktop-panel h2::before { background:var(--violet); }

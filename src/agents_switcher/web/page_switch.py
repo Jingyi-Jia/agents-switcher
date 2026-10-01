@@ -81,7 +81,8 @@ async function checkCodexFlow(flow) {
 async function requestCodexSwitch(account, opener) {
   if (busy || codexFlow || codexEnrollmentFlow || $("action-dialog").open || activeView !== "accounts") return;
   const flow = codexFlow = {generation: ++codexGeneration, number: account.number, label: account.alias || account.email || "account " + account.number, useSavedLogin: account.activationRequired === true, opener, phase: "checking", status: null, attempts: 0};
-  $("codex-dialog-title").textContent = (flow.useSavedLogin ? "Use saved login for " : "Switch to ") + flow.label + "?";
+  const active = (state.codex?.accounts || []).find(item => item.number === account.number)?.active === true;
+  $("codex-dialog-title").textContent = (flow.useSavedLogin && active ? "Use saved login for " : "Switch to ") + flow.label + "?";
   $("codex-dialog-description").textContent = (flow.useSavedLogin ? "A fresh login is already saved for this account. No new sign-in is needed. " : "") + "Codex must be fully quit before its saved login can change. This prepares the next launch; it doesn't change the identity of a running app.";
   $("codex-dialog").showModal(); $("codex-cancel").focus();
   await checkCodexFlow(flow);

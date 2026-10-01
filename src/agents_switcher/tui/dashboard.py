@@ -121,6 +121,13 @@ class DashboardScreen(Screen):
         ]
 
     def _add_entries(self) -> MenuEntries:
+        if self.provider == "codex":
+            return [
+                ("Sign in with browser…", "add-browser"),
+                ("From current Codex login", "add-login"),
+                ("Sign in again to a saved account…", "repair-menu"),
+                _BACK,
+            ]
         label = "Claude Code" if self.provider == "claude" else "Codex"
         entries = [(f"From current {label} login", "add-login")]
         if "token" in PROVIDERS[self.provider].capabilities:
@@ -205,10 +212,21 @@ class DashboardScreen(Screen):
         }
         if self.provider == "claude":
             actions["add-token"] = controller.action_add_token
+        else:
+            actions["add-browser"] = controller.action_browser_login
         if action_id == "back":
             await self._pop_menu()
         elif action_id == "add-menu":
             await self._push_menu("add account", self._add_entries())
+        elif action_id == "repair-menu" and self.provider == "codex":
+            snap = controller.snapshot
+            await self._push_menu("sign in again", [
+                *[(f"{acc.number}  {acc.alias or acc.email}", f"repair:{acc.number}")
+                  for acc in (snap.accounts if snap else ())],
+                _BACK,
+            ])
+        elif action_id.startswith("repair:") and self.provider == "codex":
+            controller.action_browser_login(action_id.split(":", 1)[1])
         elif action_id == "remove-menu":
             await self._push_menu("remove account", self._remove_entries())
         elif action_id.startswith("remove:"):

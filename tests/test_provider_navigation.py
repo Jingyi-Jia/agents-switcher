@@ -20,7 +20,7 @@ from agents_switcher.tui.codex import CodexScreen
 from agents_switcher.tui.dashboard import DashboardScreen
 from agents_switcher.tui.providers import ProviderScreen
 from agents_switcher.tui.widgets import AccountsPanel, MenuItem
-from tests.test_codex_tui import StubCodexSwitcher, account, healthy, on_credits
+from tests.test_codex_tui import StubCodexSwitcher, account, codex_readiness, healthy, on_credits
 from tests.test_tui import FakeSwitcher, make_account, settle
 
 
@@ -247,8 +247,10 @@ class ManagedCodexSwitcher(StubCodexSwitcher):
         ]
         return next(acc for acc in self._accounts if acc.number == number)
 
-    def switch_to(self, number):
+    def switch_to(self, number, **kwargs):
         self.switched_to.append(number)
+        self.switch_options.append(kwargs)
+        self.pending.discard(number)
         self.active = number
         return SwitchResult(
             next(acc for acc in self._accounts if acc.number == number),

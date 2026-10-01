@@ -40,7 +40,7 @@ Read the implementation and nearby tests before changing a provider's behavior.
 | Historical account import | [legacy_import.py](src/agents_switcher/legacy_import.py), [storage_cli.py](src/agents_switcher/storage_cli.py): explicit fixed-source, copy-only import into an empty independent store. |
 | Claude automation | [autoswitch.py](src/agents_switcher/autoswitch.py), [settings.py](src/agents_switcher/settings.py), [usage_store.py](src/agents_switcher/usage_store.py), [poll_policy.py](src/agents_switcher/poll_policy.py): decisions, settings, freshness and polling. |
 | Claude sessions | [session.py](src/agents_switcher/session.py), [mappings.py](src/agents_switcher/mappings.py): experimental per-terminal profiles and directory mappings. |
-| Codex | [codex/](src/agents_switcher/codex/): separate CLI, roster, auth-file handling, identity, token refresh, process detection, quota/stats and automation. |
+| Codex | [codex/](src/agents_switcher/codex/): separate CLI, roster, auth-file handling, identity, token refresh, process detection, quota/stats and automation. [browser_login.py](src/agents_switcher/codex/browser_login.py) owns browser OAuth transport; [enrollment.py](src/agents_switcher/codex/enrollment.py) owns shared GUI/TUI/CLI save and repair sessions. |
 | Shared UI actions | [providers.py](src/agents_switcher/providers.py): provider capabilities, serialized actions and session-owned automation. |
 | Terminal UI | [tui/](src/agents_switcher/tui/): Textual provider chooser, account dashboards and modals. |
 | Browser and tray | [web/server.py](src/agents_switcher/web/server.py), [web/page.py](src/agents_switcher/web/page.py), [web/cli.py](src/agents_switcher/web/cli.py), [web/tray.py](src/agents_switcher/web/tray.py), [web/launcher.py](src/agents_switcher/web/launcher.py). |
@@ -195,17 +195,34 @@ Never copy Desktop profile/session directories, follow linked source entries,
 or fall back to a legacy store after a failed import. Opaque Claude OAuth tokens
 cannot have their provider ownership verified offline; do not claim otherwise.
 
-The authenticated `/api/codex/login/prepare`, `/complete`, and `/cancel` POSTs
-require exact confirmation and accept no path, executable, URL, PID, or credential
-payload. Preparation returns a quoted command using a fresh, file-backed private
-Codex home; the user runs it in their own terminal. Completion's deliberate
-**Save & switch** action checks strict Codex readiness before saving, then
-activates the same pinned session under the shared action lock. The underlying
-enrollment controller's `complete()` remains save-only; `activate()` is separate.
-Cancel and server shutdown clean only enrollment-owned temporary data, never
-saved accounts or provider processes. Preserve partial-save errors for retry.
+The authenticated `/api/codex/login/prepare`, `/open`, `/status`, `/complete`, and
+`/cancel` POSTs require exact confirmation and accept no path, executable, URL,
+PID, or credential payload. Browser preparation returns a session ID and safe
+status, never an authorization URL or token. The backend opens only its own fixed
+provider URL. Use PKCE and exact random-state validation on the IPv4 loopback
+callback, port 1455 with the source-supported fallback 1457; never kill or cancel
+an unknown listener or invent an arbitrary production port fallback. Token
+exchange must verify TLS, refuse redirects, limit responses, and never replay a
+one-time code after uncertainty. Browser launch must contain child stdio and
+must not use an inherited `BROWSER` command or widen Electron permissions.
+
+After explicit initial consent, the GUI polls read-only status and completes
+with exact `activate: false` to save only. Completion retains `activate: true`
+as the compatible default; that path still checks strict Codex readiness before
+saving and activating the same pinned session under the shared action lock.
+The underlying enrollment controller's `complete()` remains save-only;
+`activate()` is separate. The TUI is a small adapter to the same browser-mode
+controller. The CLI keeps isolated official-CLI enrollment as its fallback.
+Browser waiting, status, and opening must not hold the credential action lock;
+cancellation and shutdown must discard late results without blocking on browser
+interaction or a long token exchange. Cancel cleans only enrollment-owned state,
+never saved accounts or provider processes. Preserve partial-save errors for retry.
+The sign-in action does not switch accounts, but already enabled automatic-switch
+rules remain independent; do not imply that enrollment disables them. Classify
+permanent login rejection separately from transient quota/network failures.
 Codex account state exposes `activationRequired` for saved pending logins. The
-dashboard's **Use saved login** action sends exact `useSavedLogin: true` to
+dashboard's pending-login action (**Use saved login** for the current account,
+**Switch** for another account) sends exact `useSavedLogin: true` to
 `POST /api/switch`, retains strict quit checks, and does not need an enrollment
 session. Live capture must refuse to overwrite a pending saved login; ordinary
 capture of native rotation resumes only after activation.
@@ -289,7 +306,9 @@ are in [desktop/README.md](desktop/README.md) and
 4. **Codex refresh tokens rotate.** Reconcile the live login to the matching
    account before switching; preserve unknown fields in the whole `auth.json`
    object. Persist rotated credentials before using them and retain the
-   running-process refresh guard. Do not blindly retry a rejected refresh token.
+   running-process refresh guard. An opaque access token has unknown expiry, not
+   an expired lifetime; try it before the existing bounded 401 recovery. Missing
+   access tokens still need refresh. Do not blindly retry a rejected refresh token.
    [codex/switcher.py](src/agents_switcher/codex/switcher.py) owns this protocol;
    [codex/tokens.py](src/agents_switcher/codex/tokens.py) is only its transport.
 5. **Codex switching is quit-first, not hot switching.** Shared UI actions refuse

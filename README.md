@@ -59,9 +59,9 @@ account shows simulated quota data.
 
 To get started, [get the desktop app](#get-the-app), or
 [install the CLI from source](#install-the-cli-from-source). Save your current
-provider login with **Add existing login** in Agent Switch.
-For additional Codex accounts, use the [isolated sign-in flow](#save-and-switch-codex-accounts-safely)
-instead of signing in over the current login.
+provider login with **Add existing login** in Agent Switch, or use
+[Codex browser sign-in](#save-and-switch-codex-accounts-safely) in a current source
+build. Add another Codex account without signing in over the current login.
 
 ### What it switches
 
@@ -76,8 +76,8 @@ provider. For Claude Code,
 install its [CLI](https://code.claude.com/docs/en/setup). For Codex, use the
 Desktop app or
 [CLI](https://developers.openai.com/codex/cli) with a file-backed login; the Codex
-CLI is not required for a supported Desktop login. **Add existing login** saves
-the current provider login;
+CLI is not required for a supported Desktop login or the new browser sign-in
+flow. **Add existing login** saves the current provider login;
 it is not a login button. Claude API-key accounts have no subscription quota
 readout and can incur per-token charges.
 
@@ -89,10 +89,13 @@ public without paid Apple or Windows signing credentials; a separate signed
 distribution remains a future, optional path. Draft artifacts and package
 versions are not published downloads.
 
-The independent storage/import and isolated Codex sign-in flows documented below
-require **v1.2.4 or later**, or a current source build. The v1.2.3 installers still
-use the earlier shared saved-account store and do not include the Codex sign-in
-fix. Check the version on the release page before downloading.
+Independent storage/import and isolated terminal Codex sign-in require
+**v1.2.4 or later**, or a current source build. The browser-only GUI/TUI sign-in
+flow described below is a **source-build change, not part of the published
+v1.2.4 installers**. Those installers still use Prepare sign-in, a generated
+terminal command, and Save & switch. The v1.2.3 installers use the earlier shared
+store and do not include isolated sign-in. Check the release notes before
+downloading; repository documentation is not proof of a new binary release.
 
 For developers, successful runs of
 [Desktop installers](https://github.com/jingyi-jia/agents-switcher/actions/workflows/desktop.yml)
@@ -392,16 +395,27 @@ agent-switch codex usage
 agent-switch codex stats work
 ```
 
-To add another account in the app or browser dashboard, choose **Add another
-account → Prepare sign-in**. Copy the generated command into your terminal,
-finish the official Codex sign-in, and fully quit Codex. Then choose **Save &
-switch**, reopen Codex, and verify the account. The command uses a fresh private
-`CODEX_HOME` with file-backed credentials, so the old login is not available to
-revoke. This flow requires an installed Codex CLI; the standalone app does not
-bundle it or run the terminal command for you. Cancel only discards the temporary
-sign-in state, never another saved account.
+In a **current source build**, choose **Add another account → Continue in
+browser**. Finish the official ChatGPT sign-in in your default browser, then
+return to Agent Switch. The account is saved automatically; signing in does not
+itself switch accounts or overwrite your current `auth.json`. No Codex CLI or
+terminal command is needed. To activate it, choose **Switch** on that account, quit
+Codex when prompted, and reopen Codex after the switch.
 
-The CLI provides the same isolated enrollment:
+The TUI has the same browser sign-in under **Add account → Sign in with
+browser**. It uses the same enrollment controller, then returns to the account
+list; choose **Switch account** separately. Browser sign-in is local: the
+browser and Agent Switch must run on the same machine. If another sign-in owns
+both supported callback ports, finish or cancel that sign-in and retry. Agent
+Switch never stops another application's listener.
+
+Cancel discards only the pending browser sign-in, not an account already saved.
+A browser-open failure can be retried; a save failure can retry the same login
+without another sign-in. If a request's result is uncertain, check the account
+list before starting over. Independently enabled auto-switch rules still apply
+to saved accounts; stop auto-switching first if you want manual control throughout.
+
+The CLI retains an isolated official-CLI fallback:
 
 ```bash
 agent-switch codex login --alias personal
@@ -412,8 +426,8 @@ login. Add `--activate` to deliberately switch after sign-in, with all Codex
 clients closed. Saving an account still makes it subject to any automatic-switch
 rules you have already enabled.
 On Windows, the CLI wrapper requires `codex.exe` on `PATH`. If your installation
-exposes only an npm command shim, use the generated PowerShell command in the
-app or browser dashboard instead.
+exposes only an npm command shim, use browser sign-in in a current source build
+instead. The standalone app does not bundle the official Codex CLI.
 
 For every switch:
 
@@ -447,11 +461,15 @@ an unmanaged current login.
 A revoked, expired or reused refresh token cannot be repaired by switching back
 and forth. Stop auto-switching and quit Codex, then:
 
-1. Open the affected account's **··· menu → Sign in again…**, then prepare and
-   run its isolated sign-in command. Sign in as that exact account; a different
-   identity is refused.
-2. After the command finishes and all Codex clients are closed, choose **Save &
-   switch**. The saved slot, alias, and auto-switch exclusion are preserved.
+1. In a current source build, choose **Sign in again…** on the affected account
+   or in its **··· menu**, then **Continue in browser**. Sign in as that exact
+   account; a different identity is refused. The TUI offers a saved-account
+   repair picker under **Add account**.
+2. Return to Agent Switch and confirm that the login was saved. With all Codex
+   clients closed, choose **Switch** for another account, or **Use saved login**
+   to apply the repair to the current account. The saved slot, alias, and
+   auto-switch exclusion are preserved. In the TUI, select that account in
+   **Switch account** to deliberately apply the pending login.
 3. Reopen Codex and verify the account. Repeat only for other accounts whose
    previous sessions were already revoked.
 
@@ -463,8 +481,9 @@ agent-switch codex login --account 1 --activate
 
 If you saved a repair without `--activate`, quit Codex and run
 `agent-switch codex switch 1 --use-saved-login` to deliberately apply it later.
-In the app, choose **Use saved login** on that account. This action remains
-available after cancelling the sign-in dialog or restarting Agent Switch;
+In the app, choose **Switch** for another account, or **Use saved login** to
+apply a repair to the current account. These actions remain available after
+cancelling the sign-in dialog or restarting Agent Switch;
 you don't need to sign in again. **Add existing login** refuses to overwrite
 a saved login awaiting activation.
 The ordinary `codex add` command still rejects an already-managed account;

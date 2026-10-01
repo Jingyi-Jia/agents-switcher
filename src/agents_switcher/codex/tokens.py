@@ -23,6 +23,7 @@ import base64
 import binascii
 import http.client
 import json
+import math
 import os
 import urllib.error
 import urllib.parse
@@ -54,6 +55,10 @@ class TokenRefreshError(Exception):
     """A refresh could not be completed."""
 
 
+class LoginRequiredError(TokenRefreshError):
+    """The provider rejected this login permanently; retrying cannot repair it."""
+
+
 def _claims(jwt: str) -> dict | None:
     if not jwt or not isinstance(jwt, str):
         return None
@@ -77,20 +82,27 @@ def access_token_expiry(tokens: dict) -> float | None:
     """
     claims = _claims((tokens or {}).get("access_token", ""))
     exp = (claims or {}).get("exp")
-    return float(exp) if isinstance(exp, (int, float)) else None
+    if type(exp) not in (int, float):
+        return None
+    try:
+        expiry = float(exp)
+    except OverflowError:
+        return None
+    return expiry if math.isfinite(expiry) else None
 
 
 def needs_refresh(tokens: dict, *, now: float, margin: float = EXPIRY_MARGIN_S) -> bool:
     """Whether the access token is expired or about to be.
 
-    An UNREADABLE expiry answers True: an opaque token cannot be shown to be
-    valid, and the cost of an unnecessary refresh is one rotation, while the
-    cost of using a dead token is a failed poll reported as a real error.
+    An opaque token has no known expiry, not a known expired lifetime. Try it
+    first and let the caller's bounded 401 recovery refresh only if needed.
+    A missing access token still requires a refresh before it can be used.
     """
-    expiry = access_token_expiry(tokens)
-    if expiry is None:
+    access_token = (tokens or {}).get("access_token")
+    if not isinstance(access_token, str) or not access_token.strip():
         return True
-    return expiry - margin <= now
+    expiry = access_token_expiry(tokens)
+    return expiry is not None and expiry - margin <= now
 
 
 def client_id_for(tokens: dict) -> str:
@@ -166,7 +178,7 @@ def refresh_tokens(tokens: dict, *, issuer: str = ISSUER) -> dict:
             if not isinstance(code, str) or not code.strip():
                 code = error_payload.get("code")
         if isinstance(code, str) and code.lower() in _REAUTH_ERROR_CODES:
-            raise TokenRefreshError(
+            raise LoginRequiredError(
                 "Codex needs a fresh isolated login for this account. In Agent Switch, "
                 "open its account menu and choose Sign in again. Or run "
                 "'agent-switch codex login --account NUMBER --activate' with its saved slot number. "

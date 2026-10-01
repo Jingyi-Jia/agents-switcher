@@ -53,9 +53,18 @@ class TestExpiry:
         tok = {"access_token": jwt({"exp": now + 60})}
         assert needs_refresh(tok, now=now, margin=300) is True
 
-    def test_unreadable_expiry_errs_toward_refreshing(self):
-        # One unnecessary rotation beats a poll failing with a dead token.
-        assert needs_refresh({"access_token": "opaque"}, now=time.time()) is True
+    def test_unreadable_expiry_does_not_trigger_unnecessary_rotation(self):
+        assert needs_refresh({"access_token": "opaque"}, now=time.time()) is False
+
+    @pytest.mark.parametrize("token", [None, "", " ", False, 42])
+    def test_missing_access_token_requires_refresh(self, token):
+        assert needs_refresh({"access_token": token}, now=time.time()) is True
+
+    @pytest.mark.parametrize("exp", [None, True, False, "1234", float("nan"), float("inf"), 10 ** 400])
+    def test_invalid_expiry_is_unknown_not_a_reason_to_rotate(self, exp):
+        token = {"access_token": jwt({"exp": exp})}
+        assert access_token_expiry(token) is None
+        assert needs_refresh(token, now=time.time()) is False
 
 
 class TestClientId:

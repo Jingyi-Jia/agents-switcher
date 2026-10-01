@@ -41,17 +41,17 @@ PAGE_HTML = r"""<!doctype html>
   <div id="guide-slot">
   <section class="guide" id="desktop-guide" aria-labelledby="guide-title" hidden>
     <div class="guide-heading">
-      <div><div class="label" id="guide-label">Getting started</div><h2 id="guide-title" tabindex="-1">Start with an existing login</h2></div>
+      <div><div class="label" id="guide-label">Getting started</div><h2 id="guide-title" tabindex="-1">Add your first account</h2></div>
       <button type="button" id="help-close">Hide help</button>
     </div>
-    <p class="guide-intro">Keep your Claude Code and Codex accounts in one place. This app includes its own runtime; you don't need to install Python or Node to run it. Claude Code needs its CLI and sign-in. Codex can use an existing file-backed sign-in from its Desktop app or CLI; the Codex CLI is not required for a Desktop login.</p>
+    <p class="guide-intro">Keep your Claude Code and Codex accounts in one place. This app includes its own runtime; you don't need to install Python or Node to run it. Claude Code needs its CLI and sign-in. For Codex, choose Add another account to sign in with ChatGPT in your browser. No Codex CLI is needed. You can also save an existing file-backed login from Codex Desktop or CLI.</p>
     <div class="guide-providers" id="guide-providers"></div>
     <ol class="guide-steps">
-      <li><strong>Set up a provider.</strong> Sign in through Claude Code's CLI or Codex's Desktop app or CLI, using its official setup guide. Then return here and choose Check again.</li>
+      <li><strong>Sign in.</strong> For Codex, use Add another account below. For Claude Code, sign in through its CLI using the official setup guide, then return here and choose Check again.</li>
       <li><strong>Save the current login.</strong> Add existing login saves that provider's current local credentials for switching later. It doesn't start a new sign-in. Codex keyring-only and API-key logins aren't supported.</li>
-      <li><strong>Add another account safely.</strong> For Codex, use Add another account below: it gives you an isolated terminal sign-in command. Running plain <code>codex login</code> or <code>codex logout</code> in the usual folder can revoke a saved login. For Claude Code, sign in to another account through its CLI, then add that login here.</li>
+      <li><strong>Switch when you're ready.</strong> Browser sign-in saves the Codex account; it does not switch accounts. Choose Switch or Use saved login separately, after saving your work and fully quitting Codex. Existing automatic switching rules remain in effect. For Claude Code, sign in to another account through its CLI, then add that login here.</li>
     </ol>
-    <p class="guide-boundary" id="guide-boundary">The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.</p>
+    <p class="guide-boundary" id="guide-boundary">The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app can start Codex browser sign-in; it doesn't install provider CLIs or change Desktop cookies.</p>
     <p class="hint">Paid-credit accounts remain manual-only; auto-switch never chooses them. After switching, follow any provider restart notice shown below.</p>
     <p class="hint">Closing the window keeps this app's automation running in the background. Choose Quit Agent Switch to stop it. Pausing live updates only pauses this view.</p>
     <div class="guide-footer"><button type="button" id="guide-check" data-action>Check again</button><span class="hint" id="desktop-meta"></span></div>
@@ -149,19 +149,12 @@ PAGE_HTML = r"""<!doctype html>
   <div class="actions dialog-actions"><button type="button" id="codex-cancel">Cancel</button><button type="button" id="codex-check">Check again</button><button type="button" id="codex-continue" class="primary" disabled>Continue &amp; switch</button><button type="button" id="codex-assist" class="primary" hidden>Quit, switch &amp; reopen</button></div>
 </dialog>
 <dialog id="codex-login-dialog" aria-labelledby="codex-login-title" aria-describedby="codex-login-description">
-  <div class="eyebrow">Keep every login intact</div><h2 id="codex-login-title">Add a Codex account</h2>
+  <div class="eyebrow">Sign in with ChatGPT</div><h2 id="codex-login-title">Add a Codex account</h2>
   <p id="codex-login-description"></p>
-  <div class="switch-steps" aria-hidden="true"><span id="login-step-prepare">01 · Prepare</span><span id="login-step-signin">02 · Sign in</span><span id="login-step-save">03 · Save &amp; switch</span></div>
-  <p>Codex can revoke the previous login when you sign in again in its usual folder. This flow uses a fresh private folder, without copying your current credentials.</p>
-  <p class="hint">Requires the Codex CLI in your terminal. An existing file-backed Desktop login can still be saved with Add existing login, without installing the CLI.</p>
-  <div id="codex-login-terminal" hidden>
-    <label class="field" for="codex-login-command"><span id="codex-login-shell">Terminal command</span><textarea id="codex-login-command" rows="4" readonly spellcheck="false"></textarea></label>
-    <div class="actions"><button type="button" id="codex-login-copy" data-action>Copy command</button></div>
-    <ol class="guide-steps"><li>Run this exact command in your terminal and finish the official Codex sign-in.</li><li>Wait for the command to finish, then fully quit Codex Desktop and every Codex terminal session.</li><li>Choose Save &amp; switch to save this login and use it on your next Codex launch.</li></ol>
-    <p class="hint">Do not use plain codex login or codex logout to add another account. Stop the terminal sign-in before cancelling. Cancel discards only this temporary sign-in; it does not sign out or remove your saved accounts.</p>
-  </div>
   <p id="codex-login-status" class="switch-status" role="status" aria-live="polite"></p>
-  <div class="actions dialog-actions"><button type="button" id="codex-login-cancel" data-action>Cancel</button><button type="button" id="codex-login-next" class="primary" data-action>Prepare sign-in</button></div>
+  <p id="codex-login-auto-notice" class="hint" hidden>Automatic switching remains enabled under your existing rules.</p>
+  <p class="hint">Browser sign-in runs on this computer. Closing this dialog ends the sign-in session, not your saved accounts.</p>
+  <div class="actions dialog-actions"><button type="button" id="codex-login-cancel" data-action>Cancel</button><button type="button" id="codex-login-refresh" data-action hidden>Refresh Accounts</button><button type="button" id="codex-login-next" class="primary" data-action>Continue in browser</button></div>
 </dialog>
 <script>
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
@@ -228,10 +221,10 @@ function renderHelp() {
   document.title = "Agent Switch";
   if (!desktop) return;
   $("guide-boundary").textContent = state.claudeDesktop
-    ? "The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in; the experimental profile launcher in Accounts opens separate app profiles without transferring CLI credentials. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies."
-    : "The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app doesn't install provider CLIs, start sign-in flows, or change Desktop cookies.";
+    ? "The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in; the experimental profile launcher in Accounts opens separate app profiles without transferring CLI credentials. This app can start Codex browser sign-in; it doesn't install provider CLIs or change Desktop cookies."
+    : "The Claude Code and Codex account controls manage local provider credentials. Claude Desktop, including its Code tab, has a separate sign-in and is not switched here. This app can start Codex browser sign-in; it doesn't install provider CLIs or change Desktop cookies.";
   $("guide-label").textContent = managed ? "Help" : "Getting started";
-  $("guide-title").textContent = managed ? "Account switching, step by step" : "Start with an existing login";
+  $("guide-title").textContent = managed ? "Account switching, step by step" : "Add your first account";
   const platform = {darwin: "macOS", win32: "Windows", linux: "Linux"}[state.desktop.platform] || "Desktop";
   $("desktop-meta").textContent = `Agent Switch ${state.desktop.version || ""} · ${platform}`;
   for (const id of Object.keys(providers)) {
@@ -248,8 +241,8 @@ function renderHelp() {
       ? "Account access is unavailable. Check the provider's status below, then try Check again."
       : live
         ? live.managed ? "This login is saved. Add existing login can refresh its saved credentials." : "Add existing login saves this account without signing you in again."
-        : id === "codex" ? "Sign in through Codex Desktop or CLI using a file-backed login, then choose Check again." : "Sign in through this provider's CLI, then choose Check again.";
-    if (id === "codex") ui.next.textContent += " A file-backed Desktop login works without the Codex CLI. Use the official setup guide if needed.";
+        : id === "codex" ? supports(data, "login") ? "Choose Add another account to sign in with ChatGPT in your browser. Signing in saves the account; it does not switch accounts." : "Use Add existing login to save a file-backed Codex Desktop or CLI login." : "Sign in through this provider's CLI, then choose Check again.";
+    if (id === "codex") ui.next.textContent += " Browser sign-in and file-backed Desktop logins do not require the Codex CLI. Use the official setup guide if needed.";
     else if (installed === false) ui.next.textContent += " If the CLI isn't installed, use the official setup guide. If you just installed it, reopen this app if detection hasn't updated.";
     block(ui.add, !live || !supports(data, "add"));
   }
@@ -403,10 +396,12 @@ function card(provider, a, data) {
   identity.append(name, el("div", "account-meta", [a.alias ? a.email : null, a.plan, a.org !== "personal" ? a.org : null, "Slot " + a.number].filter(Boolean).join(" · ")));
   top.append(avatar, identity);
   const pending = provider === "codex" && a.activationRequired === true;
-  const b = actionButton(pending ? "Use saved login" : a.active ? "Current" : "Switch", () => provider === "codex" ? requestCodexSwitch(a, b) : act("/api/switch", {provider, number: a.number}, b, "Switching…"));
+  const repair = pending && a.active;
+  const loginRequired = provider === "codex" && a.loginRequired === true;
+  const b = actionButton(repair ? "Use saved login" : a.active ? "Current" : "Switch", () => provider === "codex" ? requestCodexSwitch(a, b) : act("/api/switch", {provider, number: a.number}, b, "Switching…"));
   b.dataset.focusKey = provider + ":switch:" + a.number;
-  b.className = a.active && !pending ? "ghost" : "primary";
-  b.setAttribute("aria-label", pending ? `Use saved login for account ${a.number}` : a.active ? `Account ${a.number} is active` : `Switch to account ${a.number}`);
+  b.className = loginRequired || (a.active && !pending) ? "ghost" : "primary";
+  b.setAttribute("aria-label", repair ? `Use saved login for account ${a.number}` : a.active ? `Account ${a.number} is active` : `Switch to account ${a.number}`);
   block(b, (!!a.active && !pending) || a.switchable === false || !supports(data, "switch"));
   c.appendChild(top);
 
@@ -418,10 +413,10 @@ function card(provider, a, data) {
   }
 
   const left = headroom(a);
-  if (a.error || (a.sentinel && a.sentinel !== "api key") || a.usageFailed) {
+  if (loginRequired || a.error || (a.sentinel && a.sentinel !== "api key") || a.usageFailed) {
     const s = el("div", "state out");
     s.appendChild(el("span", "glyph", "●"));
-    s.appendChild(el("span", null, a.error || a.sentinel || (ws.length ? "Usage update failed; showing the last report." : "Usage update failed; no quota report is available.")));
+    s.appendChild(el("span", null, loginRequired ? "Sign-in required" : a.error || a.sentinel || (ws.length ? "Usage update failed; showing the last report." : "Usage update failed; no quota report is available.")));
     c.appendChild(s);
   } else if (a.sentinel === "api key") {
     c.appendChild(el("div", "state", "API key · subscription quota is not available for this account."));
@@ -439,6 +434,13 @@ function card(provider, a, data) {
     c.appendChild(el("div", "state", "usage unknown"));
   }
   const footer = el("div", "account-footer");
+  if (loginRequired && supports(data, "login")) {
+    const login = actionButton("Sign in again", () => startCodexEnrollment(login, a));
+    login.className = "primary";
+    login.dataset.focusKey = "codex:repair:" + a.number;
+    login.setAttribute("aria-label", `Sign in again to Codex account ${a.number}`);
+    footer.appendChild(login);
+  }
   footer.append(b, el("span", "hint", pending ? "Saved login awaiting activation" : a.disabled ? "Excluded from auto-switch" : a.onCredits ? "Manual only" : a.active ? "Current saved login" : ""));
   const menu = el("details", "account-overflow"), summary = el("summary", null, "···");
   menu.dataset.menu = provider + ":menu:" + a.number;
@@ -809,10 +811,12 @@ function renderAccounts(id, data, force = false) {
   if (live && !live.managed) host.appendChild(adoptRow(id, live));
   else if (!n) {
     const e = el("div", "empty");
-    if (isDesktop()) {
-      e.textContent = id === "codex"
-        ? "No accounts saved yet. Sign in through Codex Desktop or CLI with a file-backed login, then use Add existing login. The Codex CLI is not required for a Desktop login. Open Settings for setup help."
-        : "No accounts saved yet. Sign in through this provider's CLI, then use Add existing login. Open Settings for setup help.";
+    if (id === "codex") {
+      e.textContent = supports(data, "login")
+        ? "No accounts saved yet. Choose Add another account to sign in with ChatGPT in your browser. No Codex CLI is needed. Signing in saves the account; it does not switch accounts."
+        : "No accounts saved yet. Save an existing file-backed Codex login with " + (isDesktop() ? "Add existing login." : "Add current.");
+    } else if (isDesktop()) {
+      e.textContent = "No accounts saved yet. Sign in through this provider's CLI, then use Add existing login. Open Settings for setup help.";
     } else {
       e.textContent = "Nothing managed and nothing signed in. Run ";
       e.appendChild(el("code", null, `agent-switch ${id === "codex" ? "codex " : ""}add`));

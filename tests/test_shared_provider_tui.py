@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 from textual.widgets import ListView, Static
 
-from agents_switcher.codex.usage import CodexUsage, CodexWindow
+from agents_switcher.codex.usage import CodexUsage, CodexWindow, UsageError, UsageLoginRequiredError
 from agents_switcher.tui import app as app_module
 from agents_switcher.tui import codex as codex_module
 from agents_switcher.tui.app import CswapApp
@@ -13,7 +13,7 @@ from agents_switcher.tui.autoview import AutoView
 from agents_switcher.tui.codex import CodexScreen, codex_snapshot
 from agents_switcher.tui.dashboard import DashboardScreen, SwitchScreen, WatchScreen
 from agents_switcher.tui.widgets import AccountsPanel, MenuItem, usage_rows
-from tests.test_codex_tui import account, healthy
+from tests.test_codex_tui import account, codex_readiness, healthy
 from tests.test_provider_navigation import ManagedCodexSwitcher, choose_menu
 from tests.test_tui import FakeSwitcher, make_account, settle
 
@@ -42,7 +42,7 @@ async def test_shared_menu_cards_and_subscreen_navigation(monkeypatch, tmp_path,
         await choose_menu(pilot, "add-menu")
         assert [item.action_id for item in dashboard.query(MenuItem)] == (
             ["add-login", "add-token", "back"] if provider == "claude"
-            else ["add-login", "back"]
+            else ["add-browser", "add-login", "repair-menu", "back"]
         )
         await pilot.press("escape")
         await settle(pilot)
@@ -131,6 +131,16 @@ def test_codex_replaced_slot_does_not_inherit_old_identity_quota():
         [acc], "1", {("1", "previous-account-id"): CodexUsage(windows=(CodexWindow(80, 7200),))}, 1000,
     )
     assert snapshot.accounts[0].usage.last_good is None
+
+
+def test_codex_only_classifies_known_login_required_errors_as_sign_in_required():
+    accounts = [account("1", "repair@example.test"), account("2", "network@example.test")]
+    snapshot = codex_snapshot(accounts, "1", {
+        ("1", "acct-1"): UsageLoginRequiredError("Use the CLI to repair this revoked login."),
+        ("2", "acct-2"): UsageError("The network is unavailable."),
+    }, 1000)
+    assert snapshot.accounts[0].usage.sentinel == "Sign-in required · Add account → Sign in again"
+    assert snapshot.accounts[1].usage.sentinel == "The network is unavailable."
 
 
 @pytest.mark.asyncio

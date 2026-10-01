@@ -292,7 +292,7 @@ MenuItem Static.menu-item-muted, .navigation-hint {
     scrollbar-size-vertical: 1;
 }
 
-ConfirmModal, AddTokenModal, OutputModal {
+ConfirmModal, AddTokenModal, OutputModal, CodexLoginModal {
     align: center middle;
     background: $background 75%;
 }

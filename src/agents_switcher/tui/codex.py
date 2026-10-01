@@ -11,26 +11,30 @@ from rich.text import Text
 from textual.reactive import reactive
 from textual.widgets import RichLog, Static
 
+from agents_switcher.codex.desktop import CodexDesktop
 from agents_switcher.codex.switcher import CodexSwitcher
-from agents_switcher.codex.usage import CodexUsage
+from agents_switcher.codex.usage import CodexUsage, UsageLoginRequiredError
 from agents_switcher.models import AccountSnapshot, AccountsSnapshot
-from agents_switcher.providers import AUTO_SESSION_NOTICE, ProviderActions, safe_error
+from agents_switcher.providers import AUTO_SESSION_NOTICE, ActionRequired, ProviderActions, safe_error
 from agents_switcher.settings import SETTING_SPECS
 from agents_switcher.tui.autoview import AutoView
+from agents_switcher.tui.codex_login import CodexLoginModal
 from agents_switcher.tui.dashboard import DashboardScreen
 from agents_switcher.tui.modals import ConfirmModal
 from agents_switcher.tui.theme import Palette
 from agents_switcher.usage_store import UsageEntry
 
 
-def codex_snapshot(accounts, active, usage, fetched_at) -> AccountsSnapshot:
+def codex_snapshot(accounts, active, usage, fetched_at, pending=()) -> AccountsSnapshot:
     """Project Codex quota into the common, read-only account-card model."""
     rows = []
     now = time.time()
     for account in accounts:
         result = usage.get((account.number, account.account_id))
         entry = UsageEntry()
-        if isinstance(result, Exception):
+        if isinstance(result, UsageLoginRequiredError):
+            entry = UsageEntry(sentinel="Sign-in required · Add account → Sign in again")
+        elif isinstance(result, Exception):
             entry = UsageEntry(sentinel=safe_error(result, include_detail=True))
         elif isinstance(result, CodexUsage):
             windows = []
@@ -51,7 +55,8 @@ def codex_snapshot(accounts, active, usage, fetched_at) -> AccountsSnapshot:
             )
         rows.append(AccountSnapshot(
             number=account.number, email=account.email or account.account_id,
-            org_name=account.plan, org_uuid="", is_active=account.number == active,
+            org_name=(f"{account.plan or 'personal'} · saved login pending" if account.number in pending else account.plan),
+            org_uuid="", is_active=account.number == active,
             kind="oauth", switchable=True, usage=entry,
             alias=account.alias, disabled=account.disabled,
         ))
@@ -62,8 +67,8 @@ class CodexScreen(DashboardScreen):
     provider = "codex"
     status_id = "codex-status"
     empty_message = (
-        "No managed accounts yet.\nUse the menu below: Add account — from your "
-        "current Codex login, or run 'agent-switch codex add'."
+        "No managed accounts yet.\nChoose Add account → Sign in with browser, "
+        "or capture your current login with 'agent-switch codex add'."
     )
     snapshot: reactive[AccountsSnapshot | None] = reactive(None)
     threshold_pct: reactive[float | None] = reactive(None)
@@ -72,7 +77,9 @@ class CodexScreen(DashboardScreen):
     def __init__(self) -> None:
         super().__init__()
         self.switcher = CodexSwitcher()
-        self.actions = ProviderActions(codex=self.switcher)
+        self._desktop = CodexDesktop()
+        self.actions = ProviderActions(codex=self.switcher, codex_preflight=self._require_codex_quit)
+        self._login_modal = None
         self.threshold_pct = self.actions.auto.status("codex")["threshold"]
         self._busy = False
         self._refreshing = False
@@ -94,6 +101,8 @@ class CodexScreen(DashboardScreen):
         self.set_interval(1, self._check_revision)
 
     async def on_unmount(self) -> None:
+        if self._login_modal is not None:
+            await self._login_modal.close_session()
         await asyncio.to_thread(self.actions.close)
 
     def _rebuild(self) -> None:
@@ -101,6 +110,7 @@ class CodexScreen(DashboardScreen):
             accounts = self.switcher.list_accounts()
             self.snapshot = codex_snapshot(
                 accounts, self.switcher.status().active_number, self._usage, self._fetched_at,
+                {a.number for a in accounts if self.switcher.activation_required(a)},
             )
         except Exception as exc:
             self._refresh_failed(safe_error(exc, include_detail=True))
@@ -124,6 +134,7 @@ class CodexScreen(DashboardScreen):
                 fetched_at = time.time()
                 snapshot = codex_snapshot(
                     accounts, self.switcher.status().active_number, usage, fetched_at,
+                    {a.number for a in accounts if self.switcher.activation_required(a)},
                 )
                 revision = self.actions.revision
             if self.is_mounted:
@@ -183,17 +194,65 @@ class CodexScreen(DashboardScreen):
         message = result.get("message") or result.get("reason") or "Done."
         self._status(message)
         self.app.notify(
-            message, severity="warning" if result.get("restartRequired") else
+            message, severity="warning" if result.get("restartRequired") or result.get("warning") else
             "information" if result.get("ok") else "error", timeout=8, markup=False,
         )
         self.threshold_pct = self.actions.auto.status("codex")["threshold"]
         self.request_refresh()
 
     def do_switch(self, number: str) -> None:
-        self._start_action("switch", partial(self.actions.switch, "codex", number))
+        self._start_action("switch", partial(self._switch, number))
+
+    def _require_codex_quit(self) -> None:
+        status = self._desktop.status()
+        if status.get("available") is not True or type(status.get("running")) is not bool:
+            raise ActionRequired(
+                "Could not confirm that Codex is closed. Try again; your login has not changed.",
+                code="codex-status-unknown",
+            )
+        if status["running"]:
+            raise ActionRequired(
+                "Quit Codex completely, including its app and terminal sessions, then switch again. "
+                "Your login has not changed.", code="codex-running",
+            )
+
+    def _switch(self, number: str) -> dict:
+        with self.actions.lock:
+            self._require_codex_quit()
+            account = next((a for a in self.switcher.list_accounts() if a.number == number), None)
+            pending = account is not None and self.switcher.activation_required(account)
+            return self.actions.switch("codex", number, use_saved_login=pending)
 
     def action_switch_best(self) -> None:
-        self._start_action("switch best", partial(self.actions.switch_best, "codex"))
+        self._start_action("switch best", self._switch_best)
+
+    def _switch_best(self) -> dict:
+        with self.actions.lock:
+            self._require_codex_quit()
+            return self.actions.switch_best("codex")
+
+    def action_browser_login(self, number: str | None = None) -> None:
+        if self._busy:
+            self.app.notify("Another Codex action is still running", severity="warning")
+            return
+        account = next((a for a in self.snapshot.accounts if a.number == number), None) if self.snapshot else None
+        if number is not None and account is None:
+            self.app.notify("That saved account is unavailable. Refresh the account list.", severity="warning")
+            return
+        self._login_modal = CodexLoginModal(
+            self, number=number, label=f"{account.alias} ({account.email})" if account and account.alias
+            else account.email if account else "",
+        )
+        self._busy = True
+        self.app.push_screen(self._login_modal, self._login_done)
+
+    def _login_done(self, result: dict | None) -> None:
+        self._login_modal = None
+        self._busy = False
+        if result is not None:
+            self._action_done(result)
+        else:
+            self.request_refresh()
 
     def _confirm(self, title: str, message: str, fn) -> None:
         self.app.push_screen(
