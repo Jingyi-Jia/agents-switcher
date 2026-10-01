@@ -314,7 +314,7 @@ def test_exchange_accepts_opaque_tokens_and_fixes_the_one_time_exchange_paramete
     b"synthetic-secret-not-json", b"null", b"[]", b"{}",
     b"x" * (browser_mod.MAX_RESPONSE_BYTES + 1),
     json.dumps({"id_token": "invalid", "access_token": "opaque", "refresh_token": "synthetic"}).encode(),
-])
+], ids=["non-json", "null", "array", "missing-tokens", "oversized", "invalid-id-token"])
 def test_exchange_rejects_malformed_or_oversized_response_without_leaking_it(monkeypatch, raw):
     _, opener, _ = exchange_response(monkeypatch, raw)
     with pytest.raises(BrowserLoginError) as caught:
