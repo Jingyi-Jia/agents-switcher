@@ -299,33 +299,24 @@ function quotaTiming(w, allowPace = true) {
   if (date && numeric(w.observedAt) && numeric(w.windowSeconds) && w.windowSeconds > 0 && w.resetAt - w.observedAt > w.windowSeconds) date = null;
   const remaining = date ? w.resetAt - now : null;
   let pace = "Pace unavailable";
-  let hint = "Even-pace guidance needs a successful usage report, a known window length, and a reset time within that window. Five-hour guidance needs a report from the last five minutes; older weekly comparisons describe only the last report. It is not a forecast or a switching rule.";
-  const age = numeric(w.observedAt) && w.observedAt > 0 ? now - w.observedAt : null;
-  const reported = age !== null && age >= 0;
-  const historical = reported && age > 300;
-  const report = historical ? `Usage report · ${duration(age)} ago` : null;
-  const unusedSession = allowPace && reported && w.unusedSession === true && w.windowSeconds === 18000 && w.usedPercent === 0;
+  let hint = "Even-pace guidance needs a successful usage report, a known window length, and a reset time within that window. It is not a forecast or a switching rule.";
+  const reported = numeric(w.observedAt) && w.observedAt > 0 && now >= w.observedAt;
+  const unusedSession = allowPace && reported && w.unusedSession === true && w.windowSeconds === 18000 && w.usedPercent === 0 && (!date || remaining > 0);
   const elapsed = w.observedAt - (w.resetAt - w.windowSeconds);
   if (unusedSession) {
-    pace = historical ? "No session usage at last report" : "No session usage reported";
+    pace = "No session usage reported";
     hint = date
-      ? "Claude reported zero 5-hour usage at the last report. The reported reset is shown; zero usage does not mean the session clock has stopped."
+      ? "Claude reported zero 5-hour usage. The reported reset is shown; zero usage does not mean the session clock has stopped."
       : "Claude reported zero 5-hour usage without a usable reset time. A session start has not been confirmed; no countdown is assumed.";
-  } else if (allowPace && reported && (!historical || w.windowSeconds === 604800) && date && remaining > 0 && numeric(w.windowSeconds) && w.windowSeconds > 0 && elapsed > 0 && elapsed < w.windowSeconds && numeric(w.usedPercent) && w.usedPercent >= 0 && w.usedPercent <= 100) {
+  } else if (allowPace && reported && date && remaining > 0 && numeric(w.windowSeconds) && w.windowSeconds > 0 && elapsed > 0 && elapsed < w.windowSeconds && numeric(w.usedPercent) && w.usedPercent >= 0 && w.usedPercent <= 100) {
     const even = elapsed / w.windowSeconds * 100;
     const difference = w.usedPercent - even;
     pace = Math.abs(difference) <= 5 ? "Near even pace" : difference > 0 ? "Above even pace" : "Below even pace";
-    hint = `${w.usedPercent}% used after ${Math.round(even)}% of this window had elapsed at the last report. Within five percentage points is near even pace. This is a simple guide, not a forecast or a switching rule.`;
-    if (historical) {
-      pace += " · at last report";
-      hint += " This is an older snapshot, not current usage pace.";
-    }
-  } else if (allowPace && historical) {
-    hint = "This usage report is too old for current pace guidance. A weekly comparison also needs a valid reset in the current window. Refreshing respects the provider's polling schedule.";
+    hint = `${w.usedPercent}% used with ${Math.round(even)}% of the window elapsed when measured. Within five percentage points is near even pace. This is a simple guide, not a forecast or a switching rule.`;
   } else if (!allowPace) {
     hint = "Pace guidance is hidden for failed, blocked, or paid-credit reports. Last reported quota may still be shown.";
   }
-  return {date, remaining, pace, hint, report, unusedSession};
+  return {date, remaining, pace, hint, unusedSession};
 }
 
 function headroom(a) {
@@ -398,7 +389,6 @@ function meter(w, allowPace = true) {
   const pace = el("span", "quota-pace", timing.pace);
   pace.title = timing.hint;
   m.append(reset, pace);
-  if (timing.report) m.appendChild(el("span", "quota-report", timing.report));
   if (w.scope === "model") m.appendChild(el("span", "quota-scope", "Model-specific · separate from overall headroom"));
   return m;
 }
