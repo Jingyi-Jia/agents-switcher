@@ -236,9 +236,24 @@ Each quota window shows its reported reset date, time, and local timezone.
 Relative resets stay anchored to the original usage report, not the time you
 refresh the page. Missing or inconsistent timing stays unavailable; an elapsed
 reset asks for fresh usage rather than assuming that quota has returned.
-The subtle even-pace hint compares quota used with the share of the window
-elapsed at the last report. It needs a report from the last five minutes and is
-only a guide, never a forecast or an automatic-switching input.
+The subtle even-pace hint compares the displayed quota used with the share of
+the window elapsed when that usage was measured. It stays visible between
+refreshes without a separate age cutoff, as long as the reported window has not
+reset. Failed updates, invalid timing and paid-credit samples still hide the
+comparison. It is only a guide, never a forecast or an automatic-switching input.
+
+**Live updates** is enabled by default and checks the dashboard every 20 seconds.
+Actual Claude quota requests follow the shared polling schedule: normally about
+3–5 minutes for the active account and up to 10 minutes for idle accounts, with
+longer waits after rate limiting. **Refresh usage** checks immediately but still
+respects that schedule and retry delays; it does not force a new provider request
+on every click. Automatic switching is a separate, opt-in control.
+
+When Claude reports exactly zero 5-hour usage, the card says **No session usage
+reported** until a known reset passes. Without a usable reset, it says **Session
+clock not reported** rather than implying an error. A displayed **100% left** alone
+does not prove the session hasn't started: the percentage is rounded, and a
+reported reset time remains visible.
 
 When Claude reports a model-specific weekly limit, such as **Fable**, its account
 card shows a separate bar and reset time. This is that model's allowance, not the
