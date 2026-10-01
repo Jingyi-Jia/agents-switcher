@@ -19,14 +19,14 @@ const details = () => nodes('claude-desktop-profiles').find(n => n.dataset.profi
 
 def test_desktop_actions_and_profile_creation_are_in_the_requested_places(node):
     run_page(node, PROFILES + r"""
-assert.match($('claude-desktop-heading').textContent, /Claude Desktop.*Profiles.*Beta/);
+assert.match($('claude-desktop-heading').textContent, /Claude Desktop.*Profiles/);
+assert.doesNotMatch($('claude-desktop-heading').textContent, /Beta/);
 assert.deepEqual(nodes('claude-desktop-actions').filter(n => n.tagName === 'BUTTON').map(n => n.textContent), ['Open Claude', 'Refresh']);
 assert.equal($('claude-desktop-profiles').children.at(-1), button('claude-desktop-profiles', 'New profile'));
 assert.match(details().textContent, /Work.*Email label.*work@example.test/);
 await button('claude-desktop-actions', 'Open Claude').click();
-assert.equal(posts().length, 0);
-assert.match($('dialog-description').textContent, /usual default profile/);
-await submitDialog();
+assert.equal(posts().length, 1);
+assert.notEqual($('action-dialog').open, true);
 assert.deepEqual(posts().at(-1).payload, {profileId: 'default', confirm: true});
 """)
 

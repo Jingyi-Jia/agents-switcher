@@ -23,15 +23,14 @@ function codexMessage(message, error = false) {
 function updateCodexControls(flow) {
   const committed = flow?.phase === "switching" || flow?.phase === "opening";
   const waiting = ["checking", "quitting", "waiting"].includes(flow?.phase);
+  const assisted = codexAssistAllowed(flow?.status);
   $("codex-cancel").disabled = committed;
   $("codex-check").disabled = waiting || committed;
   $("codex-continue").disabled = waiting || committed || !codexStopped(flow?.status);
-  $("codex-assist").hidden = !codexAssistAllowed(flow?.status);
+  $("codex-continue").hidden = assisted;
+  $("codex-assist").hidden = !assisted;
   $("codex-assist").disabled = waiting || committed;
   $("codex-check").hidden = committed;
-  for (const [id, phases] of [["quit", ["checking", "quitting", "waiting", "ready"]], ["switch", ["switching"]], ["open", ["opening"]]]) {
-    $("codex-step-" + id).className = phases.includes(flow?.phase) ? "current" : "";
-  }
 }
 
 function cancelCodexSwitch() {
@@ -61,20 +60,20 @@ async function readCodexStatus(flow) {
 
 async function checkCodexFlow(flow) {
   if (!currentCodexFlow(flow)) return;
-  flow.phase = "checking"; updateCodexControls(flow); codexMessage("Checking that Codex is fully quit. Your current login is unchanged.");
+  flow.phase = "checking"; updateCodexControls(flow); codexMessage("Checking Codex…");
   const status = await readCodexStatus(flow);
   if (!currentCodexFlow(flow)) return;
   flow.status = status; flow.phase = "ready";
   const detail = codexStopped(status)
-    ? "Codex is fully quit. Choose Continue & switch when you're ready. Nothing has switched yet."
+    ? "Codex is quit. Ready to switch."
     : status.running == null || !status.available
-      ? "Process status is unknown. Switching stays blocked until a check confirms Codex is stopped."
+      ? "Codex process status is unknown. Choose Check again to retry."
       : status.terminalCount > 0 || status.backgroundCount > 0
-        ? `Close your Codex terminal sessions and background processes first (${status.terminalCount || 0} terminal, ${status.backgroundCount || 0} background). We never stop these for you.`
+        ? `Quit remaining Codex clients (${status.terminalCount || 0} terminal, ${status.backgroundCount || 0} background), including ChatGPT or editor sessions, then check again.`
         : codexAssistAllowed(status)
-          ? "Codex Desktop is running. Save your work, then quit it yourself or choose Quit, switch & reopen. Your current login is unchanged."
-          : "Fully quit Codex Desktop and all Codex CLI sessions, then choose Check again. Closing a window may not quit the app. Your current login is unchanged.";
-  codexMessage([detail, status.message].filter(Boolean).join(" "));
+          ? "Save your work first. Quit & switch will reopen Codex after switching."
+          : "Quit Codex and its terminal sessions, then choose Check again.";
+  codexMessage(detail);
   updateCodexControls(flow);
 }
 
@@ -83,9 +82,12 @@ async function requestCodexSwitch(account, opener) {
   const flow = codexFlow = {generation: ++codexGeneration, number: account.number, label: account.alias || account.email || "account " + account.number, useSavedLogin: account.activationRequired === true, opener, phase: "checking", status: null, attempts: 0};
   const active = (state.codex?.accounts || []).find(item => item.number === account.number)?.active === true;
   $("codex-dialog-title").textContent = (flow.useSavedLogin && active ? "Use saved login for " : "Switch to ") + flow.label + "?";
-  $("codex-dialog-description").textContent = (flow.useSavedLogin ? "A fresh login is already saved for this account. No new sign-in is needed. " : "") + "Codex must be fully quit before its saved login can change. This prepares the next launch; it doesn't change the identity of a running app.";
+  $("codex-dialog-description").textContent = flow.useSavedLogin ? "Uses the login already saved for this account." : "";
+  $("codex-dialog-description").hidden = !flow.useSavedLogin;
+  $("codex-continue").textContent = flow.useSavedLogin && active ? "Use saved login" : "Switch";
   $("codex-dialog").showModal(); $("codex-cancel").focus();
   await checkCodexFlow(flow);
+  if (currentCodexFlow(flow) && codexStopped(flow.status)) await performCodexSwitch(flow, false);
 }
 
 async function performCodexSwitch(flow, reopen) {
@@ -96,11 +98,11 @@ async function performCodexSwitch(flow, reopen) {
   flow.status = status;
   if (!codexStopped(status)) {
     flow.phase = "ready"; updateCodexControls(flow);
-    codexMessage("Codex is no longer confirmed stopped. Nothing was switched. Close any remaining sessions and choose Check again.");
+    codexMessage("Codex is no longer confirmed stopped. Choose Check again before switching.");
     return;
   }
   busy = true; ++requestVersion; flow.phase = "switching"; syncBusy(); updateCodexControls(flow);
-  codexMessage("Switching the saved login. Please keep this window open.");
+  codexMessage("Switching…");
   try {
     const {ok, body} = await api("/api/switch", {method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify({provider: "codex", number: flow.number, ...(flow.useSavedLogin ? {useSavedLogin: true} : {})})});
     if (!ok || body.ok === false || body.error || body.switched === false) {
@@ -119,10 +121,10 @@ async function performCodexSwitch(flow, reopen) {
         launchFailed = !opened.ok || opened.body.ok === false || !!opened.body.error;
         message += launchFailed ? " Codex did not reopen. Your login was switched; open Codex yourself. " + (opened.body.message || "") : " Launch requested. Confirm the selected account in Codex.";
       } catch { launchFailed = true; message += " Login switched, but the launch could not be requested. Open Codex yourself."; }
-    } else message += " Open Codex when you're ready and confirm the selected account there.";
+    }
     const refreshed = await load(true, true);
     if (!refreshed) message += " State could not be refreshed. Check Accounts before switching again.";
-    toast(message, launchFailed || !refreshed, true);
+    toast(message, launchFailed || !refreshed, launchFailed || !refreshed || !!body.restartRequired || !!body.followUp);
     codexFlow = null; ++codexGeneration; $("codex-dialog").close();
   } catch {
     flow.status = null; flow.phase = "ready";
@@ -144,7 +146,7 @@ async function pollCodexQuit(flow) {
     return;
   }
   flow.phase = "waiting"; updateCodexControls(flow);
-  codexMessage(`Waiting for Codex to quit (${flow.attempts}/20)… You can still cancel; no switch has started.${status.running == null ? " Process status is currently unknown." : ""}`);
+  codexMessage("Waiting for Codex to quit…");
   codexWaitTimer = setTimeout(() => pollCodexQuit(flow), 1000);
 }
 
@@ -152,7 +154,7 @@ async function assistCodexSwitch() {
   const flow = codexFlow;
   if (!currentCodexFlow(flow) || flow.phase !== "ready" || !codexAssistAllowed(flow.status)) return;
   flow.phase = "quitting"; updateCodexControls(flow);
-  codexMessage("Requesting a normal Codex quit. Cancel stops the pending switch, but cannot undo a quit already requested.");
+  codexMessage("Quitting Codex…");
   try {
     const result = await api("/api/codex/quit", {method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify({confirm: true})});
     if (!currentCodexFlow(flow)) return;

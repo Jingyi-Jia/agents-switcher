@@ -228,10 +228,9 @@ apiState.claudeDesktop.running = false;
 intervals.find(i => i.ms === 5000).callback(); await settle();
 assert.equal(button('claude-desktop-profiles', 'Open').disabled, false);
 assert.equal(posts().length, 0);
-button('claude-desktop-profiles', 'Open').click();
+await button('claude-desktop-profiles', 'Open').click();
 assert.equal(nodes('dialog-fields').find(n => n.type === 'checkbox'), undefined);
-assert.equal(posts().length, 0);
-await submitDialog();
+assert.notEqual($('action-dialog').open, true);
 assert.deepEqual(posts().map(c => c.path), ['/api/claude-desktop/open']);
 assert.deepEqual(posts()[0].payload, {profileId: 'a'.repeat(32), confirm: true});
 """)
@@ -300,7 +299,7 @@ for (const blocker of ['terminalCount', 'backgroundCount']) {
   await button('codex', 'Switch').click();
   assert.equal($('codex-assist').hidden, true);
   assert.equal($('codex-continue').disabled, true);
-  assert.match($('codex-dialog-status').textContent, /We never stop these/);
+  assert.match($('codex-dialog-status').textContent, /Quit remaining Codex clients.*ChatGPT or editor sessions/);
   $('codex-cancel').click(); await settle();
   codexStatus[blocker] = 0;
 }
@@ -383,7 +382,10 @@ assert.equal($('codex-continue').disabled, true);
 
 def test_codex_continue_rechecks_and_duplicate_requests_are_blocked(node):
     run_page(node, r"""
+codexStatus.running = null;
 await button('codex', 'Switch').click();
+codexStatus.running = false;
+await $('codex-check').click();
 codexStatus.running = true; codexStatus.terminalCount = 1;
 await $('codex-continue').click();
 assert.equal(posts().length, 0);

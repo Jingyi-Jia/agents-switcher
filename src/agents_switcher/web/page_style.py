@@ -256,9 +256,8 @@ dialog p { font-size:12px; color:var(--mid); overflow-wrap:anywhere; }
 .dialog-actions { justify-content:flex-end; margin-bottom:0; }
 #dialog-feedback,.dialog-error { color:var(--ember); }
 .switch-status { padding:14px; border:1px solid var(--hairline); border-radius:7px; background:var(--panel); min-height:60px; font-size:12px; }
-.switch-steps { display:flex; gap:6px; margin:22px 0; color:var(--mid); font-size:10px; }
-.switch-steps span { flex:1; padding-top:8px; border-top:2px solid var(--track); }
-.switch-steps span.current { color:var(--accent); border-color:var(--accent); }
+#codex-dialog .switch-status { padding:0; border:0; background:transparent; min-height:0; }
+#codex-dialog .switch-status:not(.dialog-error) { color:var(--mid); }
 #toast { position:fixed; bottom:22px; left:calc(50% + 102px); transform:translateX(-50%); width:max-content; max-width:min(670px,calc(100% - 36px)); z-index:8; display:none; padding:13px 19px; border:1px solid var(--accent); border-radius:8px; background:var(--paper); color:var(--ink); box-shadow:0 8px 35px #0003; font-size:12px; overflow-wrap:anywhere; }
 #toast.show { display:flex; align-items:center; gap:14px; }
 #toast .dismiss-toast { min-width:30px; min-height:30px; padding:0; flex:none; border-color:transparent; color:inherit; background:transparent; }
