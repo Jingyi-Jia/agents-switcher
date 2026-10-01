@@ -114,3 +114,48 @@ jobs:
                 else { 'Not an NSIS PowerShell probe' }
               }} |
             ConvertTo-Json -Depth 3
+      - name: Compare Windows PowerShell process-probe environments
+        if: failure() && matrix.platform == 'win'
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          uv run --no-project python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import runpy
+          import subprocess
+          import tempfile
+          import time
+
+          allowed = {
+              "PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
+              "USERNAME", "USERDOMAIN", "COMPUTERNAME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+              "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
+              "PROGRAMW6432", "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
+              "PSMODULEPATH", "TEMP", "TMP", "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS",
+          }
+          native = {key: value for key, value in os.environ.items() if key.upper() in allowed}
+          windows = Path(os.environ["SystemRoot"])
+          query = "$null = Get-CimInstance -ClassName Win32_Process; exit 0"
+          with tempfile.TemporaryDirectory(prefix="agent-switch-probe-") as temporary:
+              isolated = runpy.run_path("desktop/scripts/smoke_backend.py")["isolated_environment"](Path(temporary))
+              for name, directory, environment, flags in [
+                  ("isolated-x86", "SysWOW64", isolated, []),
+                  ("native-x86", "SysWOW64", native, []),
+                  ("isolated-x86-no-profile", "SysWOW64", isolated, ["-NoProfile", "-NonInteractive"]),
+                  ("native-x64", "System32", native, ["-NoProfile", "-NonInteractive"]),
+              ]:
+                  executable = windows / directory / "WindowsPowerShell/v1.0/powershell.exe"
+                  started = time.monotonic()
+                  try:
+                      result = subprocess.run(
+                          [str(executable), *flags, "-C", query], env=environment,
+                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          timeout=40, check=False,
+                      )
+                      outcome = {"exitCode": result.returncode}
+                  except subprocess.TimeoutExpired:
+                      outcome = {"timedOut": True}
+                  print(json.dumps({"probe": name, "seconds": round(time.monotonic() - started, 2), **outcome}), flush=True)
+          PY
