@@ -264,6 +264,26 @@ async def test_browser_open_failure_retries_the_same_session_and_offers_safe_fal
         assert controller.closed
 
 
+async def test_browser_retry_is_available_before_the_previous_press_animation_ends(login_setup):
+    switcher, controllers = login_setup
+    app = CswapApp(start="codex")
+    async with app.run_test(size=(100, 32)) as pilot:
+        modal = await open_login(pilot, number="1")
+        button = modal.query_one("#codex-login-continue", Button)
+        button.active_effect_duration = 60
+        controller = controllers[0]
+        controller.open_error = EnrollmentError("Could not open the default browser.")
+        await begin_login(pilot, modal)
+        assert str(button.label) == "Retry opening browser"
+        assert not button.disabled
+        controller.open_error = None
+        assert await pilot.click("#codex-login-continue")
+        await settle(pilot)
+        assert [call for call in controller.calls if call[0] == "prepare"] == [("prepare", "1")]
+        assert [call for call in controller.calls if call[0] == "open"] == [("open", "session-1")] * 2
+        assert not switcher.switched_to
+
+
 async def test_save_failure_retries_without_repeating_browser_sign_in(login_setup):
     switcher, controllers = login_setup
     app = CswapApp(start="codex")

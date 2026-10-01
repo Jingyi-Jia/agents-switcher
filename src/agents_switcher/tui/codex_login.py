@@ -79,6 +79,8 @@ class CodexLoginModal(ModalScreen[dict | None]):
         button = self.query_one("#codex-login-continue", Button)
         button.label = label
         button.disabled = not action
+        if action:
+            button.remove_class("-active")
         button.refresh(layout=True)
 
     def _automation_notice(self) -> str:
