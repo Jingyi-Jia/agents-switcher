@@ -107,6 +107,7 @@ def actions(tmp_path, monkeypatch):
     from agents_switcher.codex import autoswitch
 
     monkeypatch.setattr(autoswitch, "running_codex_processes", list)
+    monkeypatch.setattr("agents_switcher.providers.running_codex_processes", list)
     result = ProviderActions(claude=Claude(), codex=Codex(tmp_path / "codex"))
     yield result
     result.close()
@@ -172,6 +173,14 @@ def test_shared_actions_preserve_provider_safety_flags(actions, provider):
         assert ("remove", "1", {"assume_yes": True}) in calls
     else:
         assert ("remove", "1") in calls
+
+
+def test_codex_action_fixture_never_probes_native_processes(actions, monkeypatch):
+    native_probe = Mock(side_effect=AssertionError("Action tests must not inspect native processes"))
+    monkeypatch.setattr("agents_switcher.codex.processes._run", native_probe)
+    assert actions.switch("codex", 2)["ok"]
+    assert actions.switch_best("codex")["ok"]
+    native_probe.assert_not_called()
 
 
 def test_best_uses_claude_strategy(actions):

@@ -21,6 +21,7 @@ def web(tmp_path, monkeypatch):
     from agents_switcher.codex import autoswitch
 
     monkeypatch.setattr(autoswitch, "running_codex_processes", list)
+    monkeypatch.setattr("agents_switcher.providers.running_codex_processes", list)
     state = DashboardState(Claude(), Codex(tmp_path / "codex"))
     state.codex_desktop.status = Mock(return_value={"available": True, "running": False})
     server, _ = serve(state, host="127.0.0.1", port=0, token="test-web-auth")
@@ -92,6 +93,26 @@ def test_peer_provider_routes_dispatch_the_same_operations(web, provider):
         assert code == 200, result
         assert result["ok"]
     assert len(web.state.actions._switchers[provider].calls) >= 5
+
+
+def test_codex_action_contracts_do_not_probe_real_processes(web, monkeypatch):
+    native_probe = Mock(side_effect=AssertionError("Contract tests must not inspect native processes"))
+    monkeypatch.setattr("agents_switcher.codex.processes._run", native_probe)
+    for route, body in [("switch", {"number": 2}), ("switch-best", {})]:
+        code, result, _ = request(web, f"/api/{route}", {"provider": "codex", **body})
+        assert code == 200, result
+        assert result["ok"]
+    native_probe.assert_not_called()
+
+
+def test_codex_action_contract_still_refuses_a_reported_running_process(web, monkeypatch):
+    probe = Mock(return_value=[object()])
+    monkeypatch.setattr("agents_switcher.providers.running_codex_processes", probe)
+    code, result, _ = request(web, "/api/switch", {"provider": "codex", "number": 2})
+    assert code == 400
+    assert result["code"] == "codex-running"
+    assert web.state._codex.calls == []
+    probe.assert_called_once_with()
 
 
 @pytest.mark.parametrize("provider", ["claude", "codex"])
