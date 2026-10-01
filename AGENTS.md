@@ -144,8 +144,15 @@ not render time, and require timezone-aware Claude timestamps. Missing, invalid
 or out-of-window timing must not produce a guessed date. The even-pace display
 uses the report's elapsed-window fraction, only for samples at most five minutes
 old and not failed or credit-backed; within five percentage points is near even
-pace. This is a display-only comparison, never a forecast or an input to account
-selection, token refresh, or polling policy.
+pace. Older weekly samples may retain a historical comparison explicitly labeled
+`at last report`, with the report age visible, only while that same reported
+window remains current. Never advance its elapsed fraction to render time or
+show it after a failed update or on paid credits. These are display-only
+comparisons, never forecasts or inputs to account selection, token refresh, or
+polling policy. Claude's `unusedSession` flag comes only from an exactly zero
+unrounded 5-hour measurement. It means no usage was reported, not that the clock
+has stopped; retain any reported reset and never infer a session start from a
+rounded percentage or a missing timestamp.
 Claude's normalized `scoped` model limits are separate weekly windows with
 `scope: "model"`. Render only reported, valid values; never infer a Fable quota
 from a plan name. Model windows do not determine overall headroom, its limiting

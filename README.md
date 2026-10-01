@@ -235,7 +235,17 @@ refresh the page. Missing or inconsistent timing stays unavailable; an elapsed
 reset asks for fresh usage rather than assuming that quota has returned.
 The subtle even-pace hint compares quota used with the share of the window
 elapsed at the last report. It needs a report from the last five minutes and is
-only a guide, never a forecast or an automatic-switching input.
+only a guide, never a forecast or an automatic-switching input. Older weekly
+reports retain a comparison labeled **at last report**, with the report's age
+visible, until that window resets. This is historical context, not current pace;
+failed updates and paid-credit samples still hide the comparison. Polling and
+automatic-switching rules are unchanged.
+
+When Claude reports exactly zero 5-hour usage, the card says **No session usage
+reported**, or **No session usage at last report** for an older sample. Without a
+usable reset, it says **Session clock not reported** rather than implying an
+error. A displayed **100% left** alone does not prove the session hasn't started:
+the percentage is rounded, and a reported reset time remains visible.
 
 When Claude reports a model-specific weekly limit, such as **Fable**, its account
 card shows a separate bar and reset time. This is that model's allowance, not the

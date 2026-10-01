@@ -308,3 +308,137 @@ assert.equal(nodes(rendered).filter(n => n.tagName === 'IMG').length, 0);
 assert.match(rendered.textContent, /Reset time unavailable.*Pace unavailable/);
 assert.equal(posts().length, 0);
 """)
+
+
+@pytest.mark.parametrize("percent", [0, 0.01, 0.49, 1])
+def test_unused_session_requires_exact_zero_before_display_rounding(clock, percent):
+    windows = _claude_windows({
+        "five_hour": {"pct": percent, "resets_at": "2026-09-25T13:00:00Z"},
+        "seven_day": {"pct": 0},
+        "scoped": [{"name": "Fable", "pct": 0}],
+    }, NOW)
+    assert windows[0].get("unusedSession", False) is (percent == 0)
+    assert windows[0]["usedPercent"] == round(percent)
+    assert windows[0]["resetAt"] == NOW + 3600
+    assert "unusedSession" not in windows[1]
+    assert "unusedSession" not in windows[2]
+
+
+@pytest.mark.parametrize("last_error", [None, "http-429", "timeout"])
+def test_claude_retains_last_good_usage_but_exposes_failed_updates(clock, last_error):
+    claude = Claude()
+    usage = UsageEntry(
+        last_good={"seven_day": {"pct": 59, "resets_at": "2026-09-29T12:00:00Z"}},
+        fetched_at=NOW - 480, last_error=last_error,
+    )
+    claude.accounts = [SimpleNamespace(
+        usage=usage, number="1", email="sample@example.test", alias="Work", display_tag="Pro",
+        is_active=True, disabled=False, kind="oauth", switchable=True,
+    )]
+    state = DashboardState(claude)
+    try:
+        account = state._collect_claude()["accounts"][0]
+        assert account["usageFailed"] is bool(last_error)
+        assert account["sentinel"] is None
+        assert account["percent"] == 59
+        assert account["windows"][0]["observedAt"] == NOW - 480
+        assert state.actions.auto.status("claude")["mode"] == "stopped"
+        assert claude.calls == []
+    finally:
+        state.close()
+
+
+def test_weekly_pace_retains_a_dated_comparison_after_normal_idle_polling_gaps(node):
+    run_page(node, r"""
+let now = Date.UTC(2026, 8, 25, 12) / 1000;
+Date.now = () => now * 1000;
+const observedAt = now - 480;
+for (const label of ['7d', 'Fable · 7d']) {
+  const window = {label, usedPercent: 59, windowSeconds: 604800, observedAt, resetAt: observedAt + 604800 * 0.2};
+  const timing = quotaTiming(window);
+  assert.equal(timing.pace, 'Below even pace · at last report');
+  assert.equal(timing.report, 'Usage report · 8m ago');
+  assert.match(timing.hint, /59% used after 80%.*older snapshot, not current usage pace/);
+  const rendered = meter(window);
+  assert.match(rendered.textContent, /Below even pace · at last report.*Usage report · 8m ago/);
+  assert.equal(quotaTiming({...window, usedPercent: 100}).pace, 'Above even pace · at last report');
+  assert.equal(quotaTiming({...window, usedPercent: 80}).pace, 'Near even pace · at last report');
+  assert.equal(quotaTiming({...window, usedPercent: 0}).pace, 'Below even pace · at last report');
+  assert.doesNotMatch(rendered.textContent, /session/i);
+  now += 3600;
+  assert.equal(quotaTiming(window).hint, timing.hint);
+  assert.equal(quotaTiming(window).report, 'Usage report · 1h 8m ago');
+  now -= 3600;
+}
+assert.equal(posts().length, 0);
+""")
+
+
+def test_weekly_history_is_explicit_at_the_freshness_boundary_and_expires_at_reset(node):
+    run_page(node, r"""
+let now = Date.UTC(2026, 8, 25, 12) / 1000;
+Date.now = () => now * 1000;
+const window = {label: '7d', usedPercent: 59, windowSeconds: 604800, observedAt: now, resetAt: now + 86400};
+now += 300;
+assert.equal(quotaTiming(window).pace, 'Below even pace');
+assert.equal(quotaTiming(window).report, null);
+now += 1;
+assert.equal(quotaTiming(window).pace, 'Below even pace · at last report');
+assert.equal(quotaTiming(window).report, 'Usage report · 5m ago');
+now = window.resetAt;
+assert.equal(quotaTiming(window).pace, 'Pace unavailable');
+assert.match(meter(window).textContent, /Reported reset.*Refresh usage for the new window/);
+now += 1;
+assert.equal(quotaTiming(window).pace, 'Pace unavailable');
+""")
+
+
+def test_historical_weekly_pace_keeps_timing_and_failure_guards(node):
+    run_page(node, r"""
+const now = Date.UTC(2026, 8, 25, 12) / 1000;
+Date.now = () => now * 1000;
+const window = {label: '7d', usedPercent: 59, windowSeconds: 604800, observedAt: now - 480, resetAt: now + 86400};
+for (const override of [{observedAt: null}, {observedAt: now + 1}, {observedAt: 0}, {observedAt: NaN}, {observedAt: Infinity}, {windowSeconds: null}, {windowSeconds: 18000}, {resetAt: null}, {resetAt: now}, {resetAt: now - 1}, {resetAt: now + 604800}, {usedPercent: null}, {usedPercent: NaN}, {usedPercent: -1}, {usedPercent: 101}]) {
+  assert.equal(quotaTiming({...window, ...override}).pace, 'Pace unavailable', JSON.stringify(override));
+}
+for (const provider of ['claude', 'codex']) {
+  for (const flags of [{error: 'Unavailable'}, {sentinel: 'foreign credential'}, {onCredits: true}, {usageFailed: true}]) {
+    const account = card(provider, {number: '9', windows: [window], ...flags}, apiState[provider]);
+    assert.match(account.textContent, /Pace unavailable.*Usage report · 8m ago/);
+    assert.doesNotMatch(account.textContent, /Below even pace/);
+    if (flags.usageFailed) assert.match(account.textContent, /Usage update failed; showing the last report/);
+  }
+  const missing = card(provider, {number: '9', usageFailed: true}, apiState[provider]);
+  assert.match(missing.textContent, /Usage update failed; no quota report is available/);
+  assert.doesNotMatch(missing.textContent, /showing the last report/);
+}
+assert.equal(posts().length, 0);
+""")
+
+
+def test_zero_claude_session_is_neutral_and_does_not_claim_a_stopped_clock(node):
+    run_page(node, r"""
+const now = Date.UTC(2026, 8, 25, 12) / 1000;
+Date.now = () => now * 1000;
+const window = {label: '5h', usedPercent: 0, unusedSession: true, windowSeconds: 18000, observedAt: now, resetAt: null};
+const unused = meter(window);
+assert.match(unused.textContent, /100% left.*Session clock not reported.*No session usage reported/);
+assert.doesNotMatch(unused.textContent, /unavailable|not started|stopped/i);
+const reported = meter({...window, resetAt: now + 9000});
+assert.match(reported.textContent, /Resets.*No session usage reported/);
+assert.equal(nodes(reported).find(n => n.tagName === 'TIME').dateTime, new Date((now + 9000) * 1000).toISOString());
+assert.match(quotaTiming({...window, resetAt: now + 9000}).hint, /does not mean the session clock has stopped/);
+const old = meter({...window, observedAt: now - 480});
+assert.match(old.textContent, /No session usage at last report.*Usage report · 8m ago/);
+const expired = meter({...window, resetAt: now - 1});
+assert.match(expired.textContent, /Reported reset.*Refresh usage for the new window/);
+for (const override of [{unusedSession: false}, {unusedSession: 'true'}, {usedPercent: 0.1}, {windowSeconds: 604800}, {observedAt: null}, {observedAt: now + 1}]) {
+  assert.doesNotMatch(meter({...window, ...override}).textContent, /No session usage|Session clock not reported/);
+}
+for (const flags of [{error: 'Unavailable'}, {sentinel: 'foreign credential'}, {usageFailed: true}]) {
+  const failed = card('claude', {number: '9', windows: [window], ...flags}, apiState.claude);
+  assert.doesNotMatch(failed.textContent, /No session usage|Session clock not reported/);
+  assert.match(failed.textContent, /Pace unavailable/);
+}
+assert.equal(posts().length, 0);
+""")
