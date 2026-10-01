@@ -299,15 +299,24 @@ function quotaTiming(w, allowPace = true) {
   if (date && numeric(w.observedAt) && numeric(w.windowSeconds) && w.windowSeconds > 0 && w.resetAt - w.observedAt > w.windowSeconds) date = null;
   const remaining = date ? w.resetAt - now : null;
   let pace = "Pace unavailable";
-  let hint = "Even-pace guidance needs a usage report from the last five minutes, a known window length, and a reset time within that window. It is not a forecast or a switching rule.";
+  let hint = "Even-pace guidance needs a successful usage report, a known window length, and a reset time within that window. It is not a forecast or a switching rule.";
+  const reported = numeric(w.observedAt) && w.observedAt > 0 && now >= w.observedAt;
+  const unusedSession = allowPace && reported && w.unusedSession === true && w.windowSeconds === 18000 && w.usedPercent === 0 && (!date || remaining > 0);
   const elapsed = w.observedAt - (w.resetAt - w.windowSeconds);
-  if (allowPace && date && remaining > 0 && numeric(w.observedAt) && w.observedAt > 0 && now >= w.observedAt && now - w.observedAt <= 300 && numeric(w.windowSeconds) && w.windowSeconds > 0 && elapsed > 0 && elapsed < w.windowSeconds && numeric(w.usedPercent) && w.usedPercent >= 0 && w.usedPercent <= 100) {
+  if (unusedSession) {
+    pace = "No session usage reported";
+    hint = date
+      ? "Claude reported zero 5-hour usage. The reported reset is shown; zero usage does not mean the session clock has stopped."
+      : "Claude reported zero 5-hour usage without a usable reset time. A session start has not been confirmed; no countdown is assumed.";
+  } else if (allowPace && reported && date && remaining > 0 && numeric(w.windowSeconds) && w.windowSeconds > 0 && elapsed > 0 && elapsed < w.windowSeconds && numeric(w.usedPercent) && w.usedPercent >= 0 && w.usedPercent <= 100) {
     const even = elapsed / w.windowSeconds * 100;
     const difference = w.usedPercent - even;
     pace = Math.abs(difference) <= 5 ? "Near even pace" : difference > 0 ? "Above even pace" : "Below even pace";
-    hint = `${w.usedPercent}% used after ${Math.round(even)}% of this window had elapsed at the last report. Within five percentage points is near even pace. This is a simple guide, not a forecast or a switching rule.`;
+    hint = `${w.usedPercent}% used with ${Math.round(even)}% of the window elapsed when measured. Within five percentage points is near even pace. This is a simple guide, not a forecast or a switching rule.`;
+  } else if (!allowPace) {
+    hint = "Pace guidance is hidden for failed, blocked, or paid-credit reports. Last reported quota may still be shown.";
   }
-  return {date, remaining, pace, hint};
+  return {date, remaining, pace, hint, unusedSession};
 }
 
 function headroom(a) {
@@ -375,7 +384,7 @@ function meter(w, allowPace = true) {
     reset.appendChild(time);
     if (timing.remaining <= 0) reset.appendChild(el("span", "reset-passed", "Refresh usage for the new window."));
   } else {
-    reset.textContent = "Reset time unavailable";
+    reset.textContent = timing.unusedSession ? "Session clock not reported" : "Reset time unavailable";
   }
   const pace = el("span", "quota-pace", timing.pace);
   pace.title = timing.hint;
@@ -404,15 +413,15 @@ function card(provider, a, data) {
   const ws = a.windows || [];
   if (ws.length) {
     const ms = el("div", "meters");
-    ws.forEach((w) => ms.appendChild(meter(w, !a.error && !a.sentinel && !a.onCredits)));
+    ws.forEach((w) => ms.appendChild(meter(w, !a.error && !a.sentinel && !a.onCredits && !a.usageFailed)));
     c.appendChild(ms);
   }
 
   const left = headroom(a);
-  if (a.error || (a.sentinel && a.sentinel !== "api key")) {
+  if (a.error || (a.sentinel && a.sentinel !== "api key") || a.usageFailed) {
     const s = el("div", "state out");
     s.appendChild(el("span", "glyph", "●"));
-    s.appendChild(el("span", null, a.error || a.sentinel));
+    s.appendChild(el("span", null, a.error || a.sentinel || (ws.length ? "Usage update failed; showing the last report." : "Usage update failed; no quota report is available.")));
     c.appendChild(s);
   } else if (a.sentinel === "api key") {
     c.appendChild(el("div", "state", "API key · subscription quota is not available for this account."));

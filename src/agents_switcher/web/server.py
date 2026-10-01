@@ -116,6 +116,8 @@ def _claude_windows(last_good: dict | None, observed_at: float | None = None) ->
             except (ValueError, OSError, OverflowError):
                 pass
         window = _quota_window(label, round(percent), seconds, stamp, None, observed_at)
+        if label == "5h" and percent == 0:
+            window["unusedSession"] = True
         if model is not None:
             window["scope"] = "model"
         windows.append(window)
@@ -210,6 +212,7 @@ class DashboardState:
                     "kind": account.kind,
                     "percent": None if percent is None else round(percent),
                     "sentinel": usage.sentinel if usage else None,
+                    "usageFailed": bool(usage and usage.last_error),
                     "switchable": account.switchable,
                 })
             return {
