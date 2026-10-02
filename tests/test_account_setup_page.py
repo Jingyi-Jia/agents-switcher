@@ -53,10 +53,6 @@ assert.equal(apply.disabled, false);
 assert.equal(apply.attributes['aria-label'], active ? 'Use saved login for account 1' : 'Switch to account 1');
 assert.match($('codex').textContent, /Saved login awaiting activation/);
 assert.equal(codexEnrollmentFlow, null);
-await apply.click();
-assert.equal($('codex-dialog').open, true);
-assert.match($('codex-dialog-title').textContent, active ? /Use saved login/ : /Switch to/);
-assert.match($('codex-dialog-description').textContent, /already saved.*No new sign-in/);
 assert.equal(posts().length, 0);
 fetchHandler = async path => {
   if (path === '/api/switch') {
@@ -65,7 +61,8 @@ fetchHandler = async path => {
   }
   return {ok: true, json: async () => path.startsWith('/api/state') ? apiState : path === '/api/codex/status' ? codexStatus : response};
 };
-await $('codex-continue').click(); await settle();
+await apply.click(); await settle();
+assert.match($('codex-dialog-title').textContent, active ? /Use saved login/ : /Switch to/);
 assert.deepEqual(posts().map(call => [call.path, call.payload]), [
   ['/api/switch', {provider: 'codex', number: '1', useSavedLogin: true}],
 ]);
@@ -423,7 +420,11 @@ assert.equal(posts().filter(call => call.path.endsWith('/complete')).length, 1);
 await $('codex-login-next').click();
 assert.equal($('codex-login-dialog').open, false);
 assert.match($('codex-dialog-title').textContent, /Use saved login for codex@example.com/);
-assert.equal(posts().at(-1).path, '/api/codex/login/cancel');
+assert.deepEqual(posts().slice(-2).map(call => [call.path, call.payload]), [
+  ['/api/codex/login/cancel', {sessionId: 'synthetic-session', confirm: true}],
+  ['/api/switch', {provider: 'codex', number: '1', useSavedLogin: true}],
+]);
+assert.equal($('codex-dialog').open, false);
 """)
 
 
@@ -601,6 +602,7 @@ button('codex', 'Remove').click();
 opener.click();
 assert.equal(codexEnrollmentFlow, null);
 $('dialog-cancel').click(); await settle();
+codexStatus.running = null;
 await button('codex', 'Switch').click();
 opener.click();
 assert.equal(codexEnrollmentFlow, null);

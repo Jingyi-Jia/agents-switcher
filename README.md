@@ -319,9 +319,9 @@ prompt rather than putting a secret in shell history. Experimental
 terminal profile; it does not support API-key accounts and is not Desktop
 profile switching. See `agent-switch run --help` for isolation and sharing options.
 
-### Try Claude Desktop profiles (Beta)
+### Claude Desktop profiles
 
-Use the **Claude Desktop — Profiles · Beta** panel in the app or browser
+Use the **Claude Desktop — Profiles** panel in the app or browser
 dashboard. It is not the Claude Code account list, and **Add existing login** does
 not import a Desktop session.
 
@@ -335,8 +335,8 @@ not import a Desktop session.
    Those checks block opening profiles, not creating them.
 3. Fully **quit Claude Desktop**. Closing its window may leave it running. Once
    the app detects that Claude has quit, choose **Open** beside the profile.
-   The first-use acknowledgement is remembered; every launch is still a deliberate
-   action, and the current process state is checked again before opening.
+   The first-use acknowledgement is remembered; later launches open with one click.
+   Every launch remains deliberate, and the current process state is checked again before opening.
 4. Sign in directly inside Claude. Repeat with another empty profile for another
    account. To return to a saved profile, quit Claude first and open that profile
    from Agent Switch. **Verify the selected account inside Claude before working**;
@@ -435,10 +435,11 @@ For every switch:
 2. Run `agent-switch codex switch work` (or select a saved account in Agent Switch).
 3. Reopen Codex and verify the account before continuing work.
 
-The app presents a neutral guided step when Codex needs to close, rather than
-reporting a completed switch. On supported macOS installations, **Quit, switch
-& reopen** requests a normal quit of the official Codex app, waits for confirmed
-exit, changes the login, and requests a relaunch. It never force-quits the app or
+If Codex is already quit, selecting **Switch** changes the saved login without
+another confirmation. Otherwise, the app asks you to close the remaining clients;
+an unknown process state still blocks switching. On supported macOS installations,
+**Quit & switch** requests a normal quit of the official Codex app, waits for confirmed
+exit, changes the login, and reopens Codex. It never force-quits the app or
 terminates terminal sessions. Close any terminal/background Codex sessions
 yourself; if process detection fails, switching remains blocked. Unsupported app
 locations and custom Codex-home configurations use the manual quit-first flow.
@@ -603,6 +604,21 @@ stop it through the tool that installed it before enabling another controller.
 Codex backups occupy the `codex/` subdirectory. Saved macOS Claude credentials
 use the separate `agents-switcher` Keychain service; the official provider's live
 credential service is unchanged.
+
+Replacing or updating the Agent Switch app on the same computer and OS user
+keeps this data: saved Codex and Claude Code accounts, aliases, settings, and
+named Claude Desktop profile directories. Quit Agent Switch before replacing
+it; closing its window only hides it. Replace the app, not this data directory,
+and avoid uninstall/cleanup tools that remove application support data. A new
+computer or OS user does not automatically receive these local profiles.
+The app reloads entries previously saved in its current data directory
+automatically; you do not need to add those accounts or profiles again.
+
+If saved entries disappear after an update, check **Settings → Saved account
+storage** before adding them again. Confirm that you are using the same OS user
+and storage location. Entries that remain listed but require sign-in have a
+different problem: replacing Agent Switch cannot restore a login revoked by the
+provider, and Claude Desktop owns authentication inside its named profiles.
 
 On an upgrade from the shared-store layout, open **Settings → Saved account
 storage → Import previous accounts…**. Import is optional: you can start fresh
