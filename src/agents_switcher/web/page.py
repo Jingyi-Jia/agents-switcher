@@ -69,7 +69,7 @@ PAGE_HTML = r"""<!doctype html>
     <details class="profile-about"><summary>About profiles</summary>
       <p id="claude-desktop-notice"></p>
       <p>Profiles are local app data, not verified accounts. Names and optional email labels are entered by you; they do not verify a signed-in identity. Confirm the selected account in Claude. Signed-in persistence on Mac and Code/Cowork are not fully verified. Relocated profiles disable local Claude-in-Chrome pairing.</p>
-      <p>Fully quit Claude before opening or deleting a profile. The Dock normally opens the usual default profile, which cannot be renamed or deleted here. No CLI token import, cookie copying, forced quit, or automatic profile switching is provided.</p>
+      <p>Fully quit Claude before opening a profile. The Dock normally opens the usual default profile, which cannot be renamed or removed here. Removing a named profile keeps its local data so it can be restored. No CLI token import, cookie copying, forced quit, or automatic profile switching is provided.</p>
     </details>
     <p class="notice" id="claude-desktop-status" role="status"></p>
     <div class="actions" id="claude-desktop-actions"></div>
@@ -261,16 +261,23 @@ function safeMessage(message, secret) {
   return text;
 }
 
-function toast(message, ember, persistent = false) {
+function toast(message, ember, persistent = false, action = null) {
   const n = $("toast");
   clearTimeout(toastTimer);
   const dismiss = el("button", "dismiss-toast");
   dismiss.type = "button";
   dismiss.setAttribute("aria-label", "Dismiss notification");
   dismiss.onclick = () => { n.className = ""; };
-  n.replaceChildren(el("span", null, safeMessage(message)), dismiss);
+  const parts = [el("span", null, safeMessage(message))];
+  if (action) {
+    const run = actionButton(action.label, () => action.run(run));
+    run.className = "toast-action";
+    parts.push(run);
+  }
+  n.replaceChildren(...parts, dismiss);
   n.className = "show" + (ember ? " ember" : "");
-  if (!ember && !persistent) toastTimer = setTimeout(() => { n.className = ""; }, 5000);
+  // A notice that offers an action (such as Undo) stays until dismissed, so it never vanishes mid-reach.
+  if (!ember && !persistent && !action) toastTimer = setTimeout(() => { n.className = ""; }, 5000);
 }
 
 function duration(seconds) {
@@ -547,24 +554,14 @@ function renderDesktopProfiles(data) {
   const status = $("claude-desktop-status");
   status.className = openBlocked ? "notice launch-blocked" : "notice";
   status.textContent = [openReason,
-    data.canCreate && !data.available ? "You can still create empty profiles; creating does not launch Claude." : ""].filter(Boolean).join(" ");
+    data.canCreate && !data.available ? "You can still create empty profiles; creating does not launch Claude." : "",
+    data.removedError || ""].filter(Boolean).join(" ");
   status.hidden = !status.textContent;
   block(desktopProfileUI.create, !(data.canCreate ?? data.available));
   block(desktopProfileUI.default, openBlocked);
   desktopProfileUI.default.title = openBlocked ? openReason : "";
   desktopProfileUI.default.setAttribute("aria-describedby", "claude-desktop-status");
   const canManage = data.canManage ?? data.canCreate ?? data.available;
-  document.querySelectorAll("[data-action]").forEach((button) => {
-    if (button.dataset.profileDelete === undefined) return;
-    const exists = (data.profiles || []).some((profile) => profile.id === button.dataset.profileDelete);
-    const previousReason = button.title;
-    block(button, !data.canDelete || !exists);
-    button.title = !exists ? "This profile is no longer in the saved list." : !data.canDelete ? data.deleteError || "Fully quit Claude Desktop, then Refresh before deleting a profile." : "";
-    if (button === $("dialog-submit") && !busy && ($("dialog-feedback").hidden || $("dialog-feedback").textContent === previousReason)) {
-      $("dialog-feedback").textContent = button.title;
-      $("dialog-feedback").hidden = !button.disabled;
-    }
-  });
   const host = $("claude-desktop-profiles");
   const signature = JSON.stringify([data.profiles, openBlocked, openReason, canManage]);
   if (desktopProfileUI.signature === signature) return;
@@ -644,10 +641,76 @@ function createDesktopProfile(opener) {
       if (!label || label.length > 64 || !(state.claudeDesktop?.canCreate ?? state.claudeDesktop?.available)) return false;
       if (emailLabel.length > 320 || !fields.email.reportValidity()) return false;
       if (!await saveProfileConsent()) return false;
-      const success = await act("/api/claude-desktop/create", {name: label, ...(emailLabel ? {emailLabel} : {}), confirm: true}, button, "creating…");
-      if (success) toast("Profile created. Choose Open to sign in to Claude.");
-      return success;
+      // A name already in use can't be restored under either; let the server report the duplicate.
+      const taken = (state.claudeDesktop?.profiles || []).some((item) => item.name.toLowerCase() === label.toLowerCase());
+      const removed = taken ? null : removedDesktopProfile(label, emailLabel);
+      if (removed) {
+        offerDesktopRestore(removed, label, emailLabel, opener);
+        return false;
+      }
+      return requestDesktopProfile(label, emailLabel, button);
     },
+  });
+}
+
+async function requestDesktopProfile(name, emailLabel, button) {
+  const success = await act("/api/claude-desktop/create", {name, ...(emailLabel ? {emailLabel} : {}), confirm: true}, button, "creating…");
+  if (success) toast("Profile created. Choose Open to sign in to Claude.");
+  return success;
+}
+
+// A removed profile is matched by its email label; one removed without an email label
+// can only be recognized by its name. The server lists the newest removal first.
+function removedDesktopProfile(name, emailLabel) {
+  const removed = Array.isArray(state.claudeDesktop?.removedProfiles) ? state.claudeDesktop.removedProfiles : [];
+  const email = emailLabel.toLowerCase();
+  return removed.find((item) => item.emailLabel
+    ? !!email && item.emailLabel.toLowerCase() === email
+    : item.name.toLowerCase() === name.toLowerCase()) || null;
+}
+
+function removedOn(timestamp) {
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? " on " + date.toLocaleDateString(undefined, {year: "numeric", month: "short", day: "numeric"}) : "";
+}
+
+function offerDesktopRestore(removed, name, emailLabel, opener) {
+  confirmAction({
+    title: `Restore ${removed.name}?`,
+    description: `You removed a profile with the same ${removed.emailLabel ? "email label" : "name"}${removedOn(removed.removedAt)}. Restoring brings back its local Claude history and sign-in as ${name}.`,
+    label: "Restore history", opener, kind: "profile", replace: true,
+    fields: (host) => {
+      const fresh = actionButton("Start fresh", async () => {
+        if (await requestDesktopProfile(name, emailLabel, fresh)) $("action-dialog").close();
+      });
+      host.append(el("p", "hint", "Start fresh creates an empty profile and keeps the removed profile for later."), fresh);
+    },
+    submit: (button) => restoreDesktopProfile(removed.id, name, emailLabel, button),
+  });
+  $("dialog-submit").focus();
+}
+
+async function restoreDesktopProfile(profileId, name, emailLabel, button) {
+  const success = await act("/api/claude-desktop/restore", {profileId, name, emailLabel, confirm: true}, button, "Restoring…");
+  if (success) toast(`Restored ${name} with its Claude history. Choose Open to continue.`);
+  return success;
+}
+
+async function removeDesktopProfile(profileId, button) {
+  const data = state.claudeDesktop;
+  const profile = data?.profiles?.find((item) => item.id === profileId);
+  if (!profile) {
+    $("dialog-feedback").textContent = "This profile is no longer in the saved list.";
+    $("dialog-feedback").hidden = false;
+    return;
+  }
+  if (!(data.canManage ?? data.canCreate ?? data.available)) return;
+  if (!await act("/api/claude-desktop/remove", {profileId, confirm: true}, button, "Removing…")) return;
+  dialogOpener = desktopProfileUI.create;
+  if ($("action-dialog").open) $("action-dialog").close();
+  toast(`Removed ${profile.name}. Its Claude history stays on this computer.`, false, false, {
+    label: "Undo",
+    run: (undo) => restoreDesktopProfile(profile.id, profile.name, profile.emailLabel, undo),
   });
 }
 
@@ -661,14 +724,11 @@ function manageDesktopProfile(profileId, opener) {
     label: "Save changes", opener, kind: "profile",
     fields: (host) => {
       fields = desktopProfileFields(host, profile);
-      const danger = el("div", "profile-danger");
-      const remove = actionButton("Delete profile…", () => deleteDesktopProfile(profileId, opener));
-      remove.className = "danger";
-      remove.dataset.profileDelete = profileId;
-      block(remove, !data.canDelete);
-      remove.title = !data.canDelete ? data.deleteError || "Fully quit Claude Desktop, then Refresh before deleting a profile." : "";
-      danger.append(el("p", "hint", "Deleting removes this profile’s local Claude data. Your usual profile and provider account are not deleted."), remove);
-      host.appendChild(danger);
+      const removal = el("div", "profile-removal");
+      const remove = actionButton("Remove profile", () => removeDesktopProfile(profileId, remove));
+      const match = profile.emailLabel ? "the same email label" : "the same name";
+      removal.append(el("p", "hint", `Removing takes this profile off the list without deleting anything. Its local Claude history and sign-in stay on this computer; add a profile with ${match} to bring them back.`), remove);
+      host.appendChild(removal);
     },
     submit: async (button) => {
       const current = state.claudeDesktop;
@@ -677,33 +737,6 @@ function manageDesktopProfile(profileId, opener) {
       if (!name || name.length > 64 || emailLabel.length > 320 || !fields.email.reportValidity()) return false;
       const success = await act("/api/claude-desktop/update", {profileId, name, emailLabel, confirm: true}, button, "Saving…");
       if (success) dialogOpener = Array.from(document.querySelectorAll("[data-action]")).find((item) => item.dataset.profileFocus === "details:" + profileId) || desktopProfileUI.refresh;
-      return success;
-    },
-  });
-}
-
-function deleteDesktopProfile(profileId, opener) {
-  const data = state.claudeDesktop;
-  const profile = data?.profiles?.find((item) => item.id === profileId);
-  if (!profile || data.canDelete !== true) return;
-  confirmAction({
-    title: `Delete ${profile.name}?`,
-    description: "This removes this profile and deletes its local Claude data, including its local sign-in and session data. It does not delete your Claude account, cloud data, or the usual default profile. This cannot be undone here.",
-    label: "Delete profile", opener, kind: "profile", replace: true, danger: true,
-    fields: (host) => {
-      $("dialog-submit").dataset.profileDelete = profileId;
-      const check = el("label", "check");
-      const input = el("input");
-      Object.assign(input, {type: "checkbox", required: true});
-      input.dataset.lock = "";
-      check.append(input, el("span", null, "Delete this profile’s local data."));
-      host.appendChild(check);
-    },
-    submit: async (button) => {
-      if (state.claudeDesktop?.canDelete !== true || !state.claudeDesktop.profiles?.some((item) => item.id === profileId)) return false;
-      const success = await act("/api/claude-desktop/delete", {profileId, confirm: true}, button, "Deleting…");
-      dialogOpener = desktopProfileUI.create;
-      if (!state.claudeDesktop?.profiles?.some((item) => item.id === profileId)) block(button, true);
       return success;
     },
   });
@@ -988,7 +1021,6 @@ function confirmAction({title, description, label, opener, submit, fields, kind 
   $("dialog-submit").textContent = label;
   $("dialog-submit").className = danger ? "primary danger" : "primary";
   $("dialog-submit").title = "";
-  delete $("dialog-submit").dataset.profileDelete;
   block($("dialog-submit"), false);
   $("dialog-feedback").hidden = true;
   $("dialog-feedback").textContent = "";

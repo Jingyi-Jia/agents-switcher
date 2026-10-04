@@ -8,8 +8,8 @@ from tests.test_web_page_actions import node, run_page
 
 PROFILES = r"""
 apiState.preferences = {theme: 'system', profileNoticeVersion: 1};
-apiState.claudeDesktop = {available: true, canCreate: true, canManage: true, canDelete: true,
-  supported: true, installed: true, running: false,
+apiState.claudeDesktop = {available: true, canCreate: true, canManage: true,
+  supported: true, installed: true, running: false, removedProfiles: [],
   profiles: [{id: 'a'.repeat(32), name: 'Work', emailLabel: 'work@example.test'}]};
 await load();
 const profileId = 'a'.repeat(32);
@@ -72,84 +72,160 @@ assert.equal(posts().at(-1).path, '/api/claude-desktop/create');
 """)
 
 
-def test_deletion_requires_its_own_confirmation_and_restores_focus(node):
+REMOVED = r"""
+apiState.claudeDesktop.removedProfiles = [
+  {id: 'b'.repeat(32), name: 'Old lab', emailLabel: 'Lab@Example.test', removedAt: '2026-10-01T10:00:00Z'},
+  {id: 'c'.repeat(32), name: 'Older lab', emailLabel: 'lab@example.test', removedAt: '2026-09-01T10:00:00Z'},
+  {id: 'd'.repeat(32), name: 'Personal', emailLabel: '', removedAt: '2026-08-01T10:00:00Z'}];
+await load();
+const startCreate = (name, email) => {
+  button('claude-desktop-profiles', 'New profile').click();
+  nodes('dialog-fields').find(n => n.type === 'text').value = name;
+  nodes('dialog-fields').find(n => n.type === 'email').value = email;
+  return submitDialog();
+};
+"""
+
+
+def test_remove_takes_effect_at_once_and_undo_restores_the_same_labels(node):
+    run_page(node, PROFILES + r"""
+apiState.claudeDesktop.running = true;
+await load();
+details().click();
+assert.match($('dialog-fields').textContent, /without deleting anything.*stay on this computer.*same email label/);
+const remove = button('dialog-fields', 'Remove profile');
+assert.equal(remove.disabled, false);
+assert.doesNotMatch(remove.className, /danger/);
+const record = {id: profileId, name: 'Work', emailLabel: 'work@example.test', removedAt: '2026-10-03T21:00:00Z'};
+fetchHandler = async path => {
+  if (path === '/api/claude-desktop/remove') {
+    apiState.claudeDesktop.profiles = []; apiState.claudeDesktop.removedProfiles = [record];
+  }
+  if (path === '/api/claude-desktop/restore') {
+    apiState.claudeDesktop.profiles = [{id: profileId, name: 'Work', emailLabel: 'work@example.test'}];
+    apiState.claudeDesktop.removedProfiles = [];
+  }
+  return {ok: true, json: async () => path.startsWith('/api/state') ? apiState : response};
+};
+await remove.click(); await settle();
+assert.deepEqual(posts().map(c => c.path), ['/api/claude-desktop/remove']);
+assert.deepEqual(posts()[0].payload, {profileId, confirm: true});
+assert.equal($('action-dialog').open, false);
+assert.equal(details(), undefined);
+assert.equal(document.activeElement, button('claude-desktop-profiles', 'New profile'));
+assert.match($('toast').className, /show/);
+assert.match($('toast').textContent, /Removed Work.*stays on this computer/);
+await button('toast', 'Undo').click(); await settle();
+assert.equal(posts().at(-1).path, '/api/claude-desktop/restore');
+assert.deepEqual(posts().at(-1).payload, {profileId, name: 'Work', emailLabel: 'work@example.test', confirm: true});
+assert.match($('toast').textContent, /Restored Work/);
+assert.equal(button('toast', 'Undo'), undefined);
+assert.ok(details());
+""")
+
+
+def test_a_failed_removal_keeps_the_dialog_open_without_undo(node):
     run_page(node, PROFILES + r"""
 details().click();
-button('dialog-fields', 'Delete profile…').click();
-assert.match($('dialog-description').textContent, /local sign-in and session data.*does not delete your Claude account.*cannot be undone/);
-assert.match($('dialog-submit').className, /danger/);
-await submitDialog();
+fetchHandler = async path => ({
+  ok: path !== '/api/claude-desktop/remove',
+  json: async () => path.startsWith('/api/state') ? apiState : {ok: false, message: 'The profile registry could not be saved. Nothing was removed.'},
+});
+await button('dialog-fields', 'Remove profile').click(); await settle();
+assert.equal($('action-dialog').open, true);
+assert.equal($('dialog-feedback').hidden, false);
+assert.match($('dialog-feedback').textContent, /Nothing was removed/);
+assert.match($('toast').className, /ember/);
+assert.equal(button('toast', 'Undo'), undefined);
+assert.ok(details());
+""")
+
+
+def test_adding_a_removed_email_offers_its_history_by_default(node):
+    run_page(node, PROFILES + REMOVED + r"""
+await startCreate('Lab', ' lab@example.test '); await settle();
 assert.equal(posts().length, 0);
-$('dialog-cancel').click(); await settle();
-assert.equal(document.activeElement, details());
-details().click(); button('dialog-fields', 'Delete profile…').click();
-nodes('dialog-fields').find(n => n.type === 'checkbox').checked = true;
+assert.equal($('action-dialog').open, true);
+assert.match($('dialog-title').textContent, /Old lab/);
+assert.match($('dialog-description').textContent, /same email label.*2026.*as Lab/);
+assert.equal($('dialog-submit').textContent, 'Restore history');
+assert.doesNotMatch($('dialog-submit').className, /danger/);
+assert.equal(document.activeElement, $('dialog-submit'));
 fetchHandler = async path => {
-  if (path === '/api/claude-desktop/delete') apiState.claudeDesktop.profiles = [];
+  if (path === '/api/claude-desktop/restore') {
+    apiState.claudeDesktop.profiles.push({id: 'b'.repeat(32), name: 'Lab', emailLabel: 'lab@example.test'});
+  }
   return {ok: true, json: async () => path.startsWith('/api/state') ? apiState : response};
 };
 await submitDialog(); await settle();
-assert.deepEqual(posts().map(c => c.path), ['/api/claude-desktop/delete']);
-assert.deepEqual(posts()[0].payload, {profileId, confirm: true});
+assert.deepEqual(posts().map(c => c.path), ['/api/claude-desktop/restore']);
+assert.deepEqual(posts()[0].payload, {profileId: 'b'.repeat(32), name: 'Lab', emailLabel: 'lab@example.test', confirm: true});
 assert.equal($('action-dialog').open, false);
-assert.equal(document.activeElement, button('claude-desktop-profiles', 'New profile'));
+assert.match($('toast').textContent, /Restored Lab/);
 """)
 
 
-@pytest.mark.parametrize("mode", ["running", "unknown", "removed"])
-def test_a_later_readiness_change_blocks_an_open_delete_confirmation(node, mode):
-    run_page(node, PROFILES + "const mode = '" + mode + "';" + r"""
-details().click(); button('dialog-fields', 'Delete profile…').click();
-nodes('dialog-fields').find(n => n.type === 'checkbox').checked = true;
-if (mode === 'removed') apiState.claudeDesktop.profiles = [];
-else {
-  apiState.claudeDesktop.running = mode === 'running' ? true : null;
-  apiState.claudeDesktop.canDelete = false;
-  apiState.claudeDesktop.deleteError = 'Confirm Claude is quit before deleting.';
-}
-await load();
-assert.equal($('dialog-submit').disabled, true);
-assert.equal($('dialog-feedback').hidden, false);
-assert.match($('dialog-feedback').textContent, mode === 'removed' ? /no longer in the saved list/ : /Confirm Claude is quit/);
-await submitDialog();
+def test_start_fresh_creates_an_empty_profile_and_cancel_sends_nothing(node):
+    run_page(node, PROFILES + REMOVED + r"""
+await startCreate('Lab', 'lab@example.test'); await settle();
+assert.match($('dialog-fields').textContent, /keeps the removed profile/);
+$('dialog-cancel').click(); await settle();
 assert.equal(posts().length, 0);
-if (mode !== 'removed') {
-  apiState.claudeDesktop.running = false;
-  apiState.claudeDesktop.canDelete = true;
-  await load();
-  assert.equal($('dialog-submit').disabled, false);
-  assert.equal($('dialog-feedback').hidden, true);
-}
-$('dialog-cancel').click(); await settle();
-button('claude-desktop-profiles', 'New profile').click();
-assert.equal($('dialog-submit').disabled, false);
-assert.equal($('dialog-submit').title, '');
-assert.doesNotMatch($('dialog-submit').className, /danger/);
+assert.equal(document.activeElement, button('claude-desktop-profiles', 'New profile'));
+await startCreate('Lab', 'lab@example.test'); await settle();
+await button('dialog-fields', 'Start fresh').click(); await settle();
+assert.deepEqual(posts().map(c => c.path), ['/api/claude-desktop/create']);
+assert.deepEqual(posts()[0].payload, {name: 'Lab', emailLabel: 'lab@example.test', confirm: true});
+assert.equal($('action-dialog').open, false);
+assert.match($('toast').textContent, /Profile created/);
 """)
 
 
-def test_incomplete_cleanup_is_visible_and_cannot_be_retried_against_a_removed_profile(node):
-    run_page(node, PROFILES + r"""
-details().click(); button('dialog-fields', 'Delete profile…').click();
-nodes('dialog-fields').find(n => n.type === 'checkbox').checked = true;
-fetchHandler = async path => {
-  if (path === '/api/claude-desktop/delete') apiState.claudeDesktop.profiles = [];
-  return {ok: true, json: async () => path.startsWith('/api/state') ? apiState : {ok: false, warning: true, message: 'Cleanup failed; local profile data may remain. This was not a complete deletion.'}};
-};
-await submitDialog();
-assert.equal($('action-dialog').open, true);
-assert.equal($('dialog-submit').disabled, true);
-assert.equal($('dialog-cancel').disabled, false);
-assert.equal($('dialog-feedback').hidden, false);
-assert.match($('dialog-feedback').textContent, /not a complete deletion/);
-assert.match($('toast').className, /ember/);
-assert.match($('toast').textContent, /local profile data may remain/);
-await load();
-assert.match($('dialog-feedback').textContent, /not a complete deletion/);
-await submitDialog();
-assert.equal(posts().length, 1);
+def test_profiles_removed_without_an_email_match_by_name_and_others_only_by_email(node):
+    run_page(node, PROFILES + REMOVED + r"""
+await startCreate('PERSONAL', ''); await settle();
+assert.equal(posts().length, 0);
+assert.match($('dialog-title').textContent, /Personal/);
+assert.match($('dialog-description').textContent, /same name/);
 $('dialog-cancel').click(); await settle();
-assert.equal(document.activeElement, button('claude-desktop-profiles', 'New profile'));
+await startCreate('Old lab', ''); await settle();
+assert.deepEqual(posts().map(c => c.path), ['/api/claude-desktop/create']);
+assert.deepEqual(posts()[0].payload, {name: 'Old lab', confirm: true});
+""")
+
+
+def test_a_name_already_in_use_skips_the_restore_prompt(node):
+    run_page(node, PROFILES + REMOVED + r"""
+apiState.claudeDesktop.removedProfiles.push({id: 'e'.repeat(32), name: 'Work', emailLabel: '', removedAt: '2026-07-01T10:00:00Z'});
+await load();
+await startCreate('work', ''); await settle();
+await startCreate('Work', 'lab@example.test'); await settle();
+assert.deepEqual(posts().map(c => c.path), ['/api/claude-desktop/create', '/api/claude-desktop/create']);
+assert.doesNotMatch($('dialog-title').textContent, /Restore/);
+""")
+
+
+def test_remove_explains_when_the_profile_is_already_gone(node):
+    run_page(node, PROFILES + r"""
+details().click();
+const remove = button('dialog-fields', 'Remove profile');
+apiState.claudeDesktop.profiles = [];
+await load();
+await remove.click(); await settle();
+assert.equal(posts().length, 0);
+assert.equal($('action-dialog').open, true);
+assert.equal($('dialog-feedback').hidden, false);
+assert.match($('dialog-feedback').textContent, /no longer in the saved list/);
+""")
+
+
+def test_an_unreadable_removed_list_is_reported_in_the_panel(node):
+    run_page(node, PROFILES + r"""
+apiState.claudeDesktop.removedError = 'The removed Claude Desktop profile list is invalid. It has not been overwritten.';
+await load();
+assert.equal($('claude-desktop-status').hidden, false);
+assert.match($('claude-desktop-status').textContent, /removed Claude Desktop profile list is invalid/);
+assert.doesNotMatch($('claude-desktop-status').className, /launch-blocked/);
 """)
 
 
@@ -161,7 +237,7 @@ fetchHandler = async path => path === '/api/claude-desktop/update' ? new Promise
 const pending = submitDialog(); await settle();
 assert.equal($('dialog-submit').disabled, true);
 assert.equal($('dialog-cancel').disabled, true);
-assert.equal(button('dialog-fields', 'Delete profile…').disabled, true);
+assert.equal(button('dialog-fields', 'Remove profile').disabled, true);
 $('action-dialog').dispatch('cancel');
 assert.equal($('action-dialog').open, true);
 await submitDialog();

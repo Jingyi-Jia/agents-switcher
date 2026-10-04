@@ -165,8 +165,8 @@ code { font:11px ui-monospace,monospace; color:var(--ink); padding:2px 5px; back
 .profile-details .account-meta { display:block; font-weight:400; }
 .profile-create { display:flex; align-items:center; gap:10px; width:100%; min-height:48px; padding:12px 16px; border-style:dashed; border-radius:10px; background:transparent; color:var(--mid); text-align:left; }
 .profile-create::before { content:"+"; color:var(--violet); font:20px/1 ui-monospace,monospace; }
-.profile-danger { margin-top:24px; padding-top:17px; border-top:1px solid var(--hairline); }
-.profile-danger .hint { margin-top:0; }
+.profile-removal { margin-top:24px; padding-top:17px; border-top:1px solid var(--hairline); }
+.profile-removal .hint { margin-top:0; }
 .settings-panel,.chart-panel,.metric,.comparison,.guide { background:var(--paper); border:1px solid var(--hairline); border-radius:10px; box-shadow:var(--shadow); }
 .settings-panel { max-width:780px; padding:24px; margin-bottom:16px; }
 .settings-panel h3 { font-size:15px; margin-bottom:5px; }
@@ -262,6 +262,7 @@ dialog p { font-size:12px; color:var(--mid); overflow-wrap:anywhere; }
 #toast.show { display:flex; align-items:center; gap:14px; }
 #toast .dismiss-toast { min-width:30px; min-height:30px; padding:0; flex:none; border-color:transparent; color:inherit; background:transparent; }
 #toast .dismiss-toast::before { content:"×"; font-size:21px; }
+#toast .toast-action { flex:none; }
 #toast.ember { border-color:var(--ember); color:var(--ember); }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
 @media (max-width:1180px) { .shell { grid-template-columns:174px minmax(0,1fr); } .sidebar { padding-inline:15px; } .wrap { padding-inline:25px; } .providers { gap:18px; } .top { gap:8px; } .card { padding:15px; } #toast { left:calc(50% + 87px); } }
