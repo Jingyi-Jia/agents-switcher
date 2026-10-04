@@ -89,13 +89,16 @@ public without paid Apple or Windows signing credentials; a separate signed
 distribution remains a future, optional path. Draft artifacts and package
 versions are not published downloads.
 
-Independent storage/import and isolated terminal Codex sign-in require
-**v1.2.4 or later**, or a current source build. The browser-only GUI/TUI sign-in
-flow described below is a **source-build change, not part of the published
-v1.2.4 installers**. Those installers still use Prepare sign-in, a generated
-terminal command, and Save & switch. The v1.2.3 installers use the earlier shared
-store and do not include isolated sign-in. Check the release notes before
-downloading; repository documentation is not proof of a new binary release.
+Feature availability depends on the installer version. Removing a Claude Desktop
+profile without deleting its data, **Undo**, and **Restore history** require
+**v1.2.7 or later**; in v1.2.6 and earlier, **Delete profile** permanently erases
+that profile's local Claude data. Browser sign-in for Codex in the app, dashboard
+and TUI requires **v1.2.5 or later**; the v1.2.4 installers use Prepare sign-in,
+a generated terminal command, and Save & switch. Independent storage/import and
+isolated terminal Codex sign-in require **v1.2.4 or later**; the v1.2.3
+installers use the earlier shared store. A current source build includes all of
+these. Check the release notes before downloading; repository documentation is
+not proof of a new binary release.
 
 For developers, successful runs of
 [Desktop installers](https://github.com/jingyi-jia/agents-switcher/actions/workflows/desktop.yml)
