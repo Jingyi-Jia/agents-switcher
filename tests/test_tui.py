@@ -1266,6 +1266,12 @@ class TestWatchScreen:
             title = app.screen.query_one("#list-title", Static)
             # Fresh snapshots stay quiet; the age note is a staleness alarm.
             assert "snapshot" not in title.render().plain
+            # Freeze the 3 s poll first: on a slow runner a tick landing between a
+            # mutation below and its assertion applies a fresh snapshot and clears
+            # the refreshing flag, erasing the state under test.
+            app._start_normal_refresh = lambda *, full: None
+            app._start_store_refresh = lambda: None
+            await settle(pilot)
             app.snapshot = dataclasses.replace(
                 app.snapshot, taken_at=time.time() - app.SNAPSHOT_AGE_NOTE_S - 1.0
             )
