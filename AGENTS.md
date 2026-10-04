@@ -123,20 +123,30 @@ The experimental Desktop panel reads `claudeDesktop` in `/api/state`. Its privat
 POST routes are `/api/claude-desktop/create` (`name`, optional `emailLabel`,
 `confirm: true`), `/api/claude-desktop/open` (`profileId`, `confirm: true`),
 `/api/claude-desktop/update` (`profileId`, `name`, `emailLabel`, `confirm: true`),
-and `/api/claude-desktop/delete` (`profileId`, `confirm: true`). `profileId: "default"`
-only opens the usual Claude profile without a user-data override; it cannot be
-renamed or deleted. `canCreate` is
+`/api/claude-desktop/remove` (`profileId`, `confirm: true`), and
+`/api/claude-desktop/restore` (`profileId`, `name`, `emailLabel`, `confirm: true`).
+`profileId: "default"` only opens the usual Claude profile without a user-data
+override; it cannot be renamed, removed or restored. `canCreate` is
 independent of installation and process detection; creation does not launch.
 Launch success never means authenticated or account-switched. There is
 no Desktop-profile CLI/TUI command or automatic-switch policy.
 
 Profile email labels are user-entered, optional, limited to 320 characters, and
 never verified against Claude data. Strict v1 registries remain read-only on
-reads; mutations write v2 labels. Deletion uses the shared profile lock, confirmed
-process exit, no-follow directory descriptors and private staging before the
-registry update. Registry failure rolls back the move. A cleanup failure returns
-`ok: false, warning: true` even after list removal; retain the visible warning and
-refresh the state. Never delete the usual profile or follow linked directories.
+reads; mutations write v2 labels. Agent Switch never deletes profile data.
+Removal moves only the labels from `profiles.json` to the strict version-1
+`removed-profiles.json` (with a canonical UTC `removedAt`); the folder stays at
+`profiles/<id>/`, so restore re-registers the same ID and path under new labels.
+Removal records the removed entry before rewriting `profiles.json` and rolls it
+back if that write fails; `profiles.json` always wins over a leftover removed entry.
+Neither action inspects Claude processes or reads inside a profile folder;
+removal works even when the folder is missing or linked, and restore refuses one.
+`removedProfiles` lists restorable entries newest first, hiding ones that are
+active again or whose folder is missing or linked; an unreadable removed list
+yields `removedError` and is never overwritten. The dashboard offers a restore
+when a new profile's email label matches a removed one case-insensitively, or,
+for one removed without an email label, its name. Never remove or restore the
+usual profile or follow linked directories.
 
 Dashboard quota windows expose `windowSeconds`, `resetAt`, `resetAfterSeconds`
 and `observedAt`. Anchor relative resets to the provider measurement timestamp,
@@ -368,8 +378,8 @@ are in [desktop/README.md](desktop/README.md) and
   mocks every app launch and checks registry, process, environment and HTTP
   boundaries; [test_claude_desktop_page.py](tests/test_claude_desktop_page.py)
   checks consent and rendering. [test_claude_desktop_management.py](tests/test_claude_desktop_management.py)
-  covers metadata and deletion safety; [test_profile_controls_page.py](tests/test_profile_controls_page.py)
-  covers management dialogs, busy states and destructive confirmation. Do not run native sign-ins as an unattended test.
+  covers metadata, removal and restore safety; [test_profile_controls_page.py](tests/test_profile_controls_page.py)
+  covers management dialogs, busy states, Undo and the restore prompt. Do not run native sign-ins as an unattended test.
   [test_claude_desktop_processes.py](tests/test_claude_desktop_processes.py) also
   covers macOS's `<defunct>` zombie marker and signed 32-bit UID formatting
   (`nobody` appears as `-2`). It creates a short-lived nobody-owned process only

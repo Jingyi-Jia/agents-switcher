@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import unicodedata
 import uuid
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agents_switcher.dirlock import directory_lock
@@ -30,6 +30,10 @@ NOTICE = (
 _PROFILE_ID = re.compile(r"[0-9a-f]{32}\Z")
 _MAX_PROFILES = 100
 _MAX_REGISTRY_BYTES = 262144
+# Removing a profile only moves its labels here; the profile folder, with Claude's
+# history and sign-in, stays in place so restoring returns it at the same path.
+_REMOVED_REGISTRY = "removed-profiles.json"
+_REMOVED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def installed_executable() -> Path | None:
@@ -129,6 +133,22 @@ def _labels(name, email_label) -> tuple[str, str]:
     return name.strip(), email_label.strip()
 
 
+def _strict_json(raw: bytes):
+    """Parse a bounded registry file, refusing duplicate keys that could hide a second value."""
+    if len(raw) > _MAX_REGISTRY_BYTES:
+        raise ValueError
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=unique_object)
+
+
 class ClaudeDesktopProfiles:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root if root is not None else get_backup_root() / "claude-desktop"
@@ -160,31 +180,25 @@ class ClaudeDesktopProfiles:
             self._directory(path)
         return directory
 
-    def _read(self) -> list[dict]:
+    def _registry_bytes(self, filename: str, label: str) -> bytes | None:
         if not self.root.exists() and not self.root.is_symlink():
-            return []
+            return None
         self._directory(self.root)
-        path = self.root / "profiles.json"
+        path = self.root / filename
         if path.is_symlink():
-            raise ProviderActionError("The Claude Desktop profile registry must not be a link.")
+            raise ProviderActionError(f"The Claude Desktop {label} must not be a link.")
         try:
             with path.open("rb") as stream:
-                raw = stream.read(_MAX_REGISTRY_BYTES + 1)
+                return stream.read(_MAX_REGISTRY_BYTES + 1)
         except FileNotFoundError:
+            return None
+
+    def _read(self) -> list[dict]:
+        raw = self._registry_bytes("profiles.json", "profile registry")
+        if raw is None:
             return []
         try:
-            if len(raw) > _MAX_REGISTRY_BYTES:
-                raise ValueError
-
-            def unique_object(pairs):
-                result = {}
-                for key, value in pairs:
-                    if key in result:
-                        raise ValueError
-                    result[key] = value
-                return result
-
-            data = json.loads(raw, object_pairs_hook=unique_object)
+            data = _strict_json(raw)
             if not isinstance(data, dict) or set(data) != {"version", "profiles"}:
                 raise ValueError
             profiles = data["profiles"]
@@ -213,40 +227,93 @@ class ClaudeDesktopProfiles:
                 "The Claude Desktop profile registry is invalid. It has not been overwritten."
             ) from None
 
-    def _write(self, profiles: list[dict], *, root_fd: int | None = None) -> None:
-        if root_fd is None:
-            descriptor, name = tempfile.mkstemp(prefix=".profiles-", dir=self.root)
-        else:
-            name = f".profiles-{uuid.uuid4().hex}"
-            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=root_fd)
+    def _read_removed(self) -> list[dict]:
+        raw = self._registry_bytes(_REMOVED_REGISTRY, "removed-profile list")
+        if raw is None:
+            return []
+        try:
+            data = _strict_json(raw)
+            if not isinstance(data, dict) or set(data) != {"version", "profiles"}:
+                raise ValueError
+            if type(data["version"]) is not int or data["version"] != 1 or not isinstance(data["profiles"], list):
+                raise ValueError
+            ids = set()
+            for entry in data["profiles"]:
+                if not isinstance(entry, dict) or set(entry) != {"id", "name", "emailLabel", "removedAt"}:
+                    raise ValueError
+                key, removed_at = entry["id"], entry["removedAt"]
+                if not isinstance(key, str) or not _PROFILE_ID.fullmatch(key) or key in ids:
+                    raise ValueError
+                if not _valid_name(entry["name"]) or not _valid_email_label(entry["emailLabel"]):
+                    raise ValueError
+                # Only the canonical UTC form that remove() writes is accepted.
+                if not isinstance(removed_at, str) or (
+                    datetime.strptime(removed_at, _REMOVED_AT_FORMAT).strftime(_REMOVED_AT_FORMAT) != removed_at
+                ):
+                    raise ValueError
+                ids.add(key)
+            return data["profiles"]
+        except (ValueError, TypeError, RecursionError):
+            raise ProviderActionError(
+                "The removed Claude Desktop profile list is invalid. It has not been overwritten."
+            ) from None
+
+    def _restorable(self, profiles: list[dict]) -> list[dict]:
+        """Removed profiles that can come back, newest first.
+
+        An id that is active again is a leftover of an interrupted restore, and a
+        missing or linked folder could not be reopened, so neither is offered.
+        """
+        active = {profile["id"] for profile in profiles}
+        restorable = []
+        for entry in self._read_removed():
+            if entry["id"] in active:
+                continue
+            try:
+                self._profile_directory(entry["id"])
+            except ProviderActionError:
+                continue
+            restorable.append(entry)
+        # Entries are appended as they are removed, so list order is the true removal order
+        # even when the clock was set back or two removals share a timestamp.
+        return restorable[::-1]
+
+    def _write_json(self, filename: str, payload: dict) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        if len(encoded) > _MAX_REGISTRY_BYTES:
+            raise ProviderActionError(
+                "Too many Claude Desktop profile labels are saved to record this change. No profiles were changed."
+            )
+        descriptor, name = tempfile.mkstemp(prefix=f".{filename.removesuffix('.json')}-", dir=self.root)
         temporary = Path(name)
         try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump({"version": 2, "profiles": profiles}, stream, ensure_ascii=False)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(encoded)
                 stream.flush()
                 os.fsync(stream.fileno())
-            if root_fd is None:
-                replace_with_retry(temporary, self.root / "profiles.json")
-            else:
-                os.replace(temporary, "profiles.json", src_dir_fd=root_fd, dst_dir_fd=root_fd)
+            replace_with_retry(temporary, self.root / filename)
         finally:
             try:
-                os.unlink(temporary, dir_fd=root_fd)
+                temporary.unlink()
             except FileNotFoundError:
                 pass
+
+    def _write(self, profiles: list[dict]) -> None:
+        self._write_json("profiles.json", {"version": 2, "profiles": profiles})
+
+    def _write_removed(self, removed: list[dict]) -> None:
+        self._write_json(_REMOVED_REGISTRY, {"version": 1, "profiles": removed})
 
     def status(self) -> dict:
         supported = sys.platform in {"darwin", "linux"}
         installed = supported and installed_executable() is not None
         result = {
             "supported": supported, "installed": installed, "available": False, "canCreate": False,
-            "canManage": False, "canDelete": False, "deleteError": None,
-            "experimental": True, "notice": NOTICE, "error": None,
-            "running": None, "profiles": [],
+            "canManage": False, "experimental": True, "notice": NOTICE, "error": None,
+            "running": None, "profiles": [], "removedProfiles": [], "removedError": None,
         }
         if not supported:
             result["error"] = "Experimental Claude Desktop profiles are available on macOS and Linux only."
-            result["deleteError"] = result["error"]
             return result
         try:
             result["profiles"] = self._read()
@@ -255,9 +322,14 @@ class ClaudeDesktopProfiles:
         except OSError:
             result["error"] = "Could not read the Claude Desktop profile registry. No profiles were changed."
         if result["error"]:
-            result["deleteError"] = result["error"]
             return result
         result["canCreate"] = result["canManage"] = True
+        try:
+            result["removedProfiles"] = self._restorable(result["profiles"])
+        except ProviderActionError as error:
+            result["removedError"] = str(error)
+        except OSError:
+            result["removedError"] = "Could not read the removed Claude Desktop profile list. No profiles were changed."
         if not installed:
             result["error"] = (
                 "To open profiles, install official Claude Desktop in /Applications/Claude.app or "
@@ -269,14 +341,7 @@ class ClaudeDesktopProfiles:
                 raise ProviderActionError("Unable to confirm whether Claude Desktop is running. No profiles were changed.")
             result["running"] = active
             result["available"] = installed
-            result["canDelete"] = not active
-            if active:
-                result["deleteError"] = "Fully quit Claude Desktop before deleting a profile. Closing its window may not quit it."
-            elif not shutil.rmtree.avoids_symlink_attacks:
-                result["canDelete"] = False
-                result["deleteError"] = "This system cannot safely delete profile directories. No profiles were changed."
         except ProviderActionError as error:
-            result["deleteError"] = str(error)
             if installed:
                 result["error"] = str(error)
         return result
@@ -324,75 +389,66 @@ class ClaudeDesktopProfiles:
             "message": "Profile labels updated. The email label is user-entered and does not verify the signed-in account.",
         }
 
-    def delete(self, profileId, *, confirm=False) -> dict:
+    def remove(self, profileId, *, confirm=False) -> dict:
+        """Take a profile off the list without touching its folder, so it can be restored later."""
         self._allowed(confirm)
         if not isinstance(profileId, str) or not _PROFILE_ID.fullmatch(profileId):
-            raise ProviderActionError("Select a saved Claude Desktop profile; the usual profile cannot be deleted.")
+            raise ProviderActionError("Select a saved Claude Desktop profile; the usual profile cannot be removed.")
         with self._locked():
             profiles = self._read()
-            if not any(profile["id"] == profileId for profile in profiles):
+            profile = next((entry for entry in profiles if entry["id"] == profileId), None)
+            if profile is None:
                 raise ProviderActionError("That Claude Desktop profile is not in the saved list.")
-            directory = self._profile_directory(profileId)
-            root_stat = self.root.stat(follow_symlinks=False)
-            profile_stat = directory.stat(follow_symlinks=False)
-            active = running()
-            if active is True:
-                raise ProviderActionError("Fully quit Claude Desktop before deleting a profile. Closing its window may not quit it.")
-            if active is not False:
-                raise ProviderActionError("Unable to confirm that Claude Desktop is not running. No profiles were deleted.")
-            if not shutil.rmtree.avoids_symlink_attacks:
-                raise ProviderActionError("This system cannot safely delete profile directories. No profiles were changed.")
-            with ExitStack() as descriptors:
-                flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-                directory_fds = []
-                for name in (self.root, "profiles", profileId):
-                    descriptor = os.open(name, flags, dir_fd=directory_fds[-1] if directory_fds else None)
-                    descriptors.callback(os.close, descriptor)
-                    directory_fds.append(descriptor)
-                root_fd, profiles_fd, profile_fd = directory_fds
-                if not os.path.samestat(root_stat, os.fstat(root_fd)) or not os.path.samestat(profile_stat, os.fstat(profile_fd)):
-                    raise ProviderActionError("The profile directories changed during the safety check. No profile data was erased.")
-                for name in ("desktop", "claude-code"):
-                    os.close(os.open(name, flags, dir_fd=profile_fd))
-                staging = f".deleting-{uuid.uuid4().hex}"
-                os.mkdir(staging, mode=0o700, dir_fd=root_fd)
-                staging_fd = os.open(staging, flags, dir_fd=root_fd)
-                descriptors.callback(os.close, staging_fd)
+            # The folder is never touched here, so a missing or linked one must not block taking a
+            # broken entry off the list; _restorable() and restore() refuse such folders instead.
+            previous = self._read_removed()
+            active = {entry["id"] for entry in profiles}
+            record = {**profile, "removedAt": datetime.now(timezone.utc).strftime(_REMOVED_AT_FORMAT)}
+            # Record the removal first: if the active list then fails to save, the profile is still
+            # listed there, and the active list always wins over a removed entry.
+            self._write_removed([entry for entry in previous if entry["id"] not in active] + [record])
+            try:
+                self._write([entry for entry in profiles if entry["id"] != profileId])
+            except OSError:
                 try:
-                    os.rename(profileId, "profile", src_dir_fd=profiles_fd, dst_dir_fd=staging_fd)
+                    self._write_removed(previous)
                 except OSError:
-                    os.rmdir(staging, dir_fd=root_fd)
-                    raise
-                try:
-                    if not os.path.samestat(profile_stat, os.stat("profile", dir_fd=staging_fd, follow_symlinks=False)):
-                        raise ProviderActionError("The selected profile directory changed before deletion.")
-                    self._write([profile for profile in profiles if profile["id"] != profileId], root_fd=root_fd)
-                except (OSError, ProviderActionError):
-                    try:
-                        os.rename("profile", profileId, src_dir_fd=staging_fd, dst_dir_fd=profiles_fd)
-                    except OSError:
-                        raise ProviderActionError(
-                            "The profile registry could not be saved and its staged data could not be returned. "
-                            "No profile data was erased; it remains in private staged storage. "
-                            "Check folder permissions and free disk space before making more profile changes."
-                        ) from None
-                    os.rmdir(staging, dir_fd=root_fd)
-                    raise ProviderActionError(
-                        "The profile registry could not be saved. Its directory was restored and no profile data was erased. "
-                        "Check folder permissions and free disk space, then try again."
-                    ) from None
-                try:
-                    shutil.rmtree("profile", dir_fd=staging_fd)
-                    os.rmdir(staging, dir_fd=root_fd)
-                except OSError:
-                    return {
-                        "ok": False, "warning": True, "profileId": profileId,
-                        "message": "The profile was removed from the list, but cleanup failed and local profile data may remain "
-                        "in private staged storage. Check folder permissions and free disk space; this was not a complete deletion.",
-                    }
+                    pass
+                raise ProviderActionError(
+                    "The profile registry could not be saved, so nothing was removed. "
+                    "Check folder permissions and free disk space, then try again."
+                ) from None
         return {
-            "ok": True, "profileId": profileId,
-            "message": "The selected profile and its local data were deleted. Other profiles and CLI accounts were not changed.",
+            "ok": True, "profile": record,
+            "message": "Profile removed from the list. Its local Claude data stays on this computer and can be restored.",
+        }
+
+    def restore(self, profileId, name, emailLabel, *, confirm=False) -> dict:
+        """Put a removed profile back on the list, at its original folder, under new labels."""
+        self._allowed(confirm)
+        if not isinstance(profileId, str) or not _PROFILE_ID.fullmatch(profileId):
+            raise ProviderActionError("Select a removed Claude Desktop profile; the usual profile cannot be restored.")
+        name, emailLabel = _labels(name, emailLabel)
+        with self._locked():
+            profiles = self._read()
+            removed = self._read_removed()
+            if any(entry["id"] == profileId for entry in profiles) or not any(entry["id"] == profileId for entry in removed):
+                raise ProviderActionError("That Claude Desktop profile is not in the removed list.")
+            if any(entry["name"].casefold() == name.casefold() for entry in profiles):
+                raise ProviderActionError("A Claude Desktop profile already has that name.")
+            if len(profiles) >= _MAX_PROFILES:
+                raise ProviderActionError("The limit of 100 Claude Desktop profiles has been reached.")
+            self._profile_directory(profileId)
+            restored = {"id": profileId, "name": name, "emailLabel": emailLabel}
+            self._write([*profiles, restored])
+            try:
+                self._write_removed([entry for entry in removed if entry["id"] != profileId])
+            except OSError:
+                # Harmless: the active list now wins over the leftover entry, and the next removal drops it.
+                pass
+        return {
+            "ok": True, "profile": restored,
+            "message": "Profile restored with its local Claude history. Open it to continue where you left off.",
         }
 
     def open(self, profileId, *, confirm=False) -> dict:

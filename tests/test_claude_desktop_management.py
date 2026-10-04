@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
@@ -14,7 +15,11 @@ from tests.test_claude_desktop import profiles
 from tests.test_web_actions import request, web
 
 
-POSIX_DELETE = pytest.mark.skipif(os.name == "nt", reason="Profile deletion supports macOS and Linux only")
+REMOVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+
+def _files(directory: Path) -> dict[str, bytes]:
+    return {str(path.relative_to(directory)): path.read_bytes() for path in sorted(directory.rglob("*")) if path.is_file()}
 
 
 def test_legacy_registry_is_read_without_writes_and_migrates_on_update(profiles):
@@ -69,13 +74,14 @@ def test_strict_registry_versions_refuse_malformed_metadata_without_writes(profi
     raw = json.dumps({"version": version, "profiles": entries}).encode()
     path.write_bytes(raw)
     status = manager.status()
-    assert not status["canManage"] and not status["canDelete"]
-    assert not status["canCreate"] and status["profiles"] == []
+    assert not status["canManage"] and not status["canCreate"]
+    assert status["profiles"] == [] and status["removedProfiles"] == []
     assert "invalid" in status["error"] and "private-value" not in json.dumps(status)
     for action in (
         lambda: manager.create("New", confirm=True),
         lambda: manager.update("a" * 32, "New", "", confirm=True),
-        lambda: manager.delete("a" * 32, confirm=True),
+        lambda: manager.remove("a" * 32, confirm=True),
+        lambda: manager.restore("a" * 32, "New", "", confirm=True),
     ):
         with pytest.raises(ProviderActionError, match="invalid"):
             action()
@@ -179,13 +185,19 @@ def test_metadata_never_reads_profile_auth_or_infers_identity(profiles, monkeypa
         guard.setattr(Path, "open", guarded_open)
         guard.setattr(os, "scandir", guarded_scan)
         assert manager.status()["profiles"] == [entry]
-        scan = Mock(side_effect=AssertionError("Renaming metadata must not inspect app processes"))
+        scan = Mock(side_effect=AssertionError("Label changes must not inspect app processes"))
         guard.setattr(cd, "running", scan)
         guard.setattr(cd, "installed_executable", lambda: None)
         updated = manager.update(entry["id"], "Office", "typed@example.com", confirm=True)
+        removed = manager.remove(entry["id"], confirm=True)["profile"]
+        guard.setattr(cd, "running", lambda: False)
+        assert manager.status()["removedProfiles"] == [removed]
+        guard.setattr(cd, "running", scan)
+        restored = manager.restore(entry["id"], "Office", "typed@example.com", confirm=True)
         scan.assert_not_called()
 
     assert updated["profile"] == {**entry, "name": "Office", "emailLabel": "typed@example.com"}
+    assert restored["profile"] == updated["profile"]
     assert "hidden-" not in json.dumps(manager.status())
     assert directory.stat().st_ino == before_inode
     assert cookies.read_bytes() == b"synthetic-session-data hidden-session@example.com"
@@ -199,7 +211,9 @@ def test_management_requires_exact_consent_before_creating_files(profiles, confi
     with pytest.raises(ProviderActionError, match="Confirm"):
         manager.update("a" * 32, "Work", "", confirm=confirm)
     with pytest.raises(ProviderActionError, match="Confirm"):
-        manager.delete("a" * 32, confirm=confirm)
+        manager.remove("a" * 32, confirm=confirm)
+    with pytest.raises(ProviderActionError, match="Confirm"):
+        manager.restore("a" * 32, "Work", "", confirm=confirm)
     assert not manager.root.exists()
 
 
@@ -209,7 +223,9 @@ def test_management_cannot_target_default_or_untrusted_ids(profiles, profile_id)
     with pytest.raises(ProviderActionError, match="Select a saved"):
         manager.update(profile_id, "Work", "", confirm=True)
     with pytest.raises(ProviderActionError, match="Select a saved"):
-        manager.delete(profile_id, confirm=True)
+        manager.remove(profile_id, confirm=True)
+    with pytest.raises(ProviderActionError, match="Select a removed"):
+        manager.restore(profile_id, "Work", "", confirm=True)
     assert not manager.root.exists()
 
 
@@ -220,8 +236,11 @@ def test_management_never_accepts_unregistered_ids(profiles):
     with pytest.raises(ProviderActionError, match="saved list"):
         manager.update("a" * 32, "Office", "", confirm=True)
     with pytest.raises(ProviderActionError, match="saved list"):
-        manager.delete("a" * 32, confirm=True)
+        manager.remove("a" * 32, confirm=True)
+    with pytest.raises(ProviderActionError, match="removed list"):
+        manager.restore("a" * 32, "Office", "", confirm=True)
     assert (manager.root / "profiles.json").read_bytes() == original
+    assert not (manager.root / "removed-profiles.json").exists()
 
 
 def test_management_is_unavailable_on_unsupported_platforms(profiles, monkeypatch):
@@ -230,9 +249,11 @@ def test_management_is_unavailable_on_unsupported_platforms(profiles, monkeypatc
     with pytest.raises(ProviderActionError, match="macOS and Linux"):
         manager.update("a" * 32, "Work", "", confirm=True)
     with pytest.raises(ProviderActionError, match="macOS and Linux"):
-        manager.delete("a" * 32, confirm=True)
+        manager.remove("a" * 32, confirm=True)
+    with pytest.raises(ProviderActionError, match="macOS and Linux"):
+        manager.restore("a" * 32, "Work", "", confirm=True)
     status = manager.status()
-    assert not status["canManage"] and not status["canDelete"]
+    assert not status["canManage"] and status["removedProfiles"] == []
     assert not manager.root.exists()
 
 
@@ -245,114 +266,47 @@ def test_management_readiness_is_independent_of_installation(profiles, monkeypat
     monkeypatch.setattr(cd, "running", scan)
     result = manager.status()
     assert result["canManage"] and result["canCreate"]
-    can_delete = active is False and cd.shutil.rmtree.avoids_symlink_attacks
-    assert result["canDelete"] is can_delete
+    assert "canDelete" not in result and "deleteError" not in result
     assert result["available"] is (installed and active is not None)
     assert result["running"] is active
-    assert bool(result["deleteError"]) is not can_delete
+    assert result["removedProfiles"] == [] and result["removedError"] is None
     if not installed:
         assert "To open profiles, install" in result["error"]
     scan.assert_called_once_with()
     assert not manager.root.exists()
 
 
-def test_missing_installation_message_survives_a_failed_deletion_process_scan(profiles, monkeypatch):
+def test_missing_installation_message_survives_a_failed_process_scan(profiles, monkeypatch):
     monkeypatch.setattr(cd, "installed_executable", lambda: None)
     monkeypatch.setattr(cd, "running", Mock(side_effect=ProviderActionError("Unable to check processes")))
     result = profiles.manager.status()
-    assert result["canManage"] and not result["canDelete"]
+    assert result["canManage"] and not result["available"]
     assert "To open profiles, install" in result["error"]
-    assert result["deleteError"] == "Unable to check processes"
     assert result["running"] is None
 
 
-@POSIX_DELETE
-def test_delete_erases_only_the_selected_saved_profile_without_an_installation(profiles, monkeypatch, tmp_path):
-    manager = profiles.manager
-    selected = manager.create("Delete", emailLabel="typed@example.com", confirm=True)["profile"]
-    other = manager.create("Keep", confirm=True)["profile"]
-    selected_dir = manager.root / "profiles" / selected["id"]
-    (selected_dir / "desktop" / "nested").mkdir()
-    (selected_dir / "desktop" / "nested" / "Cookies").write_bytes(b"synthetic-data")
-    (selected_dir / "claude-code" / ".credentials.json").write_bytes(b"synthetic-data")
-    keep = manager.root / "profiles" / other["id"] / "desktop" / "keep"
-    keep.write_bytes(b"keep-other-profile")
-    default = tmp_path / "usual-claude-data"
-    cli = tmp_path / "cli-account-store"
-    default.mkdir()
-    cli.mkdir()
-    (default / "keep").write_bytes(b"keep-default")
-    (cli / "keep").write_bytes(b"keep-cli")
-    monkeypatch.setattr(cd, "installed_executable", Mock(side_effect=AssertionError("Deletion must not require installation")))
-    scan = Mock(return_value=False)
-    monkeypatch.setattr(cd, "running", scan)
-
-    result = manager.delete(selected["id"], confirm=True)
-    assert result["ok"] and result["profileId"] == selected["id"]
-    scan.assert_called_once_with()
-    assert not selected_dir.exists()
-    assert manager._read() == [other]
-    assert keep.read_bytes() == b"keep-other-profile"
-    assert (default / "keep").read_bytes() == b"keep-default"
-    assert (cli / "keep").read_bytes() == b"keep-cli"
-    assert not list(manager.root.glob(".deleting-*"))
-    profiles.launch.assert_not_called()
-
-
-@POSIX_DELETE
-def test_delete_migrates_a_legacy_registry(profiles):
-    manager = profiles.manager
-    selected = manager.create("Delete", confirm=True)["profile"]
-    other = manager.create("Keep", confirm=True)["profile"]
-    path = manager.root / "profiles.json"
-    path.write_text(json.dumps({"version": 1, "profiles": [
-        {"id": profile["id"], "name": profile["name"]} for profile in (selected, other)
-    ]}))
-    assert manager.delete(selected["id"], confirm=True)["ok"]
-    assert json.loads(path.read_text()) == {"version": 2, "profiles": [other]}
-
-
-@pytest.mark.parametrize("active", [True, None, 0, "", "false"])
-def test_running_or_unconfirmed_process_state_blocks_deletion_even_without_installation(profiles, monkeypatch, active):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    before = (manager.root / "profiles.json").read_bytes()
-    monkeypatch.setattr(cd, "installed_executable", lambda: None)
-    scan = Mock(return_value=active)
-    monkeypatch.setattr(cd, "running", scan)
-    with pytest.raises(ProviderActionError, match="Fully quit|Unable to confirm"):
-        manager.delete(entry["id"], confirm=True)
-    scan.assert_called_once_with()
-    assert (manager.root / "profiles.json").read_bytes() == before
-    assert (manager.root / "profiles" / entry["id"] / "desktop").is_dir()
-    assert not list(manager.root.glob(".deleting-*"))
-
-
-def test_failed_process_scan_never_changes_a_profile(profiles, monkeypatch):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    original = (manager.root / "profiles.json").read_bytes()
-    monkeypatch.setattr(cd, "installed_executable", lambda: None)
-    monkeypatch.setattr(cd, "running", Mock(side_effect=ProviderActionError("Unable to check processes")))
-    with pytest.raises(ProviderActionError, match="Unable to check"):
-        manager.delete(entry["id"], confirm=True)
-    assert (manager.root / "profiles.json").read_bytes() == original
-    assert (manager.root / "profiles" / entry["id"]).is_dir()
-    assert not list(manager.root.glob(".deleting-*"))
-
-
 @pytest.mark.skipif(os.name == "nt", reason="POSIX profile link safety")
-@pytest.mark.parametrize("component", ["root", "registry", "profiles", "profile", "desktop", "claude-code"])
-@pytest.mark.parametrize("action", ["update", "delete"])
-def test_management_refuses_linked_roots_registries_and_profile_directories(profiles, tmp_path, component, action):
+@pytest.mark.parametrize("action,component", [
+    *[("update", component) for component in ("root", "registry", "profiles", "profile", "desktop", "claude-code")],
+    *[("restore", component) for component in ("root", "registry", "removed", "profiles", "profile", "desktop", "claude-code")],
+    # Removal only rewrites the two label files, so only links among those (or the root) can stop it.
+    *[("remove", component) for component in ("root", "registry", "removed")],
+])
+def test_management_refuses_linked_roots_registries_and_profile_directories(profiles, tmp_path, action, component):
     manager = profiles.manager
     entry = manager.create("Work", confirm=True)["profile"]
+    if action == "restore":
+        manager.remove(entry["id"], confirm=True)
     root = manager.root
+    if action != "restore":
+        (root / "removed-profiles.json").write_text(json.dumps({"version": 1, "profiles": []}))
     original = (root / "profiles.json").read_bytes()
+    removed = (root / "removed-profiles.json").read_bytes()
     directory = root / "profiles" / entry["id"]
     paths = {
-        "root": root, "registry": root / "profiles.json", "profiles": root / "profiles",
-        "profile": directory, "desktop": directory / "desktop", "claude-code": directory / "claude-code",
+        "root": root, "registry": root / "profiles.json", "removed": root / "removed-profiles.json",
+        "profiles": root / "profiles", "profile": directory,
+        "desktop": directory / "desktop", "claude-code": directory / "claude-code",
     }
     path = paths[component]
     destination = tmp_path / "linked-original"
@@ -363,9 +317,12 @@ def test_management_refuses_linked_roots_registries_and_profile_directories(prof
     with pytest.raises(ProviderActionError, match="link"):
         if action == "update":
             manager.update(entry["id"], "Office", "typed@example.com", confirm=True)
+        elif action == "remove":
+            manager.remove(entry["id"], confirm=True)
         else:
-            manager.delete(entry["id"], confirm=True)
+            manager.restore(entry["id"], "Office", "", confirm=True)
     assert (root / "profiles.json").read_bytes() == original
+    assert (root / "removed-profiles.json").read_bytes() == removed
     assert path.is_symlink()
     if destination.is_dir():
         assert (destination / "external-sentinel").read_bytes() == b"must-not-change"
@@ -380,293 +337,57 @@ def test_missing_profile_directories_are_not_recreated_by_management(profiles, c
     original = (manager.root / "profiles.json").read_bytes()
     with pytest.raises(ProviderActionError, match="missing"):
         manager.update(entry["id"], "Office", "", confirm=True)
-    with pytest.raises(ProviderActionError, match="missing"):
-        manager.delete(entry["id"], confirm=True)
     assert not missing.exists()
     assert (manager.root / "profiles.json").read_bytes() == original
 
 
-@POSIX_DELETE
-def test_delete_unlinks_nested_links_without_touching_external_children(profiles, tmp_path):
+@pytest.mark.parametrize("component", [
+    "missing-desktop", "missing-claude-code",
+    pytest.param("linked-profiles", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX link safety")),
+    pytest.param("linked-profile", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX link safety")),
+    pytest.param("linked-desktop", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX link safety")),
+])
+def test_remove_takes_a_broken_profile_off_the_list_without_following_links(profiles, tmp_path, component):
     manager = profiles.manager
-    entry = manager.create("Delete", confirm=True)["profile"]
-    other = manager.create("Keep", confirm=True)["profile"]
+    entry = manager.create("Broken", confirm=True)["profile"]
+    kept = manager.create("Keep", confirm=True)["profile"]
     directory = manager.root / "profiles" / entry["id"]
-    external = tmp_path / "external-claude-data"
-    external.mkdir()
-    (external / "Cookies").write_bytes(b"external-session-must-remain")
-    (directory / "desktop" / "external").symlink_to(external, target_is_directory=True)
-    (directory / "claude-code" / "credentials-link").symlink_to(external / "Cookies")
-    (directory / "desktop" / "broken").symlink_to(tmp_path / "not-present")
-    other_dir = manager.root / "profiles" / other["id"]
-    (other_dir / "desktop" / "keep").write_bytes(b"other-profile")
-    (directory / "desktop" / "other-profile").symlink_to(other_dir, target_is_directory=True)
-    os.link(external / "Cookies", directory / "desktop" / "hardlink")
+    kind, name = component.split("-", 1)
+    path = {"profiles": manager.root / "profiles", "profile": directory}.get(name, directory / name)
+    destination = tmp_path / "linked-original"
+    if kind == "missing":
+        path.rmdir()
+    else:
+        path.rename(destination)
+        path.symlink_to(destination, target_is_directory=True)
+        (destination / "external-sentinel").write_bytes(b"must-not-change")
 
-    assert manager.delete(entry["id"], confirm=True)["ok"]
-    assert (external / "Cookies").read_bytes() == b"external-session-must-remain"
-    assert (other_dir / "desktop" / "keep").read_bytes() == b"other-profile"
-    assert not directory.exists()
-
-
-@POSIX_DELETE
-@pytest.mark.parametrize("component", ["root", "profiles"])
-def test_delete_refuses_parent_links_swapped_in_during_the_process_check(profiles, monkeypatch, tmp_path, component):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    original_registry = (manager.root / "profiles.json").read_bytes()
-    external = tmp_path / "external"
-    external_directory = external / "profiles" / entry["id"] if component == "root" else external / entry["id"]
-    (external_directory / "desktop").mkdir(parents=True)
-    (external_directory / "claude-code").mkdir()
-    sentinel = external_directory / "desktop" / "Cookies"
-    sentinel.write_bytes(b"must-not-delete-external-data")
-    source = manager.root if component == "root" else manager.root / "profiles"
-    parked = tmp_path / "parked-original"
-
-    def swap_parent():
-        source.rename(parked)
-        source.symlink_to(external, target_is_directory=True)
-        return False
-
-    monkeypatch.setattr(cd, "running", swap_parent)
-    try:
-        with pytest.raises(ProviderActionError):
-            manager.delete(entry["id"], confirm=True)
-    finally:
-        if source.is_symlink():
-            source.unlink()
-            parked.rename(source)
-    assert sentinel.read_bytes() == b"must-not-delete-external-data"
-    assert (manager.root / "profiles.json").read_bytes() == original_registry
-    assert (manager.root / "profiles" / entry["id"] / "desktop").is_dir()
-    assert not list(external.glob(".deleting-*"))
+    record = manager.remove(entry["id"], confirm=True)["profile"]
+    assert manager._read() == [kept]
+    assert json.loads((manager.root / "removed-profiles.json").read_text())["profiles"] == [record]
+    assert manager.status()["removedProfiles"] == []
+    with pytest.raises(ProviderActionError, match="missing|link"):
+        manager.restore(entry["id"], "Broken", "", confirm=True)
+    if kind == "missing":
+        assert not path.exists()
+    else:
+        assert path.is_symlink()
+        assert (destination / "external-sentinel").read_bytes() == b"must-not-change"
 
 
-@POSIX_DELETE
-def test_delete_registry_write_and_cleanup_stay_anchored_when_root_moves(profiles, monkeypatch, tmp_path):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    root = manager.root
-    external = tmp_path / "external"
-    external.mkdir()
-    (external / "profiles.json").write_bytes(b"external-registry-must-remain")
-    (external / "Cookies").write_bytes(b"external-session-must-remain")
-    parked = tmp_path / "parked-root"
-    original_write = manager._write
-
-    def move_root_before_write(saved, **kwargs):
-        root.rename(parked)
-        root.symlink_to(external, target_is_directory=True)
-        original_write(saved, **kwargs)
-
-    monkeypatch.setattr(manager, "_write", move_root_before_write)
-    try:
-        result = manager.delete(entry["id"], confirm=True)
-    finally:
-        if root.is_symlink():
-            root.unlink()
-            parked.rename(root)
-    assert result["ok"]
-    assert manager._read() == []
-    assert not (root / "profiles" / entry["id"]).exists()
-    assert not list(root.glob(".deleting-*"))
-    assert (external / "profiles.json").read_bytes() == b"external-registry-must-remain"
-    assert (external / "Cookies").read_bytes() == b"external-session-must-remain"
-    assert {path.name for path in external.iterdir()} == {"profiles.json", "Cookies"}
-
-
-@POSIX_DELETE
-def test_cleanup_does_not_follow_a_replaced_staging_directory(profiles, monkeypatch, tmp_path):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    external = tmp_path / "external"
-    (external / "profile").mkdir(parents=True)
-    (external / "profile" / "Cookies").write_bytes(b"external-session-must-remain")
-    parked = tmp_path / "parked-staging"
-    original_write = manager._write
-
-    def replace_staging_after_write(saved, **kwargs):
-        original_write(saved, **kwargs)
-        [staging] = manager.root.glob(".deleting-*")
-        staging.rename(parked)
-        staging.symlink_to(external, target_is_directory=True)
-
-    monkeypatch.setattr(manager, "_write", replace_staging_after_write)
-    result = manager.delete(entry["id"], confirm=True)
-    assert not result["ok"] and result["warning"]
-    assert manager._read() == []
-    assert not (parked / "profile").exists()
-    assert (external / "profile" / "Cookies").read_bytes() == b"external-session-must-remain"
-
-
-def test_delete_fails_closed_without_symlink_resistant_cleanup(profiles, monkeypatch):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    original = (manager.root / "profiles.json").read_bytes()
-    monkeypatch.setattr(cd.shutil.rmtree, "avoids_symlink_attacks", False)
-    assert not manager.status()["canDelete"]
-    assert "safely delete" in manager.status()["deleteError"]
-    with pytest.raises(ProviderActionError, match="safely delete"):
-        manager.delete(entry["id"], confirm=True)
-    assert (manager.root / "profiles.json").read_bytes() == original
-    assert not list(manager.root.glob(".deleting-*"))
-
-
-@POSIX_DELETE
-def test_registry_write_failure_rolls_back_staged_profile_without_erasing_data(profiles, monkeypatch):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    directory = manager.root / "profiles" / entry["id"]
-    (directory / "desktop" / "Cookies").write_bytes(b"synthetic-data")
-    before_inode = directory.stat().st_ino
-    original = (manager.root / "profiles.json").read_bytes()
-
-    def fail_registry_write(*args, **kwargs):
-        assert not directory.exists()
-        assert len(list(manager.root.glob(".deleting-*/profile/desktop/Cookies"))) == 1
-        raise PermissionError("private-diagnostic")
-
-    monkeypatch.setattr(cd.os, "replace", fail_registry_write)
-    cleanup = Mock(avoids_symlink_attacks=True)
-    monkeypatch.setattr(cd.shutil, "rmtree", cleanup)
-    with pytest.raises(ProviderActionError, match="restored") as error:
-        manager.delete(entry["id"], confirm=True)
-    assert "private-diagnostic" not in str(error.value)
-    assert (manager.root / "profiles.json").read_bytes() == original
-    assert directory.stat().st_ino == before_inode
-    assert (directory / "desktop" / "Cookies").read_bytes() == b"synthetic-data"
-    assert not list(manager.root.glob(".deleting-*"))
-    assert not list(manager.root.glob(".profiles-*"))
-    cleanup.assert_not_called()
-
-
-@POSIX_DELETE
-def test_failed_staging_keeps_registry_and_original_data(profiles, monkeypatch):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    directory = manager.root / "profiles" / entry["id"]
-    original = (manager.root / "profiles.json").read_bytes()
-    original_rename = os.rename
-
-    def fail_selected_rename(path, target, **kwargs):
-        if path == entry["id"] and target == "profile":
-            raise PermissionError("private-diagnostic")
-        return original_rename(path, target, **kwargs)
-
-    monkeypatch.setattr(cd.os, "rename", fail_selected_rename)
-    with pytest.raises(ProviderActionError, match="folder permissions") as error:
-        manager.delete(entry["id"], confirm=True)
-    assert "private-diagnostic" not in str(error.value)
-    assert directory.is_dir()
-    assert (manager.root / "profiles.json").read_bytes() == original
-    assert not list(manager.root.glob(".deleting-*"))
-
-
-@POSIX_DELETE
-def test_failed_rollback_preserves_staged_data_and_reports_incomplete_state(profiles, monkeypatch):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    directory = manager.root / "profiles" / entry["id"]
-    (directory / "desktop" / "Cookies").write_bytes(b"synthetic-data")
-    original = (manager.root / "profiles.json").read_bytes()
-    monkeypatch.setattr(cd.os, "replace", Mock(side_effect=PermissionError("private-diagnostic")))
-    original_rename = os.rename
-
-    def fail_rollback(path, target, **kwargs):
-        if path == "profile" and target == entry["id"]:
-            raise PermissionError("private-diagnostic")
-        return original_rename(path, target, **kwargs)
-
-    monkeypatch.setattr(cd.os, "rename", fail_rollback)
-    with pytest.raises(ProviderActionError, match="staged data could not be returned") as error:
-        manager.delete(entry["id"], confirm=True)
-    assert "private-diagnostic" not in str(error.value)
-    assert "No profile data was erased" in str(error.value)
-    assert (manager.root / "profiles.json").read_bytes() == original
-    assert not directory.exists()
-    [remaining] = manager.root.glob(".deleting-*/profile/desktop/Cookies")
-    assert remaining.read_bytes() == b"synthetic-data"
-
-
-@POSIX_DELETE
-@pytest.mark.parametrize("partial", [False, True])
-def test_cleanup_failure_is_an_explicit_warning_not_a_success_or_rollback(profiles, monkeypatch, partial):
-    manager = profiles.manager
-    entry = manager.create("Work", confirm=True)["profile"]
-    directory = manager.root / "profiles" / entry["id"]
-    (directory / "desktop" / "Cookies").write_bytes(b"synthetic-data")
-
-    def fail_cleanup(name, *, dir_fd):
-        assert name == "profile"
-        [path] = manager.root.glob(".deleting-*")
-        assert os.path.samestat(path.stat(), os.fstat(dir_fd))
-        assert manager._read() == []
-        assert not directory.exists()
-        assert path.stat().st_mode & 0o777 == 0o700
-        if partial:
-            (path / "profile" / "claude-code").rmdir()
-        raise PermissionError("private-diagnostic")
-
-    cleanup = Mock(side_effect=fail_cleanup, avoids_symlink_attacks=True)
-    monkeypatch.setattr(cd.shutil, "rmtree", cleanup)
-    result = manager.delete(entry["id"], confirm=True)
-    assert result["ok"] is False and result["warning"] is True
-    assert result["profileId"] == entry["id"]
-    assert "removed from the list" in result["message"] and "not a complete deletion" in result["message"]
-    assert "private-diagnostic" not in result["message"]
-    assert manager.status()["profiles"] == []
-    assert not directory.exists()
-    [remaining] = manager.root.glob(".deleting-*/profile/desktop/Cookies")
-    assert remaining.read_bytes() == b"synthetic-data"
-    cleanup.assert_called_once()
-
-
-@POSIX_DELETE
-def test_update_delete_and_cleanup_share_the_profile_directory_lock(profiles, monkeypatch):
-    manager = profiles.manager
-    entries = [manager.create(f"Work {number}", confirm=True)["profile"] for number in range(4)]
-    original_write = cd.ClaudeDesktopProfiles._write
-    original_cleanup = cd.shutil.rmtree
-
-    def checked_write(self, saved, **kwargs):
-        assert (self.root / ".lock").is_dir()
-        original_write(self, saved, **kwargs)
-
-    def checked_scan():
-        assert (manager.root / ".lock").is_dir()
-        return False
-
-    def checked_cleanup(path, **kwargs):
-        assert (manager.root / ".lock").is_dir()
-        return original_cleanup(path, **kwargs)
-
-    def manage(number):
-        worker = cd.ClaudeDesktopProfiles(manager.root)
-        if number % 2:
-            return worker.update(entries[number]["id"], f"Updated {number}", "", confirm=True)
-        return worker.delete(entries[number]["id"], confirm=True)
-
-    monkeypatch.setattr(cd.ClaudeDesktopProfiles, "_write", checked_write)
-    monkeypatch.setattr(cd, "running", checked_scan)
-    monkeypatch.setattr(cd.shutil, "rmtree", Mock(side_effect=checked_cleanup, avoids_symlink_attacks=True))
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(manage, range(4)))
-    assert all(result["ok"] for result in results)
-    assert manager._read() == [{**entries[number], "name": f"Updated {number}"} for number in (1, 3)]
-    assert not list(manager.root.glob(".deleting-*"))
-
-
-@pytest.mark.parametrize("route", ["update", "delete"])
+@pytest.mark.parametrize("route", ["update", "remove", "restore"])
 def test_management_http_requires_header_auth_exact_fields_and_consent(web, profiles, route):
     manager = profiles.manager
     entry = manager.create("Work", confirm=True)["profile"]
     web.state.claude_desktop = manager
     payload = {"profileId": entry["id"], "confirm": True}
-    if route == "update":
+    if route == "restore":
+        manager.remove(entry["id"], confirm=True)
+    if route in {"update", "restore"}:
         payload.update({"name": "Office", "emailLabel": "typed@example.com"})
     path = f"/api/claude-desktop/{route}"
     original = (manager.root / "profiles.json").read_bytes()
+    removed = manager.status()["removedProfiles"]
     assert request(web, path, payload, token=False)[0] == 403
     assert request(web, path + "?token=" + web.token, payload, token=False)[0] == 403
     for field in ("path", "executable", "pid", "email", "emailVerified", "unexpected"):
@@ -679,12 +400,267 @@ def test_management_http_requires_header_auth_exact_fields_and_consent(web, prof
     raw = json.dumps(payload).removesuffix("}") + ',"confirm":true}'
     assert request(web, path, raw=raw.encode())[0] == 400
     assert (manager.root / "profiles.json").read_bytes() == original
+    assert manager.status()["removedProfiles"] == removed
     assert web.state._claude.calls == [] and web.state._codex.calls == []
     profiles.launch.assert_not_called()
 
 
-@POSIX_DELETE
-def test_http_profile_management_returns_metadata_and_deletes_only_selected_profile(web, profiles):
+def test_remove_keeps_every_file_and_offers_the_profile_for_restore(profiles, monkeypatch):
+    manager = profiles.manager
+    entry = manager.create("Work", emailLabel="Work@Example.com", confirm=True)["profile"]
+    kept = manager.create("Keep", confirm=True)["profile"]
+    directory = manager.root / "profiles" / entry["id"]
+    (directory / "desktop" / "Cookies").write_bytes(b"synthetic-session")
+    (directory / "claude-code" / "projects").mkdir()
+    (directory / "claude-code" / "projects" / "chat.jsonl").write_bytes(b"synthetic-history")
+    before, inode = _files(directory), directory.stat().st_ino
+    with monkeypatch.context() as guard:
+        guard.setattr(cd, "running", Mock(side_effect=AssertionError("Removal must not depend on Claude's process state")))
+        guard.setattr(cd, "installed_executable", Mock(side_effect=AssertionError("Removal must not require installation")))
+        result = manager.remove(entry["id"], confirm=True)
+
+    record = result["profile"]
+    assert result["ok"] and set(record) == {"id", "name", "emailLabel", "removedAt"}
+    assert {key: record[key] for key in ("id", "name", "emailLabel")} == entry
+    assert REMOVED_AT.fullmatch(record["removedAt"])
+    assert "stays on this computer" in result["message"]
+    assert json.loads((manager.root / "profiles.json").read_text()) == {"version": 2, "profiles": [kept]}
+    assert json.loads((manager.root / "removed-profiles.json").read_text()) == {"version": 1, "profiles": [record]}
+    assert _files(directory) == before and directory.stat().st_ino == inode
+    status = manager.status()
+    assert status["profiles"] == [kept] and status["removedProfiles"] == [record]
+    assert status["removedError"] is None
+    assert not list(manager.root.glob(".*profiles-*"))
+    profiles.launch.assert_not_called()
+
+
+def test_restore_brings_back_the_same_folder_under_new_labels(profiles):
+    manager = profiles.manager
+    entry = manager.create("Work", emailLabel="work@example.com", confirm=True)["profile"]
+    directory = manager.root / "profiles" / entry["id"]
+    (directory / "desktop" / "Cookies").write_bytes(b"synthetic-session")
+    before = _files(directory)
+    manager.remove(entry["id"], confirm=True)
+
+    result = manager.restore(entry["id"], " Lab ", " WORK@example.com ", confirm=True)
+    restored = {"id": entry["id"], "name": "Lab", "emailLabel": "WORK@example.com"}
+    assert result["ok"] and result["profile"] == restored
+    status = manager.status()
+    assert status["profiles"] == [restored] and status["removedProfiles"] == []
+    assert json.loads((manager.root / "removed-profiles.json").read_text()) == {"version": 1, "profiles": []}
+    assert _files(directory) == before
+    manager.open(entry["id"], confirm=True)
+    args, kwargs = profiles.launch.call_args
+    assert f"--user-data-dir={directory / 'desktop'}" in args[0]
+    assert kwargs["env"]["CLAUDE_CONFIG_DIR"] == str(directory / "claude-code")
+
+
+def test_remove_migrates_a_legacy_registry(profiles):
+    manager = profiles.manager
+    selected = manager.create("Work", confirm=True)["profile"]
+    other = manager.create("Keep", confirm=True)["profile"]
+    path = manager.root / "profiles.json"
+    path.write_text(json.dumps({"version": 1, "profiles": [
+        {"id": profile["id"], "name": profile["name"]} for profile in (selected, other)
+    ]}))
+    assert manager.remove(selected["id"], confirm=True)["profile"]["emailLabel"] == ""
+    assert json.loads(path.read_text()) == {"version": 2, "profiles": [other]}
+
+
+def test_removed_profiles_are_newest_first_and_hidden_once_their_folder_is_gone(profiles):
+    manager = profiles.manager
+    entries = [manager.create(name, confirm=True)["profile"] for name in ("Old", "New", "Gone")]
+    records = [{**entry, "removedAt": stamp} for entry, stamp in zip(entries, (
+        "2026-09-01T08:00:00Z", "2026-10-01T08:00:00Z", "2026-10-02T08:00:00Z",
+    ))]
+    (manager.root / "profiles.json").write_text(json.dumps({"version": 2, "profiles": []}))
+    (manager.root / "removed-profiles.json").write_text(json.dumps({"version": 1, "profiles": records}))
+    (manager.root / "profiles" / entries[2]["id"] / "desktop").rmdir()
+    assert manager.status()["removedProfiles"] == [records[1], records[0]]
+    with pytest.raises(ProviderActionError, match="missing"):
+        manager.restore(entries[2]["id"], "Gone", "", confirm=True)
+
+
+def test_removals_in_the_same_second_list_the_later_one_first(profiles):
+    manager = profiles.manager
+    entries = [manager.create(name, emailLabel="same@example.com", confirm=True)["profile"] for name in ("First", "Second")]
+    records = [{**entry, "removedAt": "2026-10-01T08:00:00Z"} for entry in entries]
+    (manager.root / "profiles.json").write_text(json.dumps({"version": 2, "profiles": []}))
+    (manager.root / "removed-profiles.json").write_text(json.dumps({"version": 1, "profiles": records}))
+    assert manager.status()["removedProfiles"] == [records[1], records[0]]
+
+
+def test_removed_order_follows_the_list_not_the_clock(profiles):
+    manager = profiles.manager
+    entries = [manager.create(name, confirm=True)["profile"] for name in ("First", "Second")]
+    # The clock was set back between the two removals, so the later one carries the earlier time.
+    records = [{**entries[0], "removedAt": "2026-10-02T08:00:00Z"}, {**entries[1], "removedAt": "2026-10-01T08:00:00Z"}]
+    (manager.root / "profiles.json").write_text(json.dumps({"version": 2, "profiles": []}))
+    (manager.root / "removed-profiles.json").write_text(json.dumps({"version": 1, "profiles": records}))
+    assert manager.status()["removedProfiles"] == [records[1], records[0]]
+
+
+def test_a_failed_restore_keeps_the_profile_in_the_removed_list(profiles, monkeypatch):
+    manager = profiles.manager
+    entry = manager.create("Work", confirm=True)["profile"]
+    record = manager.remove(entry["id"], confirm=True)["profile"]
+    files = [manager.root / "profiles.json", manager.root / "removed-profiles.json"]
+    before = [path.read_bytes() for path in files]
+    with monkeypatch.context() as failing:
+        failing.setattr(cd.ClaudeDesktopProfiles, "_write", Mock(side_effect=OSError("private-diagnostic")))
+        with pytest.raises(ProviderActionError) as error:
+            manager.restore(entry["id"], "Work", "", confirm=True)
+    assert "private-diagnostic" not in str(error.value)
+    assert [path.read_bytes() for path in files] == before
+    assert manager.status()["removedProfiles"] == [record]
+
+
+def test_the_active_list_wins_over_a_stale_removed_entry(profiles):
+    manager = profiles.manager
+    entry = manager.create("Work", confirm=True)["profile"]
+    stale = {**entry, "removedAt": "2026-10-01T08:00:00Z"}
+    (manager.root / "removed-profiles.json").write_text(json.dumps({"version": 1, "profiles": [stale]}))
+    assert manager.status()["removedProfiles"] == []
+    with pytest.raises(ProviderActionError, match="removed list"):
+        manager.restore(entry["id"], "Office", "", confirm=True)
+    record = manager.remove(entry["id"], confirm=True)["profile"]
+    assert json.loads((manager.root / "removed-profiles.json").read_text())["profiles"] == [record]
+
+
+@pytest.mark.parametrize("case", ["unknown", "active", "duplicate", "full", "name", "email"])
+def test_restore_refuses_invalid_targets_without_changes(profiles, case):
+    manager = profiles.manager
+    entry = manager.create("Work", emailLabel="work@example.com", confirm=True)["profile"]
+    active = manager.create("Office", confirm=True)["profile"]
+    manager.remove(entry["id"], confirm=True)
+    if case == "full":
+        registry = json.loads((manager.root / "profiles.json").read_text())
+        registry["profiles"] += [
+            {"id": f"{number:032x}", "name": f"Filler {number}", "emailLabel": ""}
+            for number in range(cd._MAX_PROFILES - 1)
+        ]
+        (manager.root / "profiles.json").write_text(json.dumps(registry))
+    files = [manager.root / "profiles.json", manager.root / "removed-profiles.json"]
+    before = [path.read_bytes() for path in files]
+    target, name, email, error = {
+        "unknown": ("c" * 32, "Lab", "", "removed list"),
+        "active": (active["id"], "Lab", "", "removed list"),
+        "duplicate": (entry["id"], "OFFICE", "", "already"),
+        "full": (entry["id"], "Lab", "", "limit"),
+        "name": (entry["id"], "Lab\n", "", "profile name"),
+        "email": (entry["id"], "Lab", "not-an-email", "email label"),
+    }[case]
+    with pytest.raises(ProviderActionError, match=error):
+        manager.restore(target, name, email, confirm=True)
+    assert [path.read_bytes() for path in files] == before
+
+
+def test_remove_rolls_back_when_the_registry_cannot_be_saved(profiles, monkeypatch):
+    manager = profiles.manager
+    entry = manager.create("Work", confirm=True)["profile"]
+    registry = (manager.root / "profiles.json").read_bytes()
+    with monkeypatch.context() as failing:
+        failing.setattr(cd.ClaudeDesktopProfiles, "_write", Mock(side_effect=OSError("private-diagnostic")))
+        with pytest.raises(ProviderActionError, match="could not be saved") as error:
+            manager.remove(entry["id"], confirm=True)
+    assert "private-diagnostic" not in str(error.value)
+    assert (manager.root / "profiles.json").read_bytes() == registry
+    assert json.loads((manager.root / "removed-profiles.json").read_text()) == {"version": 1, "profiles": []}
+    status = manager.status()
+    assert status["profiles"] == [entry] and status["removedProfiles"] == []
+    assert not list(manager.root.glob(".*profiles-*"))
+
+
+def test_remove_refuses_when_the_removed_list_would_outgrow_the_registry_limit(profiles, monkeypatch):
+    manager = profiles.manager
+    entry = manager.create("Work", confirm=True)["profile"]
+    registry = (manager.root / "profiles.json").read_bytes()
+    monkeypatch.setattr(cd, "_MAX_REGISTRY_BYTES", len(registry) + 10)
+    with pytest.raises(ProviderActionError, match="Too many"):
+        manager.remove(entry["id"], confirm=True)
+    assert (manager.root / "profiles.json").read_bytes() == registry
+    assert not (manager.root / "removed-profiles.json").exists()
+    assert not list(manager.root.glob(".*profiles-*"))
+
+
+def test_restore_succeeds_even_if_the_removed_list_cannot_be_rewritten(profiles, monkeypatch):
+    manager = profiles.manager
+    entry = manager.create("Work", confirm=True)["profile"]
+    manager.remove(entry["id"], confirm=True)
+    with monkeypatch.context() as failing:
+        failing.setattr(cd.ClaudeDesktopProfiles, "_write_removed", Mock(side_effect=OSError("private-diagnostic")))
+        assert manager.restore(entry["id"], "Work", "", confirm=True)["ok"]
+    status = manager.status()
+    assert status["profiles"] == [entry] and status["removedProfiles"] == []
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"version":1,"profiles":[],"token":"private-value"}',
+    b'{"version":2,"profiles":[]}',
+    b'{"version":1,"profiles":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Work","emailLabel":"",'
+    b'"removedAt":"2026-10-01T08:00:00Z","removedAt":"private-value"}]}',
+    b'{"version":1,"profiles":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Work","emailLabel":"",'
+    b'"removedAt":"2026-10-01T08:00:00Z","token":"private-value"}]}',
+    b'{"version":1,"profiles":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Work","emailLabel":"","removedAt":"yesterday"}]}',
+    b'{"version":1,"profiles":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Work","emailLabel":"","removedAt":"2026-13-45T08:00:00Z"}]}',
+    b'{"version":1,"profiles":[{"id":"../elsewhere","name":"Work","emailLabel":"","removedAt":"2026-10-01T08:00:00Z"}]}',
+    b'{"version":1,"profiles":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Work","emailLabel":"not-an-email",'
+    b'"removedAt":"2026-10-01T08:00:00Z"}]}',
+    b'{"version":1,"profiles":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"A","emailLabel":"","removedAt":"2026-10-01T08:00:00Z"},'
+    b'{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"B","emailLabel":"","removedAt":"2026-10-01T08:00:00Z"}]}',
+    b"",
+    pytest.param(b" " * (cd._MAX_REGISTRY_BYTES + 1), id="oversized"),
+])
+def test_an_invalid_removed_list_is_reported_and_never_overwritten(profiles, raw):
+    manager = profiles.manager
+    entry = manager.create("Work", confirm=True)["profile"]
+    path = manager.root / "removed-profiles.json"
+    path.write_bytes(raw)
+    registry = (manager.root / "profiles.json").read_bytes()
+    status = manager.status()
+    assert status["canManage"] and status["profiles"] == [entry] and status["removedProfiles"] == []
+    assert "invalid" in status["removedError"] and "private-value" not in json.dumps(status)
+    with pytest.raises(ProviderActionError, match="invalid"):
+        manager.remove(entry["id"], confirm=True)
+    with pytest.raises(ProviderActionError, match="invalid"):
+        manager.restore("a" * 32, "Lab", "", confirm=True)
+    assert path.read_bytes() == raw
+    assert (manager.root / "profiles.json").read_bytes() == registry
+
+
+def test_update_remove_and_restore_share_the_profile_directory_lock(profiles, monkeypatch):
+    manager = profiles.manager
+    entries = [manager.create(f"Work {number}", confirm=True)["profile"] for number in range(6)]
+    for number in (4, 5):
+        manager.remove(entries[number]["id"], confirm=True)
+
+    def locked(write):
+        def checked(self, saved, **kwargs):
+            assert (self.root / ".lock").is_dir()
+            write(self, saved, **kwargs)
+        return checked
+
+    def manage(number):
+        worker = cd.ClaudeDesktopProfiles(manager.root)
+        if number >= 4:
+            return worker.restore(entries[number]["id"], f"Restored {number}", "", confirm=True)
+        if number % 2:
+            return worker.update(entries[number]["id"], f"Updated {number}", "", confirm=True)
+        return worker.remove(entries[number]["id"], confirm=True)
+
+    monkeypatch.setattr(cd.ClaudeDesktopProfiles, "_write", locked(cd.ClaudeDesktopProfiles._write))
+    monkeypatch.setattr(cd.ClaudeDesktopProfiles, "_write_removed", locked(cd.ClaudeDesktopProfiles._write_removed))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(manage, range(6)))
+    assert all(result["ok"] for result in results)
+    assert {profile["id"]: profile["name"] for profile in manager._read()} == {
+        entries[1]["id"]: "Updated 1", entries[3]["id"]: "Updated 3",
+        entries[4]["id"]: "Restored 4", entries[5]["id"]: "Restored 5",
+    }
+    assert {record["id"] for record in manager.status()["removedProfiles"]} == {entries[0]["id"], entries[2]["id"]}
+
+
+def test_http_profile_management_removes_and_restores_without_deleting(web, profiles):
     web.state.claude_desktop = profiles.manager
     code, created, _ = request(web, "/api/claude-desktop/create", {
         "name": "Work", "emailLabel": "typed@example.com", "confirm": True,
@@ -694,21 +670,14 @@ def test_http_profile_management_returns_metadata_and_deletes_only_selected_prof
     code, updated, _ = request(web, "/api/claude-desktop/update", {
         "profileId": profile_id, "name": "Office", "emailLabel": "", "confirm": True,
     })
-    assert code == 200 and updated["ok"]
-    assert updated["profile"] == {"id": profile_id, "name": "Office", "emailLabel": ""}
-    code, deleted, _ = request(web, "/api/claude-desktop/delete", {"profileId": profile_id, "confirm": True})
-    assert code == 200 and deleted["ok"] and deleted["profileId"] == profile_id
+    assert code == 200 and updated["profile"] == {"id": profile_id, "name": "Office", "emailLabel": ""}
+    code, removed, _ = request(web, "/api/claude-desktop/remove", {"profileId": profile_id, "confirm": True})
+    assert code == 200 and removed["ok"] and removed["profile"]["id"] == profile_id
     assert profiles.manager.status()["profiles"] == []
+    assert request(web, "/api/claude-desktop/delete", {"profileId": profile_id, "confirm": True})[0] == 404
+    code, restored, _ = request(web, "/api/claude-desktop/restore", {
+        "profileId": profile_id, "name": "Lab", "emailLabel": "typed@example.com", "confirm": True,
+    })
+    assert code == 200 and restored["profile"] == {"id": profile_id, "name": "Lab", "emailLabel": "typed@example.com"}
+    assert (profiles.manager.root / "profiles" / profile_id / "desktop").is_dir()
     assert web.state._claude.calls == [] and web.state._codex.calls == []
-
-
-@POSIX_DELETE
-def test_http_reports_cleanup_warning_after_registry_removal(web, profiles, monkeypatch):
-    entry = profiles.manager.create("Work", confirm=True)["profile"]
-    web.state.claude_desktop = profiles.manager
-    monkeypatch.setattr(cd.shutil, "rmtree", Mock(side_effect=PermissionError("private-value"), avoids_symlink_attacks=True))
-    code, result, _ = request(web, "/api/claude-desktop/delete", {"profileId": entry["id"], "confirm": True})
-    assert code == 200 and result["ok"] is False and result["warning"] is True
-    assert "private-value" not in json.dumps(result)
-    assert "not a complete deletion" in result["message"]
-    assert profiles.manager.status()["profiles"] == []

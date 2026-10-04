@@ -89,13 +89,16 @@ public without paid Apple or Windows signing credentials; a separate signed
 distribution remains a future, optional path. Draft artifacts and package
 versions are not published downloads.
 
-Independent storage/import and isolated terminal Codex sign-in require
-**v1.2.4 or later**, or a current source build. The browser-only GUI/TUI sign-in
-flow described below is a **source-build change, not part of the published
-v1.2.4 installers**. Those installers still use Prepare sign-in, a generated
-terminal command, and Save & switch. The v1.2.3 installers use the earlier shared
-store and do not include isolated sign-in. Check the release notes before
-downloading; repository documentation is not proof of a new binary release.
+Feature availability depends on the installer version. Removing a Claude Desktop
+profile without deleting its data, **Undo**, and **Restore history** require
+**v1.2.7 or later**; in v1.2.6 and earlier, **Delete profile** permanently erases
+that profile's local Claude data. Browser sign-in for Codex in the app, dashboard
+and TUI requires **v1.2.5 or later**; the v1.2.4 installers use Prepare sign-in,
+a generated terminal command, and Save & switch. Independent storage/import and
+isolated terminal Codex sign-in require **v1.2.4 or later**; the v1.2.3
+installers use the earlier shared store. A current source build includes all of
+these. Check the release notes before downloading; repository documentation is
+not proof of a new binary release.
 
 For developers, successful runs of
 [Desktop installers](https://github.com/jingyi-jia/agents-switcher/actions/workflows/desktop.yml)
@@ -351,12 +354,16 @@ detected, move the official app into one of the supported installation locations
 above, then choose **Refresh**. A failed process check or unreadable profile registry also blocks launch;
 creating a profile does not bypass those checks.
 
-Click a profile's name to edit its name or optional email label. **Delete profile**
-has a separate destructive confirmation and requires Claude to be fully quit.
-It removes that named profile's local sign-in and session data, not your Claude
-account, cloud data, usual default profile, or saved CLI accounts. The usual
-profile cannot be renamed or deleted here. If cleanup is incomplete, the app
-reports that private staged data may remain; it does not claim a complete deletion.
+Click a profile's name to edit its name or optional email label, or to
+**Remove profile**. Removing takes the profile off the list at once and deletes
+nothing: its folder, with Claude's local history and sign-in, stays on this
+computer, and **Undo** in the notice puts it back. It works even while Claude is
+running. Later, **+ New profile** with the same email label (or, for a profile
+removed without one, the same name) offers **Restore history**, which brings the
+profile back under the new labels with its original folder. **Start fresh**
+creates an empty profile instead and keeps the removed one. Matching uses your
+labels only, so check the account inside Claude after restoring. The usual
+profile cannot be renamed or removed here.
 
 This uses Claude's `--user-data-dir` launch flag without copying session cookies,
 importing tokens, changing CLI credentials, modifying the official app, or
@@ -373,11 +380,16 @@ profiles and A → B → A restarts; it verified separate data and saved window 
 not real-account switching. Treat updates to Claude as requiring revalidation.
 
 Profile labels and IDs are stored in `claude-desktop/profiles.json` beneath Agent
-Switch's data directory; each `profiles/<id>/` contains private `desktop/` and
-`claude-code/` directories. Claude owns the session data it creates there, which
-can contain credentials and conversation data. Do not share or commit these
-directories. No export action is provided. Launching Claude can also
-update its shared OS-integration metadata outside a named profile.
+Switch's data directory, and those of removed profiles in
+`claude-desktop/removed-profiles.json`. Each `profiles/<id>/`, removed or not,
+contains private `desktop/` and `claude-code/` directories. Claude owns the
+session data it creates there, which can contain credentials and conversation
+data. Do not share or commit these directories. Agent Switch never deletes them:
+to erase a profile's local data, restore it and delete its conversations in
+Claude, or quit Claude and delete the `profiles/<id>/` folder whose ID
+`removed-profiles.json` lists beside its name. No export action is provided.
+Launching Claude can also update its shared OS-integration metadata outside a
+named profile.
 
 ### Save and switch Codex accounts safely
 
