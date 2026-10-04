@@ -246,7 +246,7 @@ class ClaudeDesktopProfiles:
                     raise ValueError
                 if not _valid_name(entry["name"]) or not _valid_email_label(entry["emailLabel"]):
                     raise ValueError
-                # Only the canonical UTC form is accepted, so string order is time order.
+                # Only the canonical UTC form that remove() writes is accepted.
                 if not isinstance(removed_at, str) or (
                     datetime.strptime(removed_at, _REMOVED_AT_FORMAT).strftime(_REMOVED_AT_FORMAT) != removed_at
                 ):
@@ -274,9 +274,9 @@ class ClaudeDesktopProfiles:
             except ProviderActionError:
                 continue
             restorable.append(entry)
-        # Entries are appended as they are removed; reversing first keeps the later of two
-        # same-second removals ahead, because the stable sort preserves order among ties.
-        return sorted(reversed(restorable), key=lambda entry: entry["removedAt"], reverse=True)
+        # Entries are appended as they are removed, so list order is the true removal order
+        # even when the clock was set back or two removals share a timestamp.
+        return restorable[::-1]
 
     def _write_json(self, filename: str, payload: dict) -> None:
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")

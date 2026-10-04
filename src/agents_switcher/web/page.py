@@ -710,7 +710,12 @@ async function removeDesktopProfile(profileId, button) {
   if ($("action-dialog").open) $("action-dialog").close();
   toast(`Removed ${profile.name}. Its Claude history stays on this computer.`, false, false, {
     label: "Undo",
-    run: (undo) => restoreDesktopProfile(profile.id, profile.name, profile.emailLabel, undo),
+    run: async (undo) => {
+      if (!await restoreDesktopProfile(profile.id, profile.name, profile.emailLabel, undo)) return;
+      // The Undo button goes away with its notice; hand focus to the profile it brought back.
+      const restored = Array.from(document.querySelectorAll("[data-action]")).find((item) => item.dataset.profileFocus === "details:" + profile.id);
+      if (restored) restored.focus({preventScroll: true});
+    },
   });
 }
 

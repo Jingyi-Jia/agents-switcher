@@ -490,6 +490,16 @@ def test_removals_in_the_same_second_list_the_later_one_first(profiles):
     assert manager.status()["removedProfiles"] == [records[1], records[0]]
 
 
+def test_removed_order_follows_the_list_not_the_clock(profiles):
+    manager = profiles.manager
+    entries = [manager.create(name, confirm=True)["profile"] for name in ("First", "Second")]
+    # The clock was set back between the two removals, so the later one carries the earlier time.
+    records = [{**entries[0], "removedAt": "2026-10-02T08:00:00Z"}, {**entries[1], "removedAt": "2026-10-01T08:00:00Z"}]
+    (manager.root / "profiles.json").write_text(json.dumps({"version": 2, "profiles": []}))
+    (manager.root / "removed-profiles.json").write_text(json.dumps({"version": 1, "profiles": records}))
+    assert manager.status()["removedProfiles"] == [records[1], records[0]]
+
+
 def test_a_failed_restore_keeps_the_profile_in_the_removed_list(profiles, monkeypatch):
     manager = profiles.manager
     entry = manager.create("Work", confirm=True)["profile"]

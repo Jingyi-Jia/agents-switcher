@@ -120,7 +120,7 @@ assert.equal(posts().at(-1).path, '/api/claude-desktop/restore');
 assert.deepEqual(posts().at(-1).payload, {profileId, name: 'Work', emailLabel: 'work@example.test', confirm: true});
 assert.match($('toast').textContent, /Restored Work/);
 assert.equal(button('toast', 'Undo'), undefined);
-assert.ok(details());
+assert.equal(document.activeElement, details());
 """)
 
 
