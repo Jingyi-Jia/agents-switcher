@@ -89,8 +89,10 @@ function installTray() {
   tray.setToolTip('Agent Switch — close hides the window; Quit stops automation');
   let menuOpen = false;
   let pendingItems = null;
+  let renderVersion = 0;
   trayDashboard = new TrayDashboard(items => {
     if (quitting || installing || !tray) return;
+    renderVersion += 1;
     if (menuOpen) {
       pendingItems = items;
       return;
@@ -110,8 +112,11 @@ function installTray() {
     menu.on('menu-will-close', () => {
       menuOpen = false;
       const pending = pendingItems;
+      const version = renderVersion;
       pendingItems = null;
-      if (pending) void Promise.resolve().then(() => trayDashboard.render(pending));
+      if (pending) void Promise.resolve().then(() => {
+        if (renderVersion === version) trayDashboard.render(pending);
+      });
     });
     tray.setContextMenu(menu);
   });

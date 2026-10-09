@@ -240,6 +240,21 @@ test('an open tray menu stays stable while new usage waits for the next opening'
   app.quit(); await settle();
 });
 
+for (const newer of ['Fresh quota', 'Account usage unavailable · reconnect in the app']) {
+  test(`closing a tray menu cannot overwrite ${newer} with an older queued snapshot`, async () => {
+    const { state, app } = harness();
+    await settle();
+    const openMenu = state.trayMenu;
+    openMenu.emit('menu-will-show');
+    state.trayDashboard.render([{ label: 'Old quota · 100% left', enabled: false }]);
+    openMenu.emit('menu-will-close');
+    state.trayDashboard.render([{ label: newer, enabled: false }]);
+    await settle();
+    assert.equal(state.trayMenu[0].label, newer);
+    app.quit(); await settle();
+  });
+}
+
 test('macOS full-screen close waits for native exit before hiding and retains the backend', async () => {
   const { state, app } = harness({ platform: 'darwin' });
   await settle();
