@@ -148,6 +148,12 @@ when a new profile's email label matches a removed one case-insensitively, or,
 for one removed without an email label, its name. Never remove or restore the
 usual profile or follow linked directories.
 
+TUI quota bars and percentages show remaining availability;
+provider measurements and configured auto-switch thresholds still mean used.
+The standalone tray menu is a read-only per-account quota view, checking cached
+`/api/state` every 20 seconds with header authentication and no forced polling.
+Stop its reads on backend recovery, explicit quit, and update installation.
+
 Dashboard quota windows expose `windowSeconds`, `resetAt`, `resetAfterSeconds`
 and `observedAt`. Anchor relative resets to the provider measurement timestamp,
 not render time, and require timezone-aware Claude timestamps. Missing, invalid

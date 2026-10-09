@@ -13,7 +13,7 @@ from agents_switcher.tui.autoview import AutoView
 from agents_switcher.tui.codex import CodexScreen, codex_snapshot
 from agents_switcher.tui.dashboard import DashboardScreen, SwitchScreen, WatchScreen
 from agents_switcher.tui.widgets import AccountsPanel, MenuItem, usage_rows
-from tests.test_codex_tui import account, codex_readiness, healthy
+from tests.test_codex_tui import account, codex_readiness, healthy, on_credits
 from tests.test_provider_navigation import ManagedCodexSwitcher, choose_menu
 from tests.test_tui import FakeSwitcher, make_account, settle
 
@@ -123,6 +123,36 @@ def test_codex_card_adapter_keeps_real_window_labels_and_reset_times():
     assert [(row[0], row[1]) for row in rows] == [("2h", 20), ("7d", 60)]
     assert datetime.fromisoformat(entry.last_good["windows"][0]["resets_at"]).timestamp() == 2800
     assert datetime.fromisoformat(entry.last_good["windows"][1]["resets_at"]).timestamp() == 700000
+    from agents_switcher.tui.widgets import account_card_text, mini_account_text
+
+    card = account_card_text(snapshot.accounts[0], 100, now=1000).plain
+    mini = mini_account_text(snapshot.accounts[0], 1000).plain
+    assert "80% left" in card and "40% left" in card
+    assert "2h" in card and "resets 30m" in card
+    assert "80% left" in mini and "40% left" in mini
+    assert entry.last_good["windows"][0]["pct"] == 20
+
+
+@pytest.mark.asyncio
+async def test_codex_auto_candidates_show_remaining_without_changing_rank_or_eligibility(monkeypatch):
+    codex = ManagedCodexSwitcher()
+    codex._accounts = [account(str(i), f"candidate{i}@example.test") for i in range(1, 6)]
+    codex._usage = {"1": healthy(95), "2": healthy(80), "3": healthy(20),
+                    "4": on_credits(), "5": UsageError("Synthetic network failure")}
+    monkeypatch.setattr(codex_module, "CodexSwitcher", lambda: codex)
+    app = CswapApp(start="codex")
+    async with app.run_test(size=(110, 36)) as pilot:
+        await settle(pilot)
+        await pilot.press("g")
+        await settle(pilot)
+        candidates = app.screen.query_one("#candidates", Static).render().plain
+        assert candidates.index("candidate3@") < candidates.index("candidate2@")
+        assert "80% left" in candidates and "20% left" in candidates
+        assert "% used" not in candidates and "candidate1@" not in candidates
+        assert "manual switch only" in next(line for line in candidates.splitlines() if "candidate4@" in line)
+        assert "not eligible" in next(line for line in candidates.splitlines() if "candidate5@" in line)
+        assert "threshold 90% used" in app.screen.query_one("#auto-summary", Static).render().plain
+        assert "5% left" in app.screen.query_one("#auto-active-panel", AccountsPanel).render().plain
 
 
 def test_codex_replaced_slot_does_not_inherit_old_identity_quota():

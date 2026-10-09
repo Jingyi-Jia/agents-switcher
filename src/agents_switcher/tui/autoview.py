@@ -35,7 +35,7 @@ from agents_switcher.settings import SETTING_SPECS, load_settings, parse_model_n
 from agents_switcher.tui import data
 from agents_switcher.tui.modals import ConfirmModal
 from agents_switcher.tui.theme import Palette
-from agents_switcher.tui.widgets import AccountsPanel, AppHeader
+from agents_switcher.tui.widgets import AccountsPanel, AppHeader, remaining_pct
 
 if TYPE_CHECKING:
     from agents_switcher.tui.app import CswapApp
@@ -202,7 +202,7 @@ class AutoScreen(AutoView):
         text = Text()
         text.append("auto-switch · ")
         text.append(
-            f"threshold {pct_label(self._settings.threshold)}%",
+            f"threshold {pct_label(self._settings.threshold)}% used",
             style=palette.accent if self._adjusting else "",
         )
         if self._settings.threshold != self._configured_threshold:
@@ -325,7 +325,11 @@ class AutoScreen(AutoView):
                 entry.append("  usage unknown", style=palette.muted)
                 ranked.append((999.0, acc.number))
             else:
-                entry.append(f"  {pct:3.0f}% used", style=palette.severity(pct))
+                left = remaining_pct(pct)
+                if left is None:
+                    entry.append("  quota unknown", style=palette.muted)
+                else:
+                    entry.append(f"  {left:3.0f}% left", style=palette.severity(pct))
                 ranked.append((pct, acc.number))
             lines[acc.number] = entry
 

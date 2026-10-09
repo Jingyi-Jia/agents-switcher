@@ -8,13 +8,14 @@ auto-switch trigger line), and stale-measurement dimming.
 
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING
 
 from rich.text import Text
 from textual.widgets import ListItem, Static
 
-from agents_switcher import pace
+from agents_switcher import oauth, pace, printer
 from agents_switcher.json_output import USAGE_API_KEY
 from agents_switcher.models import AccountSnapshot
 from agents_switcher.switcher import ERROR_NOTES
@@ -29,6 +30,13 @@ _BAR_FILLED = "━"
 _BAR_HALF = "╸"
 _BAR_EMPTY = "─"
 _BAR_TICK = "┃"
+
+
+def remaining_pct(pct: float | None) -> float | None:
+    """Display-only available quota from a reported utilization percentage."""
+    if pct is None or not math.isfinite(pct):
+        return None
+    return min(100.0, max(0.0, 100.0 - pct))
 
 
 class AppHeader(Static):
@@ -62,18 +70,19 @@ def bar_cells(
     threshold: float | None = None,
     palette: Palette = Palette.DARK,
 ) -> Text:
-    """Just the bar glyphs: severity-colored fill, track, optional tick."""
+    """Available-quota fill and tick, with severity based on utilization."""
     text = Text()
-    if pct is None:
+    left = remaining_pct(pct)
+    if left is None:
         text.append(_BAR_EMPTY * width, style=palette.track)
         return text
-    frac = min(max(pct, 0.0), 100.0) / 100.0
+    frac = left / 100.0
     cells = frac * width
     full = int(cells)
     half = (cells - full) >= 0.5 and full < width
     tick_at: int | None = None
     if threshold is not None:
-        tick_at = min(width - 1, max(0, round(threshold / 100.0 * width)))
+        tick_at = min(width - 1, max(0, round((100.0 - threshold) / 100.0 * width)))
     color = palette.severity(pct)
     fill_style = f"{color} dim" if stale else color
     for i in range(width):
@@ -98,15 +107,16 @@ def usage_bar(
     threshold: float | None = None,
     palette: Palette = Palette.DARK,
 ) -> Text:
-    """One full bar line: ``5h ━━━━╸────┃──  47%  resets 2h 13m · 20:39``."""
+    """One remaining-quota line; inputs retain utilization semantics."""
     text = Text()
     text.append(f"{label} ", style=palette.muted)
     text.append(bar_cells(pct, width, stale=stale, threshold=threshold, palette=palette))
-    if pct is None:
-        text.append("  usage unknown", style=palette.muted)
+    left = remaining_pct(pct)
+    if left is None:
+        text.append("  quota unknown", style=palette.muted)
     else:
         color = palette.severity(pct)
-        text.append(f" {pct:3.0f}%", style=f"{color} dim" if stale else color)
+        text.append(f" {left:3.0f}% left", style=f"{color} dim" if stale else color)
     if suffix:
         text.append(f"  {suffix}", style=palette.muted)
     return text
@@ -134,8 +144,7 @@ def _pace_suffix(window: dict, fetched_at: float | None) -> str:
 def usage_rows(
     last_good: dict | None, now: float, fetched_at: float | None = None
 ) -> list[tuple[str, float, str, str]]:
-    """(label, pct, suffix, suffix_full) rows mirroring the CLI's
-    ``_format_usage_lines``.
+    """(label, used pct, suffix, suffix_full) rows for quota renderers.
 
     ``suffix_full`` extends the reset countdown with the absolute clock time
     (``resets 2h 13m · 20:39``) for rows that have room; otherwise it equals
@@ -156,7 +165,7 @@ def usage_rows(
         return rows
     spend = last_good.get("spend")
     if spend:
-        amounts = f"${spend['used']:,.2f} / ${spend['limit']:,.2f}"
+        amounts = f"${max(0.0, spend['limit'] - spend['used']):,.2f} / ${spend['limit']:,.2f} left"
         reset, reset_full = _reset_parts(spend, now)
         suffix = f"{reset}  {amounts}" if reset else amounts
         suffix_full = f"{reset_full}  {amounts}" if reset_full else amounts
@@ -223,14 +232,13 @@ def account_card_text(
         style = palette.muted if sentinel == USAGE_API_KEY else palette.sev_warn
         marker = "·" if sentinel == USAGE_API_KEY else "⚠"
         text.append(f"{marker} {data.sentinel_label(sentinel)}", style=style)
-        # Same supplementary line `cswap list` prints: the last good
-        # measurement behind the sentinel (API-key accounts have no quota to
-        # have "seen").
         if sentinel != USAGE_API_KEY:
-            last_seen = data.last_seen_note(acc.usage)
-            if last_seen is not None:
+            headroom = oauth.account_headroom(acc.usage.last_good)
+            left = remaining_pct(100.0 - headroom) if headroom is not None else None
+            if left is not None and acc.usage.fetched_at is not None:
                 text.append("\n    ")
-                text.append(f"└ {last_seen}", style=palette.muted)
+                age = printer.format_age(int(acc.usage.fetched_at * 1000))
+                text.append(f"└ last seen {left:.0f}% left · {age}", style=palette.muted)
         return text
 
     rows = usage_rows(acc.usage.last_good, now, acc.usage.fetched_at)
@@ -248,11 +256,10 @@ def account_card_text(
     stale = acc.usage.age_s is not None and acc.usage.age_s > STALE_OK_S
     label_width = max(len(label) for label, _pct, _suffix, _full in rows)
     bar_width = (
-        max(4, min(24, width - 12 - label_width))
-        if width < 60 else max(12, min(30, width - 42 - label_width))
+        max(4, min(24, width - 17 - label_width))
+        if width < 60 else max(12, min(30, width - 47 - label_width))
     )
-    # everything on a row except the suffix: indent, label, bar, " NNN%", gap
-    row_overhead = 4 + label_width + 1 + bar_width + 5 + 2
+    row_overhead = 4 + label_width + 1 + bar_width + 10 + 2
     for label, pct, suffix, suffix_full in rows:
         # per-row: show the absolute clock only where it fits, so a long
         # spend row degrading doesn't cost the 5h/7d rows their clocks
@@ -290,7 +297,7 @@ def mini_account_text(
 ) -> Text:
     """Compact inactive account summary, wrapping details in narrow terminals.
 
-    ``2  work@acme.dev [personal]   5h 92% · 7d 63%`` — pcts only, severity
+    ``2  work@acme.dev [personal]   5h 8% left · 7d 37% left`` — severity
     colored; a window at/over 100% brings its reset countdown along, and a
     maxed per-model window shows as ``Fable (!)``. Sentinel states show
     their label instead.
@@ -324,7 +331,11 @@ def mini_account_text(
                 text.append(" · ", style=palette.track)
             text.append(f"{label} ", style=palette.muted)
             color = palette.severity(pct)
-            text.append(f"{pct:3.0f}%", style=f"{color} dim" if stale else color)
+            left = remaining_pct(pct)
+            if left is None:
+                text.append("quota unknown", style=palette.muted)
+            else:
+                text.append(f"{left:3.0f}% left", style=f"{color} dim" if stale else color)
             if pct >= 100 and suffix:
                 text.append(f" ({suffix})", style=palette.muted)
         if not rows:
@@ -340,7 +351,11 @@ def mini_account_text(
             text.append(" · ", style=palette.track)
         color = palette.severity(pct)
         text.append(f"{label} ", style=palette.muted)
-        text.append(f"{pct:.0f}%", style=f"{color} dim" if stale else color)
+        left = remaining_pct(pct)
+        if left is None:
+            text.append("quota unknown", style=palette.muted)
+        else:
+            text.append(f"{left:.0f}% left", style=f"{color} dim" if stale else color)
         if pct >= 100:
             reset = data.reset_text(window, now)
             if reset:
