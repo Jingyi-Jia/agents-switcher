@@ -22,6 +22,7 @@ from agents_switcher.tui.codex_login import CodexLoginModal
 from agents_switcher.tui.dashboard import DashboardScreen
 from agents_switcher.tui.modals import ConfirmModal
 from agents_switcher.tui.theme import Palette
+from agents_switcher.tui.widgets import remaining_pct
 from agents_switcher.usage_store import UsageEntry
 
 
@@ -326,7 +327,7 @@ class CodexAutoScreen(AutoView):
         badge = self.query_one("#mode-badge", Static)
         badge.update(f" {state['mode'].upper()} ")
         badge.set_classes("live" if state["mode"] == "live" else "dry")
-        summary = f"auto-switch · threshold {self._threshold:g}%"
+        summary = f"auto-switch · threshold {self._threshold:g}% used"
         if self._threshold != self._configured_threshold:
             summary += " (session)"
         if self._adjusting:
@@ -343,8 +344,9 @@ class CodexAutoScreen(AutoView):
             candidates.append((percent if percent is not None else 999, account, result))
         for percent, account, result in sorted(candidates, key=lambda row: (row[0], row[1].number)):
             text.append(f"\n  {account.number:>2}  {account.email}", style=palette.foreground)
-            if percent != 999:
-                text.append(f"  {percent:3.0f}% used", style=palette.severity(percent))
+            left = remaining_pct(percent) if percent != 999 else None
+            if left is not None:
+                text.append(f"  {left:3.0f}% left", style=palette.severity(percent))
             else:
                 note = "manual switch only" if isinstance(result, CodexUsage) and result.on_credits else "not eligible"
                 text.append(f"  {note}", style=palette.muted)

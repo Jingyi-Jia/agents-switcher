@@ -7,6 +7,7 @@ const { Backend, BackendError } = require('./backend.cjs');
 const { HELP_LINKS, secureSession, secureWebContents } = require('./security.cjs');
 const { UpdateController, registerUpdaterIPC } = require('./updater.cjs');
 const { createUpdateRuntime } = require('./updater-runtime.cjs');
+const { TrayDashboard } = require('./tray-dashboard.cjs');
 
 app.setName('Agent Switch');
 let window = null;
@@ -19,6 +20,7 @@ let dashboardAddress = null;
 let updates = null;
 let installing = false;
 let fullScreenClose = null;
+let trayDashboard = null;
 
 function installerOwnsShutdown() {
   return installing && updates?.installStarted && backend?.cleanExit;
@@ -85,21 +87,50 @@ function installTray() {
   if (process.platform === 'darwin') icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip('Agent Switch — close hides the window; Quit stops automation');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show app', click: showWindow },
-    { type: 'separator' },
-    { label: 'Accounts', click: () => showView('accounts') },
-    { label: 'Usage dashboard', click: () => showView('usage') },
-    { label: 'Settings', click: () => showView('settings') },
-    { type: 'separator' },
-    { label: 'Quit Agent Switch', click: () => app.quit() },
-  ]));
-  tray.on('click', showWindow);
+  let menuOpen = false;
+  let pendingItems = null;
+  let renderVersion = 0;
+  trayDashboard = new TrayDashboard(items => {
+    if (quitting || installing || !tray) return;
+    renderVersion += 1;
+    if (menuOpen) {
+      pendingItems = items;
+      return;
+    }
+    const menu = Menu.buildFromTemplate([
+      ...items,
+      { type: 'separator' },
+      { label: 'Show app', click: showWindow },
+      { type: 'separator' },
+      { label: 'Accounts', click: () => showView('accounts') },
+      { label: 'Usage dashboard', click: () => showView('usage') },
+      { label: 'Settings', click: () => showView('settings') },
+      { type: 'separator' },
+      { label: 'Quit Agent Switch', click: () => app.quit() },
+    ]);
+    menu.on('menu-will-show', () => { menuOpen = true; });
+    menu.on('menu-will-close', () => {
+      menuOpen = false;
+      const pending = pendingItems;
+      const version = renderVersion;
+      pendingItems = null;
+      if (pending) void Promise.resolve().then(() => {
+        if (renderVersion === version) trayDashboard.render(pending);
+      });
+    });
+    tray.setContextMenu(menu);
+  });
+  trayDashboard.render([{ label: 'Loading account usage…', enabled: false }]);
+  if (process.platform !== 'darwin') tray.on('click', () => {
+    if (!quitting && !installing) tray.popUpContextMenu();
+  });
 }
 
 async function recover(error) {
   if (quitting || recovering || installing) return;
   recovering = true;
+  trayDashboard?.stop();
+  trayDashboard?.render([{ label: 'Account usage unavailable · reconnect in the app', enabled: false }]);
   dashboardAddress = null;
   if (window && !window.isDestroyed()) {
     window.destroy();
@@ -140,6 +171,7 @@ async function startDashboard() {
     const url = await backend.start();
     if (quitting || recovering || backend.state !== 'running') return;
     dashboardAddress = url;
+    trayDashboard?.start(url);
     const origin = new URL(url).origin;
     const isolatedSession = session.fromPartition(`agent-switch-${randomUUID()}`, { cache: false });
     secureSession(isolatedSession, origin);
@@ -201,6 +233,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', (event) => {
     if (installerOwnsShutdown()) {
       quitting = true;
+      trayDashboard?.stop();
       updates.close();
       if (tray) tray.destroy();
       return;
@@ -208,6 +241,7 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     if (quitting) return;
     quitting = true;
+    trayDashboard?.stop();
     updates?.close();
     if (window && !window.isDestroyed()) window.destroy();
     if (tray) {
@@ -276,6 +310,7 @@ if (!app.requestSingleInstanceLock()) {
       prepareInstall: async () => {
         if (quitting || recovering || !backend) throw new Error();
         installing = true;
+        trayDashboard?.stop();
         await backend.stopForUpdate();
         if (quitting) throw new Error();
       },

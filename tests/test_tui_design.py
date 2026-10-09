@@ -86,7 +86,8 @@ async def test_responsive_dashboard_cards_and_keyboard(design_switchers, tmp_pat
         text = save_render(app, tmp_path, f"{provider}-{theme}-{size[0]}-dashboard")
         assert "Agent Switch" in text and "Your accounts" in text
         panel = app.screen.query_one(AccountsPanel).render().plain
-        assert "32%" in panel and "58%" in panel and "(disabled)" in panel
+        assert "68% left" in panel and "42% left" in panel and "(disabled)" in panel
+        assert "percentages available" in text
         assert ("2h" if provider == "codex" else "5h") in panel
         await pilot.press("j", "k", "enter")
         await settle(pilot)
@@ -293,7 +294,7 @@ def test_narrow_quota_rows_keep_resets_amounts_and_real_labels():
     entry = make_entry(spend={"used": 12.5, "limit": 50, "pct": 25},
                        scoped=[("Opus", 100)])
     text = account_card_text(make_account(1, entry=entry), 36, now=time.time()).plain
-    assert "$12.50 / $50.00" in text and "resets" in text and "(!)" in text
+    assert "$37.50 / $50.00 left" in text and "resets" in text and "(!)" in text
     assert "usage unknown" not in text
     for line in text.splitlines():
         if "━" in line or "─" in line:

@@ -209,8 +209,8 @@ The TUI uses the desktop's restrained pixel-neon palette, with a separate action
 rail in wide terminals and a stacked, scrollable layout in narrow ones. From the
 dashboard, use **↑/↓ and Enter** for actions, **s** to switch, **w** to watch,
 **p** to choose a provider, and **Ctrl+T** to change the theme. **Tab** moves focus
-between actions and account details; **Esc** goes back. Quota values remain
-percentages **used**, with unknown and error states kept distinct from zero.
+between actions and account details; **Esc** goes back. Quota values show
+percentages **remaining**, with unknown and error states kept distinct from zero.
 Use a UTF-8 terminal with true-color support for the full palette.
 
 <details>
@@ -294,7 +294,17 @@ no separate analytics dashboard.
 **Settings** contains appearance and view preferences. System, light, and dark
 appearance and acknowledgement of the profile notice persist in the private
 `ui-preferences.json` file under Agent Switch's data directory. This file contains
-no credentials. Closing the window hides the app while its backend and automatic-switching session keep running. Reopen it from the tray/menu bar, the macOS Dock, or by launching Agent Switch again. Choose Quit Agent Switch to stop its backend and automatic switching.
+no credentials. Closing the window hides the app while its backend and
+automatic-switching session keep running.
+
+Click the standalone app's tray/menu-bar icon to see each saved account's
+remaining quota, including separate model limits and reset countdowns. This
+read-only menu checks the shared dashboard every 20 seconds without forcing
+provider polls; failed updates are marked rather than presented as fresh quota.
+Some Linux tray hosts require a right-click. Choose **Show app** or **Accounts**
+to manage accounts, or **Usage dashboard** for analytics. Reopen the full app
+from the macOS Dock or by launching Agent Switch again. Choose **Quit Agent
+Switch** to stop its backend and automatic switching.
 
 The native **View** menu and menu-bar menu open Accounts, Usage, and Settings.
 Keyboard shortcuts are **⌘/Ctrl+1**, **⌘/Ctrl+2**, and **⌘/Ctrl+,** respectively.

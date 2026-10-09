@@ -123,8 +123,8 @@ class TestListing:
             text = " | ".join(row_text(app.screen))
             assert "one@e.com" in text and "two@e.com" in text
             assert "work (two@e.com)" in text   # alias bold, email beside it
-            # Utilisation, as the neighbouring Claude rows show it.
-            assert " 20%" in text and " 75%" in text
+            assert " 80% left" in text and " 25% left" in text
+            assert " 20%" not in text and " 75%" not in text
 
     async def test_marks_the_active_account(self, tmp_path, stub):
         stub(accounts=[account("1", "one@e.com"), account("2", "two@e.com")],
@@ -160,7 +160,7 @@ class TestListing:
             await settle(pilot)
             text = " | ".join(row_text(app.screen))
             assert "network down" in text
-            assert " 30%" in text
+            assert " 70% left" in text
 
     async def test_a_credits_account_says_manual_switch_only(self, tmp_path, stub):
         stub(accounts=[account("1", "one@e.com")], usage={"1": on_credits()})

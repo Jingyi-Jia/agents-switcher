@@ -8,11 +8,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { BackendError } = require('../src/backend.cjs');
+const { TrayDashboard } = require('../src/tray-dashboard.cjs');
 
 const main = path.resolve(__dirname, '../src/main.cjs');
 
 function harness({ singleInstance = true, startError, runtime = {}, confirm = 1, stopForUpdate,
-  platform = 'linux', stop, recoveryResponse = 1, trayError } = {}) {
+  platform = 'linux', stop, recoveryResponse = 1, trayError, trayRead = async () => ({}) } = {}) {
   const state = { windows: [], backends: [], dialogs: [], external: [], exits: [], partitions: [], ipc: new Map(), updates: [], nativeQuits: 0 };
   const app = new EventEmitter();
   Object.assign(app, {
@@ -92,13 +93,18 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
     constructor() { super(); if (trayError) throw trayError; state.tray = this; }
     setToolTip(value) { state.tooltip = value; }
     setContextMenu(value) { state.trayMenu = value; }
+    popUpContextMenu() { state.trayPoppedUp = true; }
     destroy() { state.trayDestroyed = true; }
   }
   const powerMonitor = new EventEmitter();
   const electron = {
     app, BrowserWindow, Tray,
     powerMonitor,
-    Menu: { buildFromTemplate: (value) => value, setApplicationMenu: (value) => { state.menu = value; } },
+    Menu: { buildFromTemplate: (value) => {
+      const events = new EventEmitter();
+      Object.defineProperties(value, { on: { value: events.on.bind(events) }, emit: { value: events.emit.bind(events) } });
+      return value;
+    }, setApplicationMenu: (value) => { state.menu = value; } },
     nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) },
     dialog: {
       showMessageBox: async (options) => { state.dialogs.push(options); return { response: options.title === 'Install Agent Switch update' ? confirm : recoveryResponse }; },
@@ -118,6 +124,9 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
   const localRequire = createRequire(main);
   vm.runInNewContext(fs.readFileSync(main, 'utf8'), {
     require: (name) => name === 'electron' ? electron : name === './backend.cjs' ? { Backend, BackendError }
+      : name === './tray-dashboard.cjs' ? { TrayDashboard: class extends TrayDashboard {
+        constructor(render) { super(render, trayRead); state.trayDashboard = this; }
+      } }
       : name === './updater-runtime.cjs' ? { createUpdateRuntime: async () => runtime } : localRequire(name),
     process, __dirname: path.dirname(main), setTimeout, clearTimeout, AbortController, URL,
   });
@@ -162,7 +171,11 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     const window = state.windows[0];
     const address = window.loadedURL;
     for (const reopen of [() => app.emit('activate'), () => app.emit('second-instance'),
-      () => state.tray.emit('click'), () => state.trayMenu.find(item => item.label === 'Show app').click(),
+      () => {
+        state.tray.emit('click');
+        assert.equal(window.shown, false);
+        state.trayMenu.find(item => item.label === 'Show app').click();
+      }, () => state.trayMenu.find(item => item.label === 'Show app').click(),
       () => state.menu.find(item => item.label === 'File').submenu.find(item => item.label === 'Show app').click()]) {
       window.close();
       window.close();
@@ -214,6 +227,34 @@ for (const platform of ['darwin', 'win32', 'linux']) {
   }
 }
 
+test('an open tray menu stays stable while new usage waits for the next opening', async () => {
+  const { state, app } = harness();
+  await settle();
+  const openMenu = state.trayMenu;
+  openMenu.emit('menu-will-show');
+  state.trayDashboard.render([{ label: 'Updated quota', enabled: false }]);
+  assert.equal(state.trayMenu, openMenu);
+  openMenu.emit('menu-will-close');
+  await settle();
+  assert.equal(state.trayMenu[0].label, 'Updated quota');
+  app.quit(); await settle();
+});
+
+for (const newer of ['Fresh quota', 'Account usage unavailable · reconnect in the app']) {
+  test(`closing a tray menu cannot overwrite ${newer} with an older queued snapshot`, async () => {
+    const { state, app } = harness();
+    await settle();
+    const openMenu = state.trayMenu;
+    openMenu.emit('menu-will-show');
+    state.trayDashboard.render([{ label: 'Old quota · 100% left', enabled: false }]);
+    openMenu.emit('menu-will-close');
+    state.trayDashboard.render([{ label: newer, enabled: false }]);
+    await settle();
+    assert.equal(state.trayMenu[0].label, newer);
+    app.quit(); await settle();
+  });
+}
+
 test('macOS full-screen close waits for native exit before hiding and retains the backend', async () => {
   const { state, app } = harness({ platform: 'darwin' });
   await settle();
@@ -256,7 +297,13 @@ for (const source of ['activate', 'second-instance', 'tray', 'Show app', 'Settin
     const window = state.windows[0];
     window.fullScreen = true;
     window.close();
-    if (source === 'tray') state.tray.emit('click');
+    if (source === 'tray') {
+      state.tray.emit('click');
+      window.fullScreen = false;
+      window.emit('leave-full-screen');
+      assert.equal(window.shown, false);
+      state.trayMenu.find(item => item.label === 'Show app').click();
+    }
     else if (['Show app', 'Settings'].includes(source)) state.trayMenu.find(item => item.label === source).click();
     else app.emit(source);
     window.fullScreen = false;
@@ -621,6 +668,8 @@ for (const source of ['backend', 'renderer']) {
     assert.deepEqual(state.exits, []);
     state.windows[1].close();
     state.tray.emit('click');
+    assert.equal(state.windows[1].shown, false);
+    state.trayMenu.find(item => item.label === 'Show app').click();
     assert.equal(state.windows[1].shown, true);
     app.quit(); await settle();
     assert.equal(state.backends[1].stops, 1);
@@ -636,6 +685,35 @@ test('tray initialization failure cannot leave a background backend', async () =
   assert.equal(JSON.stringify(state.dialogs).includes('SECRET'), false);
   assert.deepEqual(state.exits, [0]);
 });
+
+for (const platform of ['darwin', 'win32', 'linux']) {
+  test(`${platform} tray shows all account windows without opening or switching the hidden app`, async () => {
+    let signal;
+    const { state, app } = harness({ platform, trayRead: async (_address, readSignal) => {
+      signal = readSignal;
+      return { claude: { available: true, accounts: [
+        { email: 'first@example.test', active: true, windows: [{ label: '5h', usedPercent: 100 }] },
+        { email: 'second@example.test', windows: [{ label: '7d', usedPercent: 60 }] },
+      ] }, codex: { available: true, accounts: [] } };
+    } });
+    await settle();
+    const window = state.windows[0];
+    window.close();
+    state.tray.emit('click');
+    assert.equal(window.shown, false);
+    assert.equal(state.trayPoppedUp, platform !== 'darwin' ? true : undefined);
+    for (const expected of ['first@example.test · active', '5h: 0% left', 'second@example.test', '7d: 40% left']) {
+      const item = state.trayMenu.find(item => item.label?.includes(expected));
+      assert.ok(item, expected);
+      assert.equal(item.enabled, false);
+      assert.equal(item.click, undefined);
+    }
+    assert.equal(state.backends[0].stops, 0);
+    app.quit(); await settle();
+    assert.equal(signal.aborted, true);
+    assert.equal(state.trayDashboard.timer, null);
+  });
+}
 
 test('startup recovery does not expose raw exceptions or create an interactive window', async () => {
   const { state } = harness({ startError: new Error('SECRET token URL credential path') });

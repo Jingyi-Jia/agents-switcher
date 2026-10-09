@@ -326,7 +326,8 @@ class TestFormatting:
         )
         card = account_card_text(make_account(1, active=True, entry=entry), 80).plain
         assert "token expired — refresh deferred this pass; retries automatically" in card
-        assert "last seen 53% used" in card
+        assert "last seen 47% left" in card
+        assert "53% used" not in card
 
         no_history = account_card_text(
             make_account(1, entry=UsageEntry(sentinel=USAGE_TOKEN_EXPIRED)), 80
@@ -491,7 +492,7 @@ class TestSnapshotSource:
 
 
 class TestUsageRows:
-    """The card's rows must mirror the CLI's _format_usage_lines semantics."""
+    """Window measurements and reset/pace markers retain usage semantics."""
 
     def test_absent_window_produces_no_row(self):
         from agents_switcher.tui.widgets import usage_rows
@@ -518,7 +519,7 @@ class TestUsageRows:
         entry = make_entry(spend={"used": 12.5, "limit": 50.0, "pct": 25.0, "currency": "USD"})
         rows = usage_rows(entry.last_good, time.time())
         assert rows[0][0] == "$$"
-        assert "$12.50 / $50.00" in rows[0][2]
+        assert "$37.50 / $50.00 left" in rows[0][2]
 
     def test_suffix_full_extends_countdown_with_clock(self):
         from agents_switcher.tui.widgets import usage_rows
@@ -543,7 +544,7 @@ class TestUsageRows:
         spend = usage_rows(entry.last_good, time.time())[0]
         assert spend[0] == "$$"
         assert " · " in spend[3]
-        assert spend[3].index(" · ") < spend[3].index("$12.50")
+        assert spend[3].index(" · ") < spend[3].index("$37.50")
 
     def test_no_data_no_rows(self):
         from agents_switcher.tui.widgets import usage_rows
@@ -615,14 +616,87 @@ class TestUsageRows:
         assert wide.count(" · ") == 3
 
         mid_lines = account_card_text(acc, 78).plain.splitlines()
-        spend_line = next(line for line in mid_lines if "$12.50" in line)
+        spend_line = next(line for line in mid_lines if "$37.50" in line)
         assert " · " not in spend_line
         for line in mid_lines:
-            if "resets" in line and "$12.50" not in line:
+            if "resets" in line and "$37.50" not in line:
                 assert " · " in line
 
         narrow = account_card_text(acc, 40).plain
         assert " · " not in narrow
+
+
+class TestRemainingQuota:
+    @pytest.mark.parametrize("used,left,bar", [
+        (0, 100, "━━━━━━━━━━"),
+        (25, 75, "━━━━━━━╸──"),
+        (75, 25, "━━╸───────"),
+        (95, 5, "╸─────────"),
+        (100, 0, "──────────"),
+        (125, 0, "──────────"),
+        (-25, 100, "━━━━━━━━━━"),
+    ])
+    def test_bars_and_percentages_show_clamped_available_quota(self, used, left, bar):
+        from agents_switcher.tui.theme import Palette
+        from agents_switcher.tui.widgets import bar_cells, remaining_pct, usage_bar
+
+        assert remaining_pct(used) == left
+        rendered = usage_bar("5h", used, "resets 2h", 10)
+        assert rendered.plain == f"5h {bar} {left:3.0f}% left  resets 2h"
+        assert bar_cells(used, 10).plain == bar
+        percentage = next(span for span in rendered.spans if "% left" in rendered.plain[span.start:span.end])
+        assert str(percentage.style) == Palette.DARK.severity(used)
+
+    @pytest.mark.parametrize("used", [None, float("nan"), float("inf"), -float("inf")])
+    def test_unknown_quota_never_claims_available_percentage(self, used):
+        from agents_switcher.tui.widgets import usage_bar
+
+        rendered = usage_bar("7d", used, None, 10).plain
+        assert rendered == "7d ──────────  quota unknown"
+        assert "%" not in rendered
+
+    @pytest.mark.parametrize("threshold,tick", [(90, 1), (70, 3), (0, 9), (100, 0)])
+    def test_utilization_threshold_tick_tracks_remaining_axis(self, threshold, tick):
+        from agents_switcher.tui.widgets import bar_cells
+
+        bar = bar_cells(25, 10, threshold=threshold).plain
+        assert bar.index("┃") == tick
+        assert len(bar) == 10
+
+    def test_stale_low_quota_keeps_depletion_color_and_dimming(self):
+        from agents_switcher.tui.theme import Palette
+        from agents_switcher.tui.widgets import usage_bar
+
+        rendered = usage_bar("5h", 95, "resets 2h", 10, stale=True)
+        assert "5% left" in rendered.plain
+        assert any(str(span.style) == f"{Palette.DARK.sev_crit} dim" for span in rendered.spans)
+
+    def test_cards_and_minis_keep_resets_scoped_warnings_and_measurements(self):
+        from agents_switcher.tui.widgets import account_card_text, mini_account_text
+
+        entry = make_entry(100, 25, scoped=[("Fable", 120), ("Opus", 12)],
+                           spend={"used": 60, "limit": 50, "pct": 120})
+        before = json.dumps(entry.last_good, sort_keys=True)
+        account = make_account(1, entry=entry)
+        card = account_card_text(account, 100, now=time.time()).plain
+        mini = mini_account_text(account, time.time()).plain
+        assert "$0.00 / $50.00 left" in card
+        fable = next(line for line in card.splitlines() if "Fable" in line)
+        assert "0% left" in fable and "(!)" in fable and "resets" in fable
+        assert "88% left" in next(line for line in card.splitlines() if "Opus" in line)
+        assert "5h 0% left (resets" in mini
+        assert "7d 75% left" in mini and "Fable (!)" in mini
+        assert json.dumps(entry.last_good, sort_keys=True) == before
+
+    def test_missing_measurement_and_api_key_never_claim_full_quota(self):
+        from agents_switcher.tui.widgets import account_card_text, mini_account_text
+
+        for entry in (UsageEntry(last_error="network"), UsageEntry(sentinel=USAGE_API_KEY)):
+            account = make_account(1, entry=entry)
+            card = account_card_text(account, 80).plain
+            mini = mini_account_text(account, time.time()).plain
+            assert "%" not in card and "%" not in mini
+        assert "network" in account_card_text(make_account(1, entry=UsageEntry(last_error="network")), 80).plain
 
 
 class TestMiniAccountText:
@@ -721,7 +795,7 @@ class TestDashboard:
             panel = app.screen.query_one(AccountsPanel).render().plain
             assert "user1@example.com" in panel and "● active" in panel
             assert "resets" in panel  # the active card is the full one
-            assert "user2@example.com" in panel and "92%" in panel
+            assert "user2@example.com" in panel and "8% left" in panel
             # the mini line has no bars — bar glyphs only in the active card
             mini_part = panel.split("user2@example.com", 1)[1]
             assert "━" not in mini_part
@@ -767,7 +841,7 @@ class TestDashboard:
             assert "5h" in panel
             assert "7d" not in panel  # annual plan: no invented row
             assert "usage unknown" not in panel
-            assert "Fable" in panel and "62%" in panel
+            assert "Fable" in panel and "38% left" in panel
 
     async def test_mini_line_skips_absent_window(self, tmp_path):
         fake = FakeSwitcher(
@@ -784,7 +858,7 @@ class TestDashboard:
 
             panel = app.screen.query_one(AccountsPanel).render().plain
             mini_part = panel.split("user2@example.com", 1)[1]
-            assert "5h 92%" in mini_part
+            assert "5h 8% left" in mini_part
             assert "7d" not in mini_part
 
     async def test_menu_is_default_navigation_and_nests(self, tmp_path):
@@ -1413,7 +1487,7 @@ class TestAutoScreen:
             from textual.widgets import Static
 
             summary = screen.query_one("#auto-summary", Static)
-            assert "threshold 93% (session)" in summary.render().plain
+            assert "threshold 93% used (session)" in summary.render().plain
             await pilot.press("enter")
             await pilot.pause()
             assert engine.wakes == 1  # one forced tick on leaving the mode
@@ -1477,7 +1551,7 @@ class TestAutoScreen:
 
             summary = screen.query_one("#auto-summary", Static)
             # never a lying "100%"
-            assert "threshold 99.9% (session)" in summary.render().plain
+            assert "threshold 99.9% used (session)" in summary.render().plain
             screen.action_threshold_step(-60.0)
             await pilot.pause()
             assert screen._settings.threshold == 50.0  # spec's lower bound
@@ -1501,6 +1575,8 @@ class TestAutoScreen:
             assert plain.index("user3@example.com") < plain.index(
                 "user2@example.com"
             )
+            assert "85% left" in plain and "20% left" in plain
+            assert "% used" not in plain
 
     async def test_candidates_ranking_honors_configured_model(
         self, tmp_path, fake_engine
@@ -1537,6 +1613,8 @@ class TestAutoScreen:
             assert plain.index("user3@example.com") < plain.index(
                 "user2@example.com"
             )
+            assert "50% left" in plain and "5% left" in plain
+            assert "% used" not in plain
 
 
 class TestEventText:
@@ -1716,4 +1794,3 @@ class TestThemeWiring:
             await menu_select(pilot, "theme:light")
             assert app._theme_name == "light"
             assert app.theme == "cswap-mono-light"
-

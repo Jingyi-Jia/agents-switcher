@@ -83,7 +83,7 @@ class DashboardScreen(Screen):
                 )
             with VerticalScroll(id="overview"):
                 yield Static("■  Your accounts", classes=f"section-heading {self.provider}")
-                yield Static("Usage windows · percentages used", classes="section-caption")
+                yield Static("Quota windows · percentages available", classes="section-caption")
                 yield AccountsPanel(source=self.controller, id="accounts-panel")
                 yield Static(
                     PROVIDERS[self.provider].switch_notice,
@@ -304,7 +304,7 @@ class AccountListScreen(Screen):
     def compose(self) -> ComposeResult:
         yield AppHeader(getattr(self.source, "provider", "claude"))
         yield Static("", id="list-title")
-        yield Static("Usage windows · percentages used", classes="list-caption")
+        yield Static("Quota windows · percentages available", classes="list-caption")
         yield Static("", id="list-empty", classes="empty-state", markup=False)
         yield ListView(id="accounts")
         yield Footer()
