@@ -168,7 +168,7 @@ const providerUI = {};
 const helpUI = {};
 const setupLinks = {claude: "https://code.claude.com/docs/en/setup", codex: "https://developers.openai.com/codex/app"};
 let state = {}, busy = false, requestVersion = 0, loadingVersion = 0, toastTimer;
-let profileVersion = 0, profileLoadingVersion = 0;
+let profileVersion = 0, profileLoadingVersion = 0, visibilityVersion = 0;
 let dialogAction = null, dialogOpener = null, dialogKind = null;
 let helpRequested = false, helpDismissed = false;
 let activeView = "accounts", preferenceVersion = 0, preferences = {theme: "system", profileNoticeVersion: 0};
@@ -925,12 +925,13 @@ function updateProvider(id, data, force = false) {
 async function load(force = false, silent = false) {
   if (loadingVersion && !force) return false;
   const version = ++requestVersion;
+  const visibilityAtStart = visibilityVersion;
   const preferenceAtStart = preferenceVersion;
   const profileAtStart = ++profileVersion;
   loadingVersion = version;
   try {
     const {ok, body} = await api("/api/state" + (force ? "?force=1" : ""));
-    if (version !== requestVersion) return false;
+    if (version !== requestVersion || (!force && visibilityAtStart !== visibilityVersion)) return false;
     if (!ok || body.error) {
       $("state-error").hidden = false;
       $("state-error").textContent = safeMessage(body.message || body.error || "Could not load accounts. Your saved logins have not been changed.");
@@ -948,11 +949,10 @@ async function load(force = false, silent = false) {
     $("stamp").textContent = "updated " + new Date().toLocaleTimeString();
     return true;
   } catch {
-    if (version === requestVersion) {
-      $("state-error").hidden = false;
-      $("state-error").textContent = "The local service couldn't be reached. Previously loaded accounts may be out of date. Refresh or reopen Agent Switch.";
-    }
-    if (version === requestVersion && !silent) toast(isDesktop() ? "Could not reach the app's local service. Reopen Agent Switch and try again." : "Could not reach agent-switch. Check that the local dashboard server is still open.", true);
+    if (version !== requestVersion || (!force && visibilityAtStart !== visibilityVersion)) return false;
+    $("state-error").hidden = false;
+    $("state-error").textContent = "The local service couldn't be reached. Previously loaded accounts may be out of date. Refresh or reopen Agent Switch.";
+    if (!silent) toast(isDesktop() ? "Could not reach the app's local service. Reopen Agent Switch and try again." : "Could not reach agent-switch. Check that the local dashboard server is still open.", true);
     return false;
   } finally {
     if (loadingVersion === version) loadingVersion = 0;
@@ -962,16 +962,17 @@ async function load(force = false, silent = false) {
 async function loadDesktopProfiles(automatic = false) {
   if (profileLoadingVersion) return false;
   const version = ++profileVersion;
+  const visibilityAtStart = visibilityVersion;
   profileLoadingVersion = version;
   try {
     const {ok, body} = await api("/api/claude-desktop/status");
-    if (version !== profileVersion || (automatic && !canPollProfiles())) return false;
+    if (version !== profileVersion || (automatic && (visibilityAtStart !== visibilityVersion || !canPollProfiles()))) return false;
     if (!ok || body.ok === false || typeof body.available !== "boolean" || !Array.isArray(body.profiles) || ![true, false, null].includes(body.running)) throw new Error("Profile status unavailable");
     state = {...state, claudeDesktop: body};
     renderDesktopProfiles(body);
     return true;
   } catch {
-    if (version !== profileVersion || (automatic && !canPollProfiles())) return false;
+    if (version !== profileVersion || (automatic && (visibilityAtStart !== visibilityVersion || !canPollProfiles()))) return false;
     const data = {...state.claudeDesktop, available: false, running: null,
       error: "Claude Desktop status couldn't be checked. Opening is blocked. Choose Refresh to retry."};
     state = {...state, claudeDesktop: data};
@@ -1280,8 +1281,9 @@ function canPollProfiles() {
 }
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
-    ++requestVersion; loadingVersion = 0;
-    ++profileVersion; profileLoadingVersion = 0;
+    ++visibilityVersion;
+    loadingVersion = 0;
+    profileLoadingVersion = 0;
     return;
   }
   if (canPollDashboard()) load();

@@ -209,3 +209,71 @@ assert.equal(state.claudeDesktop.running, false);
 assert.equal($('action-dialog').open, true);
 assert.match($('dialog-title').textContent, /Remove/);
 """)
+
+
+def test_hiding_preserves_an_inflight_forced_dashboard_refresh(node):
+    run_page(node, PROFILES + r"""
+let finish;
+fetchHandler = async () => new Promise(resolve => {finish = resolve;});
+const pending = load(true, true); await settle();
+visibility(true);
+finish({ok: true, json: async () => ({...apiState, claudeDesktop: {...apiState.claudeDesktop, running: true}})});
+assert.equal(await pending, true);
+assert.equal(state.claudeDesktop.running, true);
+assert.equal(button('claude-desktop-profiles', 'Open').disabled, true);
+assert.equal(reads().at(-1).path, '/api/state?force=1');
+""")
+
+
+def test_hiding_during_post_action_refresh_does_not_report_a_false_refresh_failure(node):
+    run_page(node, PROFILES + r"""
+let finish;
+fetchHandler = async (path, options) => options.method === 'POST'
+  ? {ok: true, json: async () => ({ok: true, message: 'Saved current account.'})}
+  : new Promise(resolve => {finish = resolve;});
+const pending = button('claude-actions', 'Add current').click(); await settle();
+assert.equal(reads().at(-1).path, '/api/state?force=1');
+visibility(true);
+finish({ok: true, json: async () => ({...apiState, claudeDesktop: {...apiState.claudeDesktop, running: true}})});
+await pending;
+assert.equal(state.claudeDesktop.running, true);
+assert.equal(busy, false);
+assert.match($('toast').textContent, /Saved current account/);
+assert.doesNotMatch($('toast').textContent, /could not be refreshed|couldn't be reached/);
+""")
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_hiding_preserves_manual_profile_refresh_success_and_failure(node, success):
+    run_page(node, PROFILES + "const success = " + str(success).lower() + ";" + r"""
+let finish;
+fetchHandler = async () => new Promise(resolve => {finish = resolve;});
+const pending = button('claude-desktop-actions', 'Refresh').click(); await settle();
+visibility(true);
+finish({ok: success, json: async () => success
+  ? {...apiState.claudeDesktop, running: true} : {ok: false}});
+await pending;
+assert.equal(state.claudeDesktop.running, success ? true : null);
+assert.equal(button('claude-desktop-profiles', 'Open').disabled, true);
+assert.equal(busy, false);
+if (!success) assert.match($('claude-desktop-status').textContent, /couldn't be checked.*blocked/);
+""")
+
+
+@pytest.mark.parametrize("stale", ["profile", "dashboard"])
+def test_hidden_automatic_reads_stay_invalid_when_resume_does_not_start_a_new_read(node, stale):
+    run_page(node, PROFILES + "const stale = " + repr(stale) + ";" + r"""
+let finish;
+fetchHandler = async () => new Promise(resolve => {finish = resolve;});
+if (stale === 'profile') profileTick(); else dashboardTick();
+await settle(); visibility(true);
+$('watch').checked = false;
+const count = reads().length;
+visibility(false); await settle();
+assert.equal(reads().length, count);
+const changed = {...apiState.claudeDesktop, running: true};
+finish({ok: true, json: async () => stale === 'profile' ? changed : {...apiState, claudeDesktop: changed}});
+await settle();
+assert.equal(state.claudeDesktop.running, false);
+assert.equal(button('claude-desktop-profiles', 'Open').disabled, false);
+""")
