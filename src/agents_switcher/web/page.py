@@ -512,6 +512,7 @@ function block(button, disabled) {
 }
 
 function syncBusy() {
+  syncDesktopCompaction();
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.disabled = busy || button.dataset.blocked === "true";
   });
@@ -525,6 +526,7 @@ function syncBusy() {
 
 const desktopProfileWarning = "Experimental, macOS/Linux only. Signed-in persistence on Mac and Code/Cowork are unverified. Relocated profiles disable local Claude-in-Chrome pairing. Sign in to each profile in Claude once. Fully QUIT Claude before opening another profile. Profile names are user labels, not verified identities; confirm the selected account in Claude.";
 const desktopProfileUI = {};
+let desktopCompactUI = null;
 
 function setupDesktopProfiles() {
   const actions = $("claude-desktop-actions");
@@ -538,6 +540,7 @@ function setupDesktopProfiles() {
 }
 
 function renderDesktopProfiles(data) {
+  syncDesktopCompaction();
   const panel = $("claude-desktop-panel");
   panel.hidden = !data;
   if (!data) return;
@@ -730,6 +733,7 @@ function manageDesktopProfile(profileId, opener) {
     label: "Save changes", opener, kind: "profile",
     fields: (host) => {
       fields = desktopProfileFields(host, profile);
+      if (data.canCompact === true) desktopCompactionFields(host, profileId);
       const removal = el("div", "profile-removal");
       const remove = actionButton("Remove profile", () => removeDesktopProfile(profileId, remove));
       const match = profile.emailLabel ? "the same email label" : "the same name";
@@ -746,6 +750,109 @@ function manageDesktopProfile(profileId, opener) {
       return success;
     },
   });
+}
+
+function desktopCompactionReason(profileId, checkBusy = true) {
+  const data = state.claudeDesktop;
+  if (profileId === "default" || !data?.profiles?.some((item) => item.id === profileId)) return "This profile is no longer in the saved list. Close this dialog and choose a saved profile.";
+  if (data.canCompact !== true || data.canManage !== true) return "VM disk compaction is unavailable. It requires macOS and a readable saved profile registry. Close this dialog and choose Refresh to retry.";
+  if (data.running === true) return "Fully quit Claude Desktop (⌘Q), not just its window. Keep it quit, then check readiness again.";
+  if (data.running !== false) return "Claude process status is unknown. Check readiness again; compaction requires confirmed exit.";
+  if ((checkBusy && busy) || codexFlow || codexEnrollmentFlow) return "Wait for the current action, switch or sign-in to finish before compacting.";
+  return "";
+}
+
+function syncDesktopCompaction() {
+  if (!desktopCompactUI) return;
+  const ui = desktopCompactUI;
+  ui.section.hidden = state.claudeDesktop?.canCompact !== true;
+  const reason = desktopCompactionReason(ui.profileId);
+  const eligible = !desktopCompactionReason(ui.profileId, false);
+  block(ui.button, !eligible);
+  block(ui.refresh, !!codexFlow || !!codexEnrollmentFlow);
+  ui.consent.dataset.blocked = String(!eligible);
+  ui.consent.disabled = busy || !eligible;
+  ui.readiness.textContent = ui.pending ? "Keep Claude fully quit until this operation finishes. This may take several minutes." : reason || "Claude was reported quit. Readiness will be checked again before compaction starts.";
+  ui.button.title = eligible && !busy ? "" : reason;
+}
+
+function desktopCompactionFields(host, profileId) {
+  const section = el("section", "profile-removal");
+  const consent = el("input");
+  consent.type = "checkbox";
+  consent.dataset.lock = "";
+  const check = el("label", "check");
+  check.append(consent, el("span", null, "Claude is fully quit and I will keep it quit until compaction finishes"));
+  const readiness = el("p", "hint");
+  readiness.id = "profile-compact-readiness";
+  const result = el("p", "notice");
+  result.setAttribute("role", "status");
+  result.setAttribute("aria-live", "polite");
+  result.hidden = true;
+  const button = actionButton("Compact VM disk", () => compactDesktopProfile(desktopCompactUI));
+  button.setAttribute("aria-describedby", readiness.id);
+  const refresh = actionButton("Check readiness", () => refreshDesktopProfiles());
+  const actions = el("div", "actions");
+  actions.append(button, refresh);
+  section.append(el("h3", null, "Storage"), el("p", "hint", "Optionally reclaim all-zero blocks in this profile's VM disk while preserving its bytes and logical size. This does not delete the VM or clean up Claude data. Savings are not guaranteed; labels are not saved by this action."), check, readiness, actions);
+  host.append(section, result);
+  desktopCompactUI = {profileId, section, consent, button, refresh, readiness, result, pending: false};
+  syncDesktopCompaction();
+}
+
+async function compactDesktopProfile(ui) {
+  if (!ui || busy) return;
+  syncDesktopCompaction();
+  if (ui.button.disabled) return;
+  if (!ui.consent.checked) {
+    ui.result.textContent = "Confirm that Claude is fully quit and will stay quit before compacting.";
+    ui.result.hidden = false;
+    ui.consent.focus();
+    return;
+  }
+  busy = true;
+  ui.pending = true;
+  ++requestVersion;
+  ++profileVersion; profileLoadingVersion = 0;
+  ui.button.textContent = "Checking readiness…";
+  ui.result.textContent = "Checking current profile and process readiness. No compaction request has been sent yet.";
+  ui.result.hidden = false;
+  syncBusy();
+  try {
+    if (!await loadDesktopProfiles()) {
+      ui.result.textContent = "Readiness could not be refreshed. No compaction request was sent. Check readiness before trying again.";
+      return;
+    }
+    if (ui.button.dataset.blocked === "true" || codexFlow || codexEnrollmentFlow) {
+      ui.result.textContent = desktopCompactionReason(ui.profileId, false) + " No compaction request was sent.";
+      return;
+    }
+    ui.button.textContent = "Compacting…";
+    ui.result.textContent = "Compacting the VM disk and verifying its bytes. Keep Claude fully quit until this finishes.";
+    const {ok, body} = await api("/api/claude-desktop/compact", {
+      method: "POST", headers: {"X-Auth-Token": TOKEN, "Content-Type": "application/json"},
+      body: JSON.stringify({profileId: ui.profileId, confirm: true}),
+    });
+    const success = ok && body.ok === true && !body.error;
+    let message = safeMessage(body.message || body.error || (success ? "VM disk compaction completed." : "VM disk compaction failed. Check readiness before retrying."));
+    const storage = body.storage;
+    if (success && storage && ["logicalBytes", "beforeBytes", "afterBytes", "reclaimedBytes"].every((key) => Number.isSafeInteger(storage[key]) && storage[key] >= 0)) {
+      message += ` Allocated bytes: ${storage.beforeBytes.toLocaleString()} → ${storage.afterBytes.toLocaleString()}. Reclaimed: ${storage.reclaimedBytes.toLocaleString()} bytes. Logical size unchanged: ${storage.logicalBytes.toLocaleString()} bytes.`;
+    }
+    ui.result.textContent = message;
+    if (!await loadDesktopProfiles()) ui.result.textContent += " This result still stands, but dashboard readiness could not be refreshed. Check readiness before another action.";
+  } catch {
+    ui.result.textContent = "The compaction result could not be confirmed. The operation may still be running; keep Claude quit. Reconnect to the local service and check readiness before retrying.";
+  } finally {
+    ui.consent.checked = false;
+    ui.pending = false;
+    busy = false;
+    ui.button.textContent = "Compact VM disk";
+    syncBusy();
+    if (!ui.section.hidden && !ui.button.disabled) ui.button.focus({preventScroll: true});
+    else if (!ui.section.hidden && !ui.refresh.disabled) ui.refresh.focus({preventScroll: true});
+    else $("dialog-cancel").focus({preventScroll: true});
+  }
 }
 
 async function openDesktopProfile(profileId, name, opener) {
@@ -1219,6 +1326,7 @@ $("dialog-form").onsubmit = async (event) => {
 $("dialog-cancel").onclick = () => { if (!busy) $("action-dialog").close(); };
 $("action-dialog").addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
 $("action-dialog").addEventListener("close", () => {
+  desktopCompactUI = null;
   $("dialog-fields").replaceChildren();
   dialogAction = null; dialogKind = null;
   if (dialogOpener && dialogOpener.isConnected) dialogOpener.focus();

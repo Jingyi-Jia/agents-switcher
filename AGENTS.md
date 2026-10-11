@@ -47,7 +47,7 @@ Read the implementation and nearby tests before changing a provider's behavior.
 | Usage analytics and preferences | [analytics.py](src/agents_switcher/analytics.py): account-specific Codex reports and local Claude stats-cache projection; [web/preferences.py](src/agents_switcher/web/preferences.py): private appearance and versioned profile-notice acknowledgement. |
 | Codex app assistance | [codex/desktop.py](src/agents_switcher/codex/desktop.py): strict process readiness and explicitly requested macOS normal quit/reopen. Never writes credentials or kills terminal processes. |
 | Standalone app | [desktop.py](src/agents_switcher/desktop.py): private backend protocol; [desktop/src/](desktop/src/): Electron lifecycle and security; [desktop/scripts/](desktop/scripts/): freezing and smoke tests. |
-| Claude Desktop profiles | [claude_desktop.py](src/agents_switcher/claude_desktop.py): experimental macOS/Linux launcher, private label registry, process interlock and profile directories. Separate from provider accounts and automatic switching. |
+| Claude Desktop profiles | [claude_desktop.py](src/agents_switcher/claude_desktop.py): experimental macOS/Linux launcher, private label registry, process interlock and profile directories; [claude_desktop_storage.py](src/agents_switcher/claude_desktop_storage.py): explicit byte-preserving macOS VM-disk compaction. Separate from provider accounts and automatic switching. |
 | Tests and CI | [tests/](tests/), [desktop/test/](desktop/test/), [.github/workflows/](.github/workflows/). |
 
 ## Supported command and JSON entry points
@@ -125,6 +125,11 @@ POST routes are `/api/claude-desktop/create` (`name`, optional `emailLabel`,
 `/api/claude-desktop/update` (`profileId`, `name`, `emailLabel`, `confirm: true`),
 `/api/claude-desktop/remove` (`profileId`, `confirm: true`), and
 `/api/claude-desktop/restore` (`profileId`, `name`, `emailLabel`, `confirm: true`).
+The macOS-only `/api/claude-desktop/compact` POST accepts only a saved named
+`profileId` and exact `confirm: true`, uses header authentication, and rejects
+query parameters. The runtime `canCompact` capability requires a readable label
+registry and is independent of installation; dispatch still requires confirmed
+Claude exit. Never infer eligibility from a missing or unknown process state.
 `profileId: "default"` only opens the usual Claude profile without a user-data
 override; it cannot be renamed, removed or restored. `canCreate` is
 independent of installation and process detection; creation does not launch.
@@ -147,6 +152,25 @@ yields `removedError` and is never overwritten. The dashboard offers a restore
 when a new profile's email label matches a removed one case-insensitively, or,
 for one removed without an email label, its name. Never remove or restore the
 usual profile or follow linked directories.
+
+VM compaction is an explicit storage action, not profile removal or an automatic
+launch-time optimization. Its fresh confirmation is independent of remembered
+profile-notice consent and it does not save label edits. Open only the fixed
+named profile's `desktop/vm_bundles/claudevm.bundle/rootfs.img` through no-follow
+directory descriptors. Require a current-user-owned regular, single-link,
+nonempty disk no larger than 16 GiB and refuse transparent filesystem compression.
+Hold the existing cross-node profile directory lock and an exclusive disk-file
+lock throughout the scan and verification. Only complete filesystem-aligned
+all-zero blocks may be deallocated; never inspect guest filesystem metadata,
+zero nonzero "free" sectors, truncate the image, replace its inode, share disk
+files between profiles, or read companion credential/session files. Preserve
+logical bytes, size, permissions and modification time, use bounded streaming
+buffers and uncached macOS reads, and report success only after a full private
+digest comparison. No digest, path, file contents or credentials enter the HTTP
+response or logs. Report file-allocation reduction honestly; APFS snapshots and
+clones can retain physical blocks. Interrupted compaction can leave some zero
+blocks deallocated but must never intentionally remove guest data. Profile
+removal and restore remain label-only and do not call this action.
 
 TUI quota bars and percentages show remaining availability;
 provider measurements and configured auto-switch thresholds still mean used.

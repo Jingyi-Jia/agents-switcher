@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unicodedata
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -309,7 +309,7 @@ class ClaudeDesktopProfiles:
         installed = supported and installed_executable() is not None
         result = {
             "supported": supported, "installed": installed, "available": False, "canCreate": False,
-            "canManage": False, "experimental": True, "notice": NOTICE, "error": None,
+            "canManage": False, "canCompact": False, "experimental": True, "notice": NOTICE, "error": None,
             "running": None, "profiles": [], "removedProfiles": [], "removedError": None,
         }
         if not supported:
@@ -324,6 +324,7 @@ class ClaudeDesktopProfiles:
         if result["error"]:
             return result
         result["canCreate"] = result["canManage"] = True
+        result["canCompact"] = sys.platform == "darwin"
         try:
             result["removedProfiles"] = self._restorable(result["profiles"])
         except ProviderActionError as error:
@@ -450,6 +451,48 @@ class ClaudeDesktopProfiles:
             "ok": True, "profile": restored,
             "message": "Profile restored with its local Claude history. Open it to continue where you left off.",
         }
+
+    def compact(self, profileId, *, confirm=False) -> dict:
+        self._allowed(confirm)
+        if sys.platform != "darwin":
+            raise ProviderActionError("VM disk compaction is available on macOS only.")
+        if not isinstance(profileId, str) or not _PROFILE_ID.fullmatch(profileId):
+            raise ProviderActionError("Select a saved Claude Desktop profile; the usual profile cannot be compacted.")
+        from agents_switcher.claude_desktop_storage import compact_zero_blocks
+
+        with self._locked():
+            if not any(profile["id"] == profileId for profile in self._read()):
+                raise ProviderActionError("That Claude Desktop profile is not in the saved list.")
+            self._profile_directory(profileId)
+            if running() is not False:
+                raise ProviderActionError(
+                    "A confirmed quit state is required. Fully quit Claude Desktop and keep it quit until compaction finishes."
+                )
+            try:
+                with ExitStack() as stack:
+                    parent = None
+                    for component in (self.root, "profiles", profileId, "desktop", "vm_bundles", "claudevm.bundle"):
+                        parent = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                        stack.callback(os.close, parent)
+                    descriptor = os.open("rootfs.img", os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                    stack.callback(os.close, descriptor)
+                    storage = compact_zero_blocks(descriptor)
+            except FileNotFoundError:
+                raise ProviderActionError("This profile has no local VM disk to compact. No disk was created.") from None
+            except OSError:
+                raise ProviderActionError(
+                    "The VM disk could not be compacted or verified. Keep Claude fully quit and retry on APFS. "
+                    "The disk must be a real, exclusively available file owned by you; linked files are refused. "
+                    "Any zero blocks already released remain zero when read. No guest files are deliberately removed."
+                ) from None
+        reclaimed = storage["reclaimedBytes"] / 1024**3
+        message = (
+            f"VM file allocation reduced by {reclaimed:.2f} GiB. Disk contents and logical size verified unchanged. "
+            "APFS snapshots or clones can retain blocks, so volume free space may differ."
+            if storage["reclaimedBytes"] else
+            "No file allocation was reclaimed. Disk contents and logical size verified unchanged."
+        )
+        return {"ok": True, "storage": storage, "message": message}
 
     def open(self, profileId, *, confirm=False) -> dict:
         self._allowed(confirm)
