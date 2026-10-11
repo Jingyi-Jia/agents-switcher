@@ -351,3 +351,50 @@ def test_desktop_status_does_not_reuse_provider_cache(profiles, monkeypatch):
         assert result["profiles"] == [entry] and result["running"] is True
     finally:
         state.close()
+
+
+def test_http_profile_status_is_independent_of_providers_and_action_lock(web, profiles):
+    web.state.claude_desktop = profiles.manager
+    expected = profiles.manager.status()
+    profiles.manager.status = Mock(return_value=expected)
+    web.state.get = Mock(side_effect=AssertionError("full dashboard collected"))
+    web.state._collect_claude = Mock(side_effect=AssertionError("Claude collected"))
+    web.state._collect_codex = Mock(side_effect=AssertionError("Codex collected"))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with web.state.actions.lock:
+            result = pool.submit(request, web, "/api/claude-desktop/status", method="GET").result(timeout=2)
+    code, body, headers = result
+    assert code == 200 and body == expected
+    assert headers["Cache-Control"] == "no-store"
+    profiles.manager.status.assert_called_once_with()
+    web.state.get.assert_not_called()
+    web.state._collect_claude.assert_not_called()
+    web.state._collect_codex.assert_not_called()
+    web.state.codex_desktop.status.assert_not_called()
+    assert web.state._claude.calls == []
+    assert web.state._codex.calls == []
+    profiles.launch.assert_not_called()
+
+
+@pytest.mark.parametrize("token,query,expected", [
+    (False, "", 403), ("wrong", "", 403),
+    (False, "?token=test-web-auth", 403),
+    ("wrong", "?token=test-web-auth", 403),
+    (True, "?token=test-web-auth", 400),
+    (True, "?path=/arbitrary", 400), (True, "?url=https://example.test", 400),
+    (True, "?force=1", 400),
+])
+def test_http_profile_status_requires_header_auth_and_accepts_no_input(web, token, query, expected):
+    web.state.claude_desktop.status = Mock()
+    code, _, _ = request(web, "/api/claude-desktop/status" + query, token=token, method="GET")
+    assert code == expected
+    web.state.claude_desktop.status.assert_not_called()
+
+
+def test_http_profile_status_errors_are_safe_and_do_not_fall_back(web):
+    web.state.claude_desktop.status = Mock(side_effect=OSError("private profile path"))
+    code, body, _ = request(web, "/api/claude-desktop/status", method="GET")
+    assert code == 400 and body["ok"] is False
+    assert "private profile path" not in json.dumps(body)
+    assert web.state._claude.calls == []
+    assert web.state._codex.calls == []

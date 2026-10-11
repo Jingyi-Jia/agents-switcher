@@ -654,7 +654,7 @@ def _make_handler(state: DashboardState, token: str):
         def do_GET(self) -> None:  # noqa: N802 - stdlib hook
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query, keep_blank_values=True)
-            private_read = parsed.path in {"/api/analytics", "/api/codex/status", "/api/preferences", "/api/storage"}
+            private_read = parsed.path in {"/api/analytics", "/api/codex/status", "/api/claude-desktop/status", "/api/preferences", "/api/storage"}
             if not self._authorized({} if private_read else query):
                 self._json(HTTPStatus.FORBIDDEN, {"error": "bad or missing token"})
                 return
@@ -680,6 +680,8 @@ def _make_handler(state: DashboardState, token: str):
                         result = state.preferences.get()
                     elif parsed.path == "/api/storage":
                         result = state.storage_status()
+                    elif parsed.path == "/api/claude-desktop/status":
+                        result = state.claude_desktop.status()
                     else:
                         result = state.codex_desktop.status()
                     self._json(HTTPStatus.OK, result)

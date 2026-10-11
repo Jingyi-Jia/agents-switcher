@@ -150,9 +150,20 @@ usual profile or follow linked directories.
 
 TUI quota bars and percentages show remaining availability;
 provider measurements and configured auto-switch thresholds still mean used.
-The standalone tray menu is a read-only per-account quota view, checking cached
-`/api/state` every 20 seconds with header authentication and no forced polling.
+The standalone tray popover and fallback native menu are read-only per-account
+quota views, checking cached `/api/state` every 20 seconds with header
+authentication and no forced polling.
 Stop its reads on backend recovery, explicit quit, and update installation.
+The visual popover is sandboxed and created on demand; dismissing it releases
+its renderer. Expose only a sanitized display model, never the backend URL,
+token, raw account records, or credential actions. Keep the native context-menu
+fallback and the full dashboard's existing hide-on-close lifecycle.
+
+Hidden dashboard view polling pauses independently of automation, tray reads,
+and Codex enrollment. The private header-authenticated
+`GET /api/claude-desktop/status` accepts no query parameters and reads profile
+readiness without provider quota collection or the credential action lock.
+Keep launch-time process checks authoritative and unknown readiness blocking.
 
 Dashboard quota windows expose `windowSeconds`, `resetAt`, `resetAfterSeconds`
 and `observedAt`. Anchor relative resets to the provider measurement timestamp,

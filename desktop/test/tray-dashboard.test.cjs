@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { EventEmitter } = require('node:events');
-const { usageItems, readState, TrayDashboard } = require('../src/tray-dashboard.cjs');
+const { usageItems, quotaModel, readState, TrayDashboard } = require('../src/tray-dashboard.cjs');
 
 const now = 1800000000;
 const window = (label, usedPercent, extra = {}) => ({ label, usedPercent,
@@ -158,4 +158,78 @@ test('polls every 20 seconds without overlapping reads, and restart cancels the 
   await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(60000);
   assert.equal(reads.length, 3);
+});
+
+test('popover projection allowlists display fields and never forwards errors, credentials, paths or unknown records', () => {
+  const secret = 'SECRET-TOKEN';
+  const model = quotaModel({ token: secret, backendURL: secret, claudeDesktop: { profiles: [secret] },
+    preferences: { theme: 'dark', token: secret, profileNoticeVersion: 1 },
+    claude: { available: true, error: secret, liveLogin: secret, auto: { token: secret }, accounts: [
+      { alias: 'Work\naccount', email: 'not-projected@example.test', active: true, disabled: true,
+        activationRequired: true, auth: { refresh_token: secret }, unknown: secret, number: '1',
+        windows: [window('5h', 12.345, { token: secret, debug: secret, scope: 'model' })] },
+      { alias: '', email: ' ', number: '2', error: secret, windows: [window('5h', 0)] },
+    ] }, codex: { available: false, accounts: [{ email: secret }] } }, now);
+  assert.deepEqual(Object.keys(model), ['status', 'theme', 'providers']);
+  assert.equal(model.theme, 'dark');
+  assert.equal(JSON.stringify(model).includes(secret), false);
+  assert.equal(JSON.stringify(model).includes('not-projected'), false);
+  const [account, error] = model.providers[0].accounts;
+  assert.deepEqual(account, { name: 'Work account', active: true, excluded: true, pending: true, status: 'ready',
+    windows: [{ name: '5h', model: true, remaining: 87.655, reset: 'resets 1h 0m' }] });
+  assert.equal(error.name, 'Account 2');
+  assert.equal(error.status, 'unavailable');
+  assert.deepEqual(error.windows, []);
+  assert.deepEqual(model.providers[1].accounts, []);
+});
+
+test('popover percentages preserve numeric precision and reject invalid reports without healthy-looking bars', () => {
+  const model = quotaModel({ claude: { available: true, accounts: [{ windows: [
+    ...[null, NaN, Infinity, -1, 101, '20', undefined].map(value => window('bad', value)),
+    window('full', 0), window('empty', 100), window('fractional', 35.1),
+  ] }] } }, now);
+  assert.deepEqual(model.providers[0].accounts[0].windows.map(window => window.remaining),
+    [null, null, null, null, null, null, null, 100, 0, 64.9]);
+});
+
+test('popover handles last-good, missing, login, metered, credits and malformed account labels honestly', () => {
+  const model = quotaModel({ preferences: { theme: 'SECRET' }, claude: { available: true, accounts: [
+    { usageFailed: true, windows: [window('7d', 60)] },
+    { usageFailed: true }, { sentinel: 'SECRET error', windows: [window('5h', NaN)] },
+    { loginRequired: true, windows: [window('5h', 0)] },
+    { onCredits: true, windows: [window('5h', 0)] },
+    { sentinel: 'api key', windows: [window('5h', 0)] },
+    { number: { token: 'SECRET' }, alias: ' ', email: '' },
+    { number: '1&SECRET' }, { number: '3', email: 'e'.repeat(500) },
+  ] } }, now);
+  const accounts = model.providers[0].accounts;
+  assert.deepEqual(accounts.map(account => account.status),
+    ['last-good', 'failed', 'failed', 'login', 'credits', 'metered', 'ready', 'ready', 'ready']);
+  assert.equal(accounts[0].windows[0].remaining, 40);
+  for (const account of accounts.slice(1, 6)) assert.deepEqual(account.windows, []);
+  assert.equal(accounts[6].name, 'Saved account');
+  assert.equal(accounts[7].name, 'Saved account');
+  assert.equal(accounts[8].name.length, 320);
+  assert.equal(model.theme, 'system');
+  assert.equal(JSON.stringify(model).includes('SECRET'), false);
+  assert.deepEqual(quotaModel(null), { status: 'loading', theme: 'system', providers: [] });
+  assert.equal(quotaModel(null, now, 'unavailable').status, 'unavailable');
+});
+
+test('tray callback retains text items while publishing a sanitized model from the same single cached read', async () => {
+  const rendered = [];
+  let reads = 0;
+  const dashboard = new TrayDashboard((items, model) => rendered.push({ items, model }), async () => {
+    reads += 1;
+    return { preferences: { theme: 'light' }, claude: { available: true, accounts: [{ email: 'Synthetic', token: 'SECRET' }] } };
+  });
+  dashboard.start('synthetic');
+  await new Promise(resolve => setImmediate(resolve));
+  dashboard.stop();
+  assert.equal(reads, 1);
+  assert.equal(rendered[0].model.status, 'loading');
+  assert.ok(rendered[1].items.some(item => item.label?.includes('Synthetic')));
+  assert.equal(rendered[1].model.providers[0].accounts[0].name, 'Synthetic');
+  assert.equal(rendered[1].model.theme, 'light');
+  assert.equal(JSON.stringify(rendered).includes('SECRET'), false);
 });

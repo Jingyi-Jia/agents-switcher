@@ -105,6 +105,9 @@ function build(spec) {
 }
 const root = build(PAGE_TREE);
 const document = {
+  hidden: false, listeners: {},
+  addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
+  dispatch(name) { (this.listeners[name] || []).forEach(callback => callback()); },
   getElementById: id => walk(root).find(node => node.id === id),
   createElement: tag => new Element(tag),
   createTextNode: text => new Element('#text', text),
@@ -142,7 +145,7 @@ let apiState = fixture(), response = {ok: true, message: 'Saved.'};
 let codexStatus = {available: true, running: false, desktopRunning: false, terminalCount: 0, backgroundCount: 0, canAssist: false, canOpen: true, message: null};
 const calls = [];
 let fetchHandler = async (path, options) => ({
-  ok: true, json: async () => JSON.parse(JSON.stringify(path.startsWith('/api/state') ? apiState : path === '/api/codex/status' ? codexStatus : response)),
+  ok: true, json: async () => JSON.parse(JSON.stringify(path.startsWith('/api/state') ? apiState : path === '/api/claude-desktop/status' ? apiState.claudeDesktop : path === '/api/codex/status' ? codexStatus : response)),
 });
 const fetch = async (path, options) => {
   calls.push({path, options, payload: options.body ? JSON.parse(options.body) : null});

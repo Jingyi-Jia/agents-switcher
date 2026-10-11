@@ -13,8 +13,8 @@ const { TrayDashboard } = require('../src/tray-dashboard.cjs');
 const main = path.resolve(__dirname, '../src/main.cjs');
 
 function harness({ singleInstance = true, startError, runtime = {}, confirm = 1, stopForUpdate,
-  platform = 'linux', stop, recoveryResponse = 1, trayError, trayRead = async () => ({}) } = {}) {
-  const state = { windows: [], backends: [], dialogs: [], external: [], exits: [], partitions: [], ipc: new Map(), updates: [], nativeQuits: 0 };
+  platform = 'linux', stop, recoveryResponse = 1, trayError, popoverError, trayRead = async () => ({}) } = {}) {
+  const state = { windows: [], popovers: [], backends: [], dialogs: [], external: [], exits: [], partitions: [], ipc: new Map(), updates: [], nativeQuits: 0 };
   const app = new EventEmitter();
   Object.assign(app, {
     isPackaged: true,
@@ -29,7 +29,7 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
       app.emit('before-quit', { preventDefault() { prevented = true; } });
       if (!prevented) {
         state.nativeQuits += 1;
-        for (const window of state.windows) if (!window.isDestroyed()) window.close();
+        for (const window of [...state.windows, ...state.popovers]) if (!window.isDestroyed()) window.close();
       }
     },
     exit: (code) => state.exits.push(code),
@@ -48,6 +48,7 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
       return `http://127.0.0.1:12345/?token=${'a'.repeat(64)}&desktop=1`;
     }
     async stop() {
+      if (this.state === 'stopped') return;
       this.state = 'stopping'; this.stops += 1;
       if (stop) await stop();
       this.state = 'stopped';
@@ -71,9 +72,14 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
       this.webContents.isDestroyed = () => this.destroyed;
       this.webContents.getURL = () => this.loadedURL;
       this.webContents.mainFrame = { url: '', send: (channel, value) => state.updates.push({ channel, value }) };
-      state.windows.push(this);
+      (options.webPreferences.preload.endsWith('tray-preload.cjs') ? state.popovers : state.windows).push(this);
     }
     async loadURL(url) { this.loadedURL = url; this.webContents.mainFrame.url = url; }
+    async loadFile(file) {
+      if (popoverError) throw popoverError;
+      await this.loadURL(require('node:url').pathToFileURL(file).href);
+    }
+    setMenu(value) { this.menu = value; }
     isDestroyed() { return this.destroyed; }
     isMinimized() { return Boolean(this.minimized); }
     isFullScreen() { return Boolean(this.fullScreen); }
@@ -87,20 +93,29 @@ function harness({ singleInstance = true, startError, runtime = {}, confirm = 1,
       this.emit('close', { preventDefault() { prevented = true; } });
       if (!prevented) this.destroy();
     }
-    destroy() { this.destroyed = true; this.emit('closed'); app.emit('window-all-closed'); }
+    destroy() {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      this.emit('closed');
+      if (![...state.windows, ...state.popovers].some(window => !window.isDestroyed())) app.emit('window-all-closed');
+    }
   }
   class Tray extends EventEmitter {
     constructor() { super(); if (trayError) throw trayError; state.tray = this; }
     setToolTip(value) { state.tooltip = value; }
-    setContextMenu(value) { state.trayMenu = value; }
-    popUpContextMenu() { state.trayPoppedUp = true; }
+    setContextMenu(value) { state.trayMenu = value; state.attachedTrayMenu = value; }
+    popUpContextMenu(menu) { state.trayPoppedUp = true; state.poppedMenu = menu; }
+    getBounds() { return { x: 800, y: 0, width: 22, height: 22 }; }
     destroy() { state.trayDestroyed = true; }
   }
   const powerMonitor = new EventEmitter();
   const electron = {
     app, BrowserWindow, Tray,
+    screen: { getCursorScreenPoint: () => ({ x: 800, y: 20 }),
+      getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 24, width: 1920, height: 1056 } }) },
     powerMonitor,
     Menu: { buildFromTemplate: (value) => {
+      if (value.some(item => item.label === 'Show app') && value.some(item => item.label === 'Usage dashboard')) state.trayMenu = value;
       const events = new EventEmitter();
       Object.defineProperties(value, { on: { value: events.on.bind(events) }, emit: { value: events.emit.bind(events) } });
       return value;
@@ -194,7 +209,7 @@ for (const platform of ['darwin', 'win32', 'linux']) {
       assert.equal(window.loadedURL, address);
       assert.equal(state.windows.length, 1);
       assert.equal(state.backends.length, 1);
-      assert.equal(state.partitions.length, 1);
+      assert.equal(state.partitions.length, state.popovers.length ? 2 : 1);
     }
     assert.match(state.tooltip, /close hides the window/);
     assert.match(state.tooltip, /Quit stops automation/);
@@ -701,7 +716,10 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     window.close();
     state.tray.emit('click');
     assert.equal(window.shown, false);
-    assert.equal(state.trayPoppedUp, platform !== 'darwin' ? true : undefined);
+    assert.equal(state.popovers.length, 1);
+    await settle();
+    assert.equal(state.popovers[0].shown, true);
+    assert.equal(state.trayPoppedUp, undefined);
     for (const expected of ['first@example.test · active', '5h: 0% left', 'second@example.test', '7d: 40% left']) {
       const item = state.trayMenu.find(item => item.label?.includes(expected));
       assert.ok(item, expected);
@@ -758,4 +776,132 @@ test('tray and application menus navigate only within the owned dashboard', asyn
   assert.equal(state.backends.length, 1);
   app.quit();
   await settle();
+});
+
+for (const platform of ['darwin', 'win32', 'linux']) {
+  test(`${platform} normal click lazily opens the popover and right-click keeps the native navigation and Quit fallback`, async () => {
+    const { state, app } = harness({ platform });
+    await settle();
+    assert.equal(state.popovers.length, 0);
+    if (platform === 'linux') assert.ok(state.attachedTrayMenu);
+    else assert.equal(state.attachedTrayMenu, undefined);
+    state.windows[0].close();
+    state.tray.emit('click');
+    await settle();
+    const popover = state.popovers[0];
+    assert.equal(popover.shown, true);
+    assert.equal(state.windows[0].shown, false);
+    assert.equal(state.backends[0].stops, 0);
+    state.tray.emit('right-click');
+    assert.equal(popover.destroyed, true);
+    assert.equal(state.trayPoppedUp, true);
+    assert.equal(state.poppedMenu, state.trayMenu);
+    for (const label of ['Show app', 'Accounts', 'Usage dashboard', 'Settings', 'Quit Agent Switch']) {
+      assert.equal(typeof state.poppedMenu.find(item => item.label === label)?.click, 'function');
+    }
+    assert.equal(state.backends[0].stops, 0);
+    assert.deepEqual(state.exits, []);
+    app.quit(); await settle();
+  });
+}
+
+test('popover load failure leaves right-click fallback and main-window hide lifecycle working', async () => {
+  const { state, app } = harness({ platform: 'darwin', popoverError: new Error('SECRET') });
+  await settle();
+  state.windows[0].close();
+  state.tray.emit('click');
+  await settle();
+  assert.equal(state.popovers[0].destroyed, true);
+  assert.equal(state.trayPoppedUp, true);
+  assert.equal(state.windows[0].shown, false);
+  assert.equal(state.backends[0].stops, 0);
+  state.tray.emit('right-click');
+  state.poppedMenu.find(item => item.label === 'Show app').click();
+  assert.equal(state.windows[0].shown, true);
+  assert.equal(state.dialogs.length, 0);
+  app.quit(); await settle();
+});
+
+test('popover model reuses the tray poll snapshot and keeps failed reads explicit without a second reader', async () => {
+  let reads = 0;
+  const { state, app } = harness({ trayRead: async () => {
+    reads += 1;
+    return { token: 'SECRET', preferences: { theme: 'dark' }, claude: { available: true,
+      accounts: [{ alias: 'Synthetic', token: 'SECRET', windows: [{ label: '5h', usedPercent: 20 }] }] } };
+  } });
+  await settle();
+  state.tray.emit('click'); await settle();
+  const contents = state.popovers[0].webContents;
+  const ready = state.ipc.get('agent-switch:tray:ready');
+  ready({ sender: contents, senderFrame: contents.mainFrame });
+  const model = state.updates.find(update => update.channel === 'agent-switch:tray:model').value;
+  assert.equal(model.theme, 'dark');
+  assert.equal(model.providers[0].accounts[0].windows[0].remaining, 80);
+  assert.equal(JSON.stringify(model).includes('SECRET'), false);
+  assert.equal(reads, 1);
+  state.popovers[0].emit('blur');
+  state.tray.emit('click'); await settle();
+  assert.equal(reads, 1);
+  app.quit(); await settle();
+});
+
+for (const source of ['unexpected main destruction', 'backend failure', 'main renderer failure', 'native quit']) {
+  test(`${source} destroys an open popover and cannot let it retain the backend`, async () => {
+    const { state, app } = harness();
+    await settle();
+    state.windows[0].close();
+    state.tray.emit('click'); await settle();
+    const popover = state.popovers[0];
+    const old = { sender: popover.webContents, senderFrame: popover.webContents.mainFrame };
+    if (source === 'unexpected main destruction') state.windows[0].destroy();
+    if (source === 'backend failure') state.backends[0].emit('failure', new BackendError('unexpected_exit'));
+    if (source === 'main renderer failure') state.windows[0].webContents.emit('render-process-gone');
+    if (source === 'native quit') app.quit();
+    await settle();
+    assert.equal(popover.destroyed, true);
+    assert.equal(state.backends[0].stops, 1);
+    assert.equal(state.trayDashboard.timer, null);
+    const before = state.updates.length;
+    state.ipc.get('agent-switch:tray:ready')(old);
+    state.ipc.get('agent-switch:tray:action')(old, 'app');
+    assert.equal(state.updates.length, before);
+    assert.equal(state.windows[0].destroyed, true);
+    assert.deepEqual(state.exits, [0]);
+  });
+}
+
+test('popover renderer failure destroys only the ephemeral renderer, not the healthy dashboard or backend', async () => {
+  const { state, app } = harness();
+  await settle();
+  state.tray.emit('click'); await settle();
+  state.popovers[0].webContents.emit('render-process-gone');
+  assert.equal(state.popovers[0].destroyed, true);
+  assert.equal(state.windows[0].destroyed, false);
+  assert.equal(state.backends[0].stops, 0);
+  assert.equal(state.dialogs.length, 0);
+  state.tray.emit('right-click');
+  assert.equal(state.trayPoppedUp, true);
+  app.quit(); await settle();
+});
+
+test('update installation destroys and invalidates the popover before stopping the backend', async () => {
+  let finish;
+  const updater = updateFixture();
+  const { state, invoke } = harness({ runtime: { updater }, confirm: 0,
+    stopForUpdate: () => new Promise(resolve => { finish = resolve; }) });
+  await settle();
+  await invoke('check'); await invoke('download');
+  state.tray.emit('click'); await settle();
+  const popover = state.popovers[0];
+  const old = { sender: popover.webContents, senderFrame: popover.webContents.mainFrame };
+  const installing = invoke('install');
+  await settle();
+  assert.equal(popover.destroyed, true);
+  assert.equal(state.trayDashboard.timer, null);
+  const before = state.updates.length;
+  state.ipc.get('agent-switch:tray:ready')(old);
+  state.tray.emit('click');
+  assert.equal(state.popovers.length, 1);
+  assert.equal(state.updates.length, before);
+  finish(); await installing; await settle();
 });
