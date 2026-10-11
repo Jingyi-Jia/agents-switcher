@@ -83,7 +83,25 @@ function secureWebContents(contents, origin, openExternal) {
   });
 }
 
+function securePopoverSession(session, files) {
+  const allowed = new Set(files);
+  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  session.setPermissionCheckHandler(() => false);
+  session.setDevicePermissionHandler(() => false);
+  session.on('will-download', event => event.preventDefault());
+  session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+    callback({ cancel: !allowed.has(details.url) });
+  });
+}
+
+function securePopoverContents(contents) {
+  for (const name of ['will-attach-webview', 'will-navigate', 'will-frame-navigate', 'will-redirect']) {
+    contents.on(name, event => event.preventDefault());
+  }
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+}
+
 module.exports = {
   HELP_LINKS, dashboardURL, externalHelpURL, isOwnedURL, isNavigationAllowed,
-  secureSession, secureWebContents,
+  secureSession, secureWebContents, securePopoverSession, securePopoverContents,
 };

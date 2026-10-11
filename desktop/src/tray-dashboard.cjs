@@ -60,6 +60,45 @@ function usageItems(state, now = Date.now() / 1000) {
   return items;
 }
 
+function quotaModel(state, now = Date.now() / 1000, status = 'ready') {
+  return {
+    status: state ? 'ready' : status === 'unavailable' ? 'unavailable' : 'loading',
+    theme: ['light', 'dark'].includes(state?.preferences?.theme) ? state.preferences.theme : 'system',
+    providers: state ? [['claude', 'Claude Code'], ['codex', 'Codex']].map(([id, name]) => {
+      const provider = state[id];
+      const available = provider?.available === true;
+      const accounts = available && Array.isArray(provider.accounts) ? provider.accounts : [];
+      return { id, name, available, accounts: accounts.filter(account => account && typeof account === 'object').map(account => {
+        const hasReport = Array.isArray(account.windows) && account.windows.some(window =>
+          typeof window?.usedPercent === 'number' && Number.isFinite(window.usedPercent)
+          && window.usedPercent >= 0 && window.usedPercent <= 100);
+        const status = account.loginRequired ? 'login' : account.error ? 'unavailable'
+          : account.onCredits ? 'credits' : account.sentinel === 'api key' ? 'metered'
+            : account.usageFailed || account.sentinel ? hasReport ? 'last-good' : 'failed' : 'ready';
+        const showWindows = status === 'ready' || status === 'last-good';
+        const number = Number.isSafeInteger(account.number) && account.number > 0 ? String(account.number)
+          : typeof account.number === 'string' && /^[1-9]\d{0,8}$/.test(account.number) ? account.number : null;
+        return {
+          name: label(account.alias, label(account.email, number ? `Account ${number}` : 'Saved account')),
+          active: account.active === true,
+          excluded: account.disabled === true,
+          pending: account.activationRequired === true,
+          status,
+          windows: showWindows && Array.isArray(account.windows) ? account.windows
+            .filter(window => window && typeof window === 'object')
+            .map(window => {
+              const used = window.usedPercent;
+              const left = typeof used === 'number' && Number.isFinite(used) && used >= 0 && used <= 100
+                ? Number((100 - used).toFixed(10)) : null;
+              return { name: label(window.label, 'Window'), model: window.scope === 'model', remaining: left,
+                reset: resetLabel(window, now).replace(/^ · /, '') };
+            }) : [],
+        };
+      }) };
+    }) : [],
+  };
+}
+
 function readState(address, signal) {
   return new Promise((resolve, reject) => {
     const url = new URL(address);
@@ -110,13 +149,22 @@ class TrayDashboard {
     this.stop();
     const controller = new AbortController();
     this.controller = controller;
-    this.render(usageItems(null));
+    this.render(usageItems(null), quotaModel(null));
     const poll = async () => {
       let items;
-      try { items = usageItems(await this.read(address, controller.signal)); }
-      catch { items = [{ label: 'Account usage unavailable · open the app to retry', enabled: false }]; }
+      let model;
+      try {
+        const state = await this.read(address, controller.signal);
+        const now = Date.now() / 1000;
+        items = usageItems(state, now);
+        model = quotaModel(state, now);
+      }
+      catch {
+        items = [{ label: 'Account usage unavailable · open the app to retry', enabled: false }];
+        model = quotaModel(null, undefined, 'unavailable');
+      }
       if (controller.signal.aborted) return;
-      this.render(items);
+      this.render(items, model);
       this.timer = setTimeout(poll, 20000);
       this.timer.unref();
     };
@@ -131,4 +179,4 @@ class TrayDashboard {
   }
 }
 
-module.exports = { usageItems, readState, TrayDashboard };
+module.exports = { usageItems, quotaModel, readState, TrayDashboard };

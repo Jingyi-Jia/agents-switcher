@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Account quota — Agent Switch</title>
+  <link rel="stylesheet" href="tray-popover.css">
+  <script src="tray-popover.js" defer></script>
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">Agent Switch</p><h1>Account quota</h1><p class="subtitle">Remaining availability · read-only</p></div>
+    <button id="close" class="close" aria-label="Dismiss quota overview">×</button>
+  </header>
+  <main id="overview" tabindex="0" aria-label="Saved account quota"><p class="notice" role="status">Loading account usage…</p></main>
+  <footer>
+    <p>Cached reports · checked every 20 seconds</p>
+    <nav aria-label="Open full app">
+      <button data-view="app" class="primary">Show app <span aria-hidden="true">↗</span></button>
+      <button data-view="accounts">Accounts</button>
+      <button data-view="usage">Usage</button>
+      <button data-view="settings">Settings</button>
+    </nav>
+  </footer>
+</body>
+</html>

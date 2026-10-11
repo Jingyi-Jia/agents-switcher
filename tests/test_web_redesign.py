@@ -523,11 +523,13 @@ apiState.claudeDesktop = {supported: true, installed: true, available: true, can
 await load();
 $('watch').checked = false;
 const before = calls.filter(c => c.path.startsWith('/api/state')).length;
+const profilesBefore = calls.filter(c => c.path === '/api/claude-desktop/status').length;
 intervals.find(i => i.ms === 5000).callback(); await settle();
 assert.equal(calls.filter(c => c.path.startsWith('/api/state')).length, before);
 state.claudeDesktop.running = true;
 intervals.find(i => i.ms === 5000).callback(); await settle();
-assert.equal(calls.filter(c => c.path.startsWith('/api/state')).length, before + 1);
+assert.equal(calls.filter(c => c.path.startsWith('/api/state')).length, before);
+assert.equal(calls.filter(c => c.path === '/api/claude-desktop/status').length, profilesBefore + 1);
 """)
 
 

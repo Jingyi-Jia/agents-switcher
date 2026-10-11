@@ -298,13 +298,21 @@ no credentials. Closing the window hides the app while its backend and
 automatic-switching session keep running.
 
 Click the standalone app's tray/menu-bar icon to see each saved account's
-remaining quota, including separate model limits and reset countdowns. This
-read-only menu checks the shared dashboard every 20 seconds without forcing
-provider polls; failed updates are marked rather than presented as fresh quota.
-Some Linux tray hosts require a right-click. Choose **Show app** or **Accounts**
-to manage accounts, or **Usage dashboard** for analytics. Reopen the full app
-from the macOS Dock or by launching Agent Switch again. Choose **Quit Agent
+remaining quota in a visual popover, with availability bars, account-status
+badges, separate model limits, and reset countdowns. This read-only view uses
+the shared dashboard's 20-second checks without forcing provider polls; failed
+updates are marked rather than presented as fresh quota. The popover is created
+only when opened and released when dismissed, not kept as another hidden window.
+Right-click opens the native menu; some Linux tray hosts provide only that menu.
+Choose **Show app** or **Accounts** to manage accounts, or **Usage dashboard**
+for analytics. Reopen the full app from the macOS Dock or by launching Agent
+Switch again. Choose **Quit Agent
 Switch** to stop its backend and automatic switching.
+
+The full dashboard pauses its periodic view updates while hidden and resumes
+enabled checks when visible. This does not stop automation, tray updates, or an ongoing
+Codex sign-in. Claude Desktop profile-readiness checks do not collect account
+quotas; the server still checks that Claude has quit before each launch.
 
 The native **View** menu and menu-bar menu open Accounts, Usage, and Settings.
 Keyboard shortcuts are **⌘/Ctrl+1**, **⌘/Ctrl+2**, and **⌘/Ctrl+,** respectively.
@@ -400,6 +408,14 @@ Claude, or quit Claude and delete the `profiles/<id>/` folder whose ID
 `removed-profiles.json` lists beside its name. No export action is provided.
 Launching Claude can also update its shared OS-integration metadata outside a
 named profile.
+
+Each profile starts empty, but Claude can provision multi-gigabyte local VM
+images and other runtime data inside it. Agent Switch does not share or delete
+those images between profiles; removing a profile from the list does not reclaim
+its disk space. Saved profiles do not each keep a Claude instance running: the
+launcher requires the current instance to quit before opening another profile.
+Process-tree memory totals can include the Claude instance launched by Agent
+Switch, so they are not a measurement of Agent Switch's own memory alone.
 
 ### Save and switch Codex accounts safely
 

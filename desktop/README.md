@@ -113,12 +113,17 @@ computer/user requires a separate data-transfer plan. Provider-revoked logins
 still need a new sign-in even when the saved account entry survives.
 
 Closing the window hides it without stopping the backend or session-owned
-auto-switching. Clicking the tray/menu-bar icon opens a read-only quota dashboard
-for all saved Claude Code and Codex accounts, with percentages remaining, model
-limits, reset countdowns, and explicit unknown/error/paid-credit states. It checks
-the shared dashboard every 20 seconds without forcing provider polling, and marks
-last-good reports when a usage update failed. Some Linux tray hosts require a
-right-click to open the menu. Account switching stays in the full app.
+auto-switching. Clicking the tray/menu-bar icon opens a read-only visual quota
+popover for all saved Claude Code and Codex accounts, with remaining-availability
+bars, account-status badges, model limits, reset countdowns, and explicit
+unknown/error/paid-credit states. It reuses the shared dashboard's 20-second
+checks without forcing provider polling, and marks last-good reports when a
+usage update failed. The sandboxed popover is created on demand and destroyed
+when dismissed; it receives only a sanitized display model, never the backend
+token or URL. Right-click opens the native menu, which remains the fallback on
+Linux tray hosts without normal-click support. Account switching stays in the
+full app. Hidden dashboard view updates pause without stopping automation,
+tray reads, or an ongoing Codex sign-in.
 Reopen it with **Show app** in the tray/menu bar, the macOS Dock,
 or by launching Agent Switch again. **Quit Agent Switch** (Cmd+Q on macOS,
 Ctrl+Q on Windows/Linux), including **Quit** in the macOS Dock icon's right-click

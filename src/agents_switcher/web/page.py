@@ -168,6 +168,7 @@ const providerUI = {};
 const helpUI = {};
 const setupLinks = {claude: "https://code.claude.com/docs/en/setup", codex: "https://developers.openai.com/codex/app"};
 let state = {}, busy = false, requestVersion = 0, loadingVersion = 0, toastTimer;
+let profileVersion = 0, profileLoadingVersion = 0, visibilityVersion = 0;
 let dialogAction = null, dialogOpener = null, dialogKind = null;
 let helpRequested = false, helpDismissed = false;
 let activeView = "accounts", preferenceVersion = 0, preferences = {theme: "system", profileNoticeVersion: 0};
@@ -532,7 +533,7 @@ function setupDesktopProfiles() {
   desktopProfileUI.create.dataset.profileFocus = "new";
   desktopProfileUI.default = actionButton("Open Claude", () => openDesktopProfile("default", "Claude with your usual profile", desktopProfileUI.default));
   desktopProfileUI.default.setAttribute("aria-label", "Open Claude Desktop with the usual default profile");
-  desktopProfileUI.refresh = actionButton("Refresh", () => refreshUsage(desktopProfileUI.refresh));
+  desktopProfileUI.refresh = actionButton("Refresh", refreshDesktopProfiles);
   actions.append(desktopProfileUI.default, desktopProfileUI.refresh);
 }
 
@@ -924,37 +925,72 @@ function updateProvider(id, data, force = false) {
 async function load(force = false, silent = false) {
   if (loadingVersion && !force) return false;
   const version = ++requestVersion;
+  const visibilityAtStart = visibilityVersion;
   const preferenceAtStart = preferenceVersion;
+  const profileAtStart = ++profileVersion;
   loadingVersion = version;
   try {
     const {ok, body} = await api("/api/state" + (force ? "?force=1" : ""));
-    if (version !== requestVersion) return false;
+    if (version !== requestVersion || (!force && visibilityAtStart !== visibilityVersion)) return false;
     if (!ok || body.error) {
       $("state-error").hidden = false;
       $("state-error").textContent = safeMessage(body.message || body.error || "Could not load accounts. Your saved logins have not been changed.");
       if (!silent) toast(body.message || body.error || "Could not load state.", true);
       return false;
     }
-    state = body;
+    state = profileAtStart === profileVersion ? body : {...body, claudeDesktop: state.claudeDesktop};
     if (preferenceAtStart === preferenceVersion && body.preferences) receivePreferences(body.preferences);
     $("state-error").hidden = true;
     $("settings-lifecycle").textContent = automationLifecycle();
     renderHelp();
     $("kpis").replaceChildren(tile("Codex", body.codex || {}), tile("Claude Code", body.claude || {}));
     Object.keys(providers).forEach((id) => updateProvider(id, body[id] || {}, force));
-    renderDesktopProfiles(body.claudeDesktop);
+    renderDesktopProfiles(state.claudeDesktop);
     $("stamp").textContent = "updated " + new Date().toLocaleTimeString();
     return true;
   } catch {
-    if (version === requestVersion) {
-      $("state-error").hidden = false;
-      $("state-error").textContent = "The local service couldn't be reached. Previously loaded accounts may be out of date. Refresh or reopen Agent Switch.";
-    }
-    if (version === requestVersion && !silent) toast(isDesktop() ? "Could not reach the app's local service. Reopen Agent Switch and try again." : "Could not reach agent-switch. Check that the local dashboard server is still open.", true);
+    if (version !== requestVersion || (!force && visibilityAtStart !== visibilityVersion)) return false;
+    $("state-error").hidden = false;
+    $("state-error").textContent = "The local service couldn't be reached. Previously loaded accounts may be out of date. Refresh or reopen Agent Switch.";
+    if (!silent) toast(isDesktop() ? "Could not reach the app's local service. Reopen Agent Switch and try again." : "Could not reach agent-switch. Check that the local dashboard server is still open.", true);
     return false;
   } finally {
     if (loadingVersion === version) loadingVersion = 0;
   }
+}
+
+async function loadDesktopProfiles(automatic = false) {
+  if (profileLoadingVersion) return false;
+  const version = ++profileVersion;
+  const visibilityAtStart = visibilityVersion;
+  profileLoadingVersion = version;
+  try {
+    const {ok, body} = await api("/api/claude-desktop/status");
+    if (version !== profileVersion || (automatic && (visibilityAtStart !== visibilityVersion || !canPollProfiles()))) return false;
+    if (!ok || body.ok === false || typeof body.available !== "boolean" || !Array.isArray(body.profiles) || ![true, false, null].includes(body.running)) throw new Error("Profile status unavailable");
+    state = {...state, claudeDesktop: body};
+    renderDesktopProfiles(body);
+    return true;
+  } catch {
+    if (version !== profileVersion || (automatic && (visibilityAtStart !== visibilityVersion || !canPollProfiles()))) return false;
+    const data = {...state.claudeDesktop, available: false, running: null,
+      error: "Claude Desktop status couldn't be checked. Opening is blocked. Choose Refresh to retry."};
+    state = {...state, claudeDesktop: data};
+    renderDesktopProfiles(data);
+    return false;
+  } finally {
+    if (profileLoadingVersion === version) profileLoadingVersion = 0;
+  }
+}
+
+async function refreshDesktopProfiles() {
+  if (busy || codexFlow || codexEnrollmentFlow) return;
+  busy = true;
+  ++profileVersion; profileLoadingVersion = 0;
+  desktopProfileUI.refresh.textContent = "refreshing…";
+  syncBusy();
+  try { await loadDesktopProfiles(); }
+  finally { busy = false; desktopProfileUI.refresh.textContent = "Refresh"; syncBusy(); }
 }
 
 async function refreshUsage(button) {
@@ -971,6 +1007,7 @@ async function act(path, payload, button, pending) {
   if (busy) return false;
   busy = true;
   ++requestVersion;
+  ++profileVersion; profileLoadingVersion = 0;
   const was = button.textContent;
   button.textContent = pending;
   syncBusy();
@@ -1210,7 +1247,7 @@ $("theme").onchange = async () => {
 applyTheme();
 $("watch").onchange = () => {
   $("watch-status").textContent = $("watch").checked ? "Every 20 seconds · auto-switch runs independently" : "Updates paused · auto-switch is not stopped";
-  if ($("watch").checked && !busy && !$("action-dialog").open) load();
+  if (canPollDashboard()) load();
 };
 $("help-toggle").onclick = () => {
   helpRequested = true;
@@ -1234,10 +1271,26 @@ loadPreferences();
 loadStorage();
 load();
 navigate((location.hash || "").slice(1), false);
-setInterval(() => { if ($("watch").checked && !busy && !codexEnrollmentFlow && !$("action-dialog").open) load(); }, 20000);
-setInterval(() => {
-  if (!busy && !codexEnrollmentFlow && (dialogKind === "profile" || (activeView === "accounts" && !$("claude-desktop-panel").hidden && ($("watch").checked || state.claudeDesktop?.running !== false))) && (!$("action-dialog").open || dialogKind === "profile")) load(false, true);
-}, 5000);
+function canPollDashboard() {
+  return !document.hidden && $("watch").checked && !busy && !codexFlow && !codexEnrollmentFlow && !$("action-dialog").open;
+}
+function canPollProfiles() {
+  if (document.hidden || busy || codexFlow || codexEnrollmentFlow) return false;
+  if ($("action-dialog").open) return dialogKind === "profile";
+  return activeView === "accounts" && !$("claude-desktop-panel").hidden && ($("watch").checked || state.claudeDesktop?.running !== false);
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    ++visibilityVersion;
+    loadingVersion = 0;
+    profileLoadingVersion = 0;
+    return;
+  }
+  if (canPollDashboard()) load();
+  if (canPollProfiles()) loadDesktopProfiles(true);
+});
+setInterval(() => { if (canPollDashboard()) load(); }, 20000);
+setInterval(() => { if (canPollProfiles()) loadDesktopProfiles(true); }, 5000);
 </script>
 </body>
 </html>

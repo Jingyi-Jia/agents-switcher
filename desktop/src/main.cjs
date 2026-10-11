@@ -2,12 +2,13 @@
 
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, session, shell, ipcMain, powerMonitor } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, session, shell, ipcMain, powerMonitor, screen } = require('electron');
 const { Backend, BackendError } = require('./backend.cjs');
 const { HELP_LINKS, secureSession, secureWebContents } = require('./security.cjs');
 const { UpdateController, registerUpdaterIPC } = require('./updater.cjs');
 const { createUpdateRuntime } = require('./updater-runtime.cjs');
 const { TrayDashboard } = require('./tray-dashboard.cjs');
+const { TrayPopover } = require('./tray-popover.cjs');
 
 app.setName('Agent Switch');
 let window = null;
@@ -21,6 +22,7 @@ let updates = null;
 let installing = false;
 let fullScreenClose = null;
 let trayDashboard = null;
+let trayPopover = null;
 
 function installerOwnsShutdown() {
   return installing && updates?.installStarted && backend?.cleanExit;
@@ -28,6 +30,7 @@ function installerOwnsShutdown() {
 
 function showWindow() {
   if (!window || window.isDestroyed() || recovering || quitting || installing) return;
+  trayPopover?.dismiss();
   if (fullScreenClose) fullScreenClose.hide = false;
   if (window.isMinimized()) window.restore();
   window.show();
@@ -37,6 +40,7 @@ function showWindow() {
 function showView(view) {
   if (!['accounts', 'usage', 'settings'].includes(view) || !dashboardAddress
     || !window || window.isDestroyed() || recovering || quitting || installing) return;
+  trayPopover?.dismiss();
   if (fullScreenClose) fullScreenClose.hide = false;
   const target = new URL(dashboardAddress);
   target.hash = view;
@@ -90,8 +94,19 @@ function installTray() {
   let menuOpen = false;
   let pendingItems = null;
   let renderVersion = 0;
-  trayDashboard = new TrayDashboard(items => {
+  let contextMenu = null;
+  const showContextMenu = () => {
+    if (quitting || installing || !tray || !contextMenu) return;
+    trayPopover?.dismiss();
+    tray.popUpContextMenu(contextMenu);
+  };
+  trayPopover = new TrayPopover({ BrowserWindow, session, screen, ipcMain,
+    navigate: action => action === 'app' ? showWindow() : showView(action),
+    fallback: showContextMenu, canOpen: () => !quitting && !recovering && !installing && Boolean(dashboardAddress),
+  });
+  trayDashboard = new TrayDashboard((items, model) => {
     if (quitting || installing || !tray) return;
+    trayPopover.update(model);
     renderVersion += 1;
     if (menuOpen) {
       pendingItems = items;
@@ -108,7 +123,7 @@ function installTray() {
       { type: 'separator' },
       { label: 'Quit Agent Switch', click: () => app.quit() },
     ]);
-    menu.on('menu-will-show', () => { menuOpen = true; });
+    menu.on('menu-will-show', () => { menuOpen = true; trayPopover.dismiss(); });
     menu.on('menu-will-close', () => {
       menuOpen = false;
       const pending = pendingItems;
@@ -118,17 +133,26 @@ function installTray() {
         if (renderVersion === version) trayDashboard.render(pending);
       });
     });
-    tray.setContextMenu(menu);
+    contextMenu = menu;
+    if (process.platform === 'linux') tray.setContextMenu(menu);
   });
   trayDashboard.render([{ label: 'Loading account usage…', enabled: false }]);
-  if (process.platform !== 'darwin') tray.on('click', () => {
-    if (!quitting && !installing) tray.popUpContextMenu();
+  tray.on('click', () => {
+    if (!quitting && !installing) {
+      if (recovering || !dashboardAddress) showContextMenu();
+      else {
+        try { void trayPopover.toggle(tray.getBounds()); }
+        catch { showContextMenu(); }
+      }
+    }
   });
+  tray.on('right-click', showContextMenu);
 }
 
 async function recover(error) {
   if (quitting || recovering || installing) return;
   recovering = true;
+  trayPopover?.clear();
   trayDashboard?.stop();
   trayDashboard?.render([{ label: 'Account usage unavailable · reconnect in the app', enabled: false }]);
   dashboardAddress = null;
@@ -211,7 +235,11 @@ async function startDashboard() {
     });
     window.on('query-session-end', () => app.quit());
     window.on('session-end', () => app.quit());
-    window.on('closed', () => { fullScreenClose = null; window = null; });
+    window.on('closed', () => {
+      fullScreenClose = null;
+      window = null;
+      if (!recovering && !quitting && !installerOwnsShutdown()) app.quit();
+    });
     await window.loadURL(url);
     showWindow();
   } catch (error) {
@@ -233,6 +261,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', (event) => {
     if (installerOwnsShutdown()) {
       quitting = true;
+      trayPopover?.clear();
       trayDashboard?.stop();
       updates.close();
       if (tray) tray.destroy();
@@ -241,6 +270,7 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     if (quitting) return;
     quitting = true;
+    trayPopover?.clear();
     trayDashboard?.stop();
     updates?.close();
     if (window && !window.isDestroyed()) window.destroy();
@@ -310,6 +340,7 @@ if (!app.requestSingleInstanceLock()) {
       prepareInstall: async () => {
         if (quitting || recovering || !backend) throw new Error();
         installing = true;
+        trayPopover?.clear();
         trayDashboard?.stop();
         await backend.stopForUpdate();
         if (quitting) throw new Error();
