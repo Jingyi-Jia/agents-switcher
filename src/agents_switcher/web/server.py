@@ -712,6 +712,7 @@ def _make_handler(state: DashboardState, token: str):
                 "/api/claude-desktop/update": (state.claude_desktop.update, {"profileId", "name", "emailLabel", "confirm"}, set()),
                 "/api/claude-desktop/remove": (state.claude_desktop.remove, {"profileId", "confirm"}, set()),
                 "/api/claude-desktop/restore": (state.claude_desktop.restore, {"profileId", "name", "emailLabel", "confirm"}, set()),
+                "/api/claude-desktop/compact": (state.claude_desktop.compact, {"profileId", "confirm"}, set()),
                 "/api/switch": (state.switch, {"provider", "number"}, {"useSavedLogin"}),
                 "/api/add": (state.add_current, {"provider"}, set()),
                 "/api/remove": (state.remove, {"provider", "number", "confirm"}, set()),
@@ -728,6 +729,13 @@ def _make_handler(state: DashboardState, token: str):
                 action, required, optional = routes[parsed.path]
                 if not required <= payload.keys() or payload.keys() - required - optional:
                     raise ProviderActionError("Missing required or unsupported request fields")
+                if parsed.path == "/api/claude-desktop/compact":
+                    if parsed.query:
+                        raise ProviderActionError("This request does not accept query parameters.")
+                    if payload["confirm"] is not True:
+                        raise ProviderActionError("Explicit confirmation is required for VM disk compaction.")
+                    if not isinstance(payload["profileId"], str) or not re.fullmatch(r"[0-9a-f]{32}", payload["profileId"]):
+                        raise ProviderActionError("Choose a saved Claude Desktop profile.")
                 if "threshold" in payload and payload["threshold"] is None:
                     raise ProviderActionError("threshold must be a number")
                 result = action(**payload)

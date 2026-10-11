@@ -417,6 +417,31 @@ launcher requires the current instance to quit before opening another profile.
 Process-tree memory totals can include the Claude instance launched by Agent
 Switch, so they are not a measurement of Agent Switch's own memory alone.
 
+On **macOS with APFS**, a named profile's **Profile details → Storage → Compact
+VM disk** action can reclaim allocated blocks that contain only zeros. Fully
+quit Claude first, check the separate confirmation, and keep Claude quit until
+the result is confirmed. This action does not save unsaved profile labels. Its
+confirmation is never remembered by the general profile notice.
+
+Compaction scans only that profile's `desktop/vm_bundles/claudevm.bundle/rootfs.img`,
+holds the profile lock and an exclusive disk-file lock, and verifies the complete
+disk's bytes afterward. It keeps the file's logical size, inode, permissions, and
+modification time; it does not delete guest files, trim a guest filesystem, copy
+credentials, share images, or touch the usual Claude profile. Linked, foreign-owned,
+busy, transparently compressed, empty, or larger-than-16-GiB disks are refused.
+Missing VM disks are not created. Windows and Linux profiles have no compaction
+action.
+
+The result reports **file allocation**, not a promised increase in volume free
+space: APFS snapshots or clones may still retain released blocks. A 10-GiB image
+can continue to show a 10-GiB logical size after its allocation decreases.
+Savings depend on the disk's actual zero blocks, not guest-reported free space.
+Scanning and verification can take time and perform substantial sequential reads,
+without loading the whole image into memory. If a request disconnects, keep Claude
+quit until the operation has finished; do not treat a missing result as success.
+Claude writes or VM updates can allocate blocks again, so compaction is always
+an explicit action, never automatic cleanup.
+
 ### Save and switch Codex accounts safely
 
 **Do not run plain `codex login` or `codex logout` over a login you want to keep.**
