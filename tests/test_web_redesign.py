@@ -115,6 +115,26 @@ assert.doesNotMatch($('usage-content').textContent, /Account comparison/);
 """)
 
 
+def test_claude_cache_guidance_targets_terminal_stats_and_explains_read_only_refresh(node):
+    run_page(node, ANALYTICS + r"""
+await navigate('usage');
+$('usage-provider').value = 'claude'; $('usage-provider').onchange(); await settle();
+const entry = analyticsBody.accounts[0];
+function assertGuidance() {
+  const text = $('usage-content').textContent;
+  assert.match(text, /Run \/stats in the Claude Code terminal CLI \(the Stats tab in \/usage\)/);
+  assert.match(text, /Refresh only rereads stats-cache.json; it cannot rebuild it/);
+  assert.match(text, /same Claude config directory/);
+  assert.match(text, /don't reconstruct transcripts or attribute activity to saved accounts/);
+}
+entry.stale = true; renderUsage(); assertGuidance();
+entry.stale = false; entry.available = false; renderUsage(); assertGuidance();
+analyticsBody.accounts = []; renderUsage(); assertGuidance();
+entry.available = true; analyticsBody.accounts = [entry]; renderUsage();
+assert.doesNotMatch($('usage-content').textContent, /Run \/stats/);
+""")
+
+
 def test_navigation_invalidates_pending_analytics_and_late_refresh_uses_current_account(node):
     run_page(node, ANALYTICS + r"""
 await navigate('usage');

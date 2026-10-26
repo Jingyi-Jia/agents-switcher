@@ -708,6 +708,28 @@ def test_claude_each_request_rereads_current_config_root(claude_cache, tmp_path,
     assert entry["summary"]["lifetimeTokens"] is None
 
 
+def test_claude_force_refresh_only_advances_when_source_cache_advances(claude_cache):
+    claude_cache.payload["version"] = 5
+    claude_cache.payload["lastComputedDate"] = "2026-09-01"
+    claude_cache.write()
+    before = claude_cache.path.read_bytes()
+    service = UsageAnalytics()
+
+    first = service.get("claude")["accounts"][0]
+    refreshed = service.get("claude", force=True)["accounts"][0]
+    assert first["dataThrough"] == refreshed["dataThrough"] == "2026-09-01"
+    assert first["stale"] and refreshed["stale"]
+    assert refreshed["daily"] == []
+    assert claude_cache.path.read_bytes() == before
+
+    claude_cache.payload["lastComputedDate"] = THROUGH
+    claude_cache.write()
+    updated = service.get("claude", force=True)["accounts"][0]
+    assert updated["dataThrough"] == THROUGH
+    assert not updated["stale"]
+    assert updated["daily"][-1]["date"] == THROUGH
+
+
 @pytest.mark.parametrize("content", [b"{private-malformed", b"[]", b"null", b"\xff", b"[" * 2000 + b"]" * 2000])
 def test_claude_malformed_json_is_unavailable_and_redacted(claude_cache, content):
     claude_cache.path.write_bytes(content)

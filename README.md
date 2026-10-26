@@ -282,8 +282,15 @@ still refresh credentials. Closing a browser tab does not stop its server.
   content, run Claude commands, or modify Claude's cache. This is this device's
   configured history, not a verified per-login total. Switching accounts does not
   reassign that history to the new login. The cache can stop at the previous day;
-  current-session activity is not reconstructed. If it is missing or stale, open
-  `/usage` in Claude Code and then choose **Refresh activity** here.
+  current-session activity is not reconstructed. If it is missing or stale, run
+  `/stats` in the **Claude Code terminal CLI** (this opens the Stats tab under
+  `/usage`), wait for activity to load, then choose **Refresh activity** here.
+  Checking plan limits is separate from updating local activity; viewing usage
+  in Claude Desktop may not write this cache. Both the CLI and Agent Switch
+  must use the same `CLAUDE_CONFIG_DIR` (or the default `~/.claude`). Refresh
+  only rereads the file: if its data-through date stays unchanged, the source
+  cache has not advanced. Do not delete it to force a rebuild: historical totals
+  can be lost when their original transcripts are no longer available.
 
 Data-through dates and stale/unavailable states explain the coverage of the
 charts. Reported token counts, subscription quota percentages, and billing credits
