@@ -255,12 +255,13 @@ function renderUsage() {
     return;
   }
   const accounts = usageAccounts();
+  const claudeCacheHelp = "Run /stats in the Claude Code terminal CLI (the Stats tab in /usage), wait for activity to load, then choose Refresh activity here. Refresh only rereads stats-cache.json; it cannot rebuild it. Use the same Claude config directory in both apps. We don't reconstruct transcripts or attribute activity to saved accounts.";
   if (analyticsError) {
     const error = el("div", "load-error", safeMessage(analyticsError)); error.setAttribute("role", "status"); host.appendChild(error);
   }
   if (!accounts.length) {
     $("usage-context").textContent = "No activity data is available for this selection.";
-    host.appendChild(usageEmpty(analyticsError ? "Activity couldn't be loaded" : "A fresh page", analyticsProvider === "claude" ? "Open /usage in Claude Code, then choose Refresh activity here to read its local activity cache. This is device activity, not a saved-account history; we don't reconstruct transcripts." : analyticsError ? "Your saved accounts are unchanged. Try Refresh activity when you're ready." : "Add an existing Codex login in Accounts, then refresh. We only show reported activity, never estimated usage."));
+    host.appendChild(usageEmpty(analyticsError ? "Activity couldn't be loaded" : "A fresh page", analyticsProvider === "claude" ? claudeCacheHelp : analyticsError ? "Your saved accounts are unchanged. Try Refresh activity when you're ready." : "Add an existing Codex login in Accounts, then refresh. We only show reported activity, never estimated usage."));
     return;
   }
   const days = periodDays(accounts), complete = days.filter((d) => d.count === d.total).length;
@@ -270,7 +271,7 @@ function renderUsage() {
   const source = {"codex-profile-stats": "OpenAI account statistics", "claude-stats-cache": "Claude Code local stats cache"}[analyticsBody.source] || analyticsBody.source || "Provider activity";
   $("usage-context").textContent = `${source} · Fetched ${timeText(analyticsBody.fetchedAt)}. Data through ${through.length ? through[0] + (through[0] !== through.at(-1) ? "–" + through.at(-1) : "") : "not reported"}. ${coverage}.${available < accounts.length || complete < days.length ? " Partial coverage: totals include reported values only." : ""}${accounts.some((a) => a.stale) ? " Cached data is stale." : ""} Gaps are not zero.`;
   accounts.filter((a) => a.error).forEach((a) => host.appendChild(el("p", "load-error", (analyticsProvider === "claude" ? "This device" : a.label || "Account " + a.number) + ": " + safeMessage(a.error))));
-  if (analyticsProvider === "claude" && accounts.some((a) => a.stale || !a.available)) host.appendChild(el("p", "hint", "Open /usage in Claude Code, then choose Refresh activity here. This view reads the local activity cache; it doesn't reconstruct transcripts or attribute activity to saved accounts."));
+  if (analyticsProvider === "claude" && accounts.some((a) => a.stale || !a.available)) host.appendChild(el("p", "hint", claudeCacheHelp));
   if (analyticsTab === "models") renderModels(host, accounts, days);
   else {
     renderUsageSummary(host, days, accounts);
