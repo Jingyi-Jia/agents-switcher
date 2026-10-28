@@ -3534,13 +3534,22 @@ class ClaudeAccountSwitcher:
 
             if expected_account is not None:
                 entry = self._usage_store.entries({account_num: (current_email, current_org_uuid)})[account_num]
-                if entry.struck_fingerprint and entry.token_dead(
-                    stored_fp=oauth.credential_fingerprint(current_creds)
-                ):
-                    raise ConfigError(
-                        "The Claude CLI still has the rejected login. Sign in again "
-                        "in the CLI, then retry Update saved login. No saved login was changed."
-                    )
+                if entry.token_dead():
+                    rejected_fp = entry.struck_fingerprint
+                    if rejected_fp is None:
+                        saved, unreadable = self._read_account_credentials_ex(account_num, current_email)
+                        rejected_fp = oauth.credential_fingerprint(saved)
+                        if unreadable or rejected_fp is None:
+                            raise CredentialReadError(
+                                "Could not verify that the saved Claude login changed. "
+                                "Make sure its credential store is readable, then retry. "
+                                "No saved login was changed."
+                            )
+                    if rejected_fp == oauth.credential_fingerprint(current_creds):
+                        raise ConfigError(
+                            "The Claude CLI still has the rejected login. Sign in again "
+                            "in the CLI, then retry Update saved login. No saved login was changed."
+                        )
 
             self._write_account_credentials(account_num, current_email, current_creds)
             self._write_account_config(account_num, current_email, current_config)

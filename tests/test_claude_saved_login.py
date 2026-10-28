@@ -134,3 +134,29 @@ def test_update_holds_cross_node_account_lock_during_capture(recovery, monkeypat
 
     monkeypatch.setattr(s, "_read_capture_credentials", capture)
     s.update_saved_login("1")
+
+
+@pytest.mark.parametrize("fresh", [False, True])
+def test_legacy_quarantine_requires_a_changed_saved_login(recovery, monkeypatch, fresh):
+    s = recovery.switcher
+    s._usage_store.record({"1": FetchRecord(error="invalid_grant")}, {"1": recovery.identity})
+    assert s._usage_store.entries({"1": recovery.identity})["1"].struck_fingerprint is None
+    monkeypatch.setattr(s, "_read_capture_credentials", lambda: recovery.fresh if fresh else recovery.old)
+    if fresh:
+        s.update_saved_login("1")
+        assert s._read_account_credentials("1", recovery.identity[0]) == recovery.fresh
+        assert not s._usage_store.entries({"1": recovery.identity})["1"].token_dead()
+    else:
+        with pytest.raises(ConfigError, match="still has the rejected login"):
+            s.update_saved_login("1")
+        assert s._read_account_credentials("1", recovery.identity[0]) == recovery.old
+        assert s._usage_store.entries({"1": recovery.identity})["1"].token_dead()
+
+
+def test_legacy_quarantine_with_unreadable_backup_cannot_be_cleared(recovery, monkeypatch):
+    s = recovery.switcher
+    s._usage_store.record({"1": FetchRecord(error="invalid_grant")}, {"1": recovery.identity})
+    monkeypatch.setattr(s, "_read_account_credentials_ex", lambda *args: ("", True))
+    with pytest.raises(CredentialReadError, match="Could not verify"):
+        s.update_saved_login("1")
+    assert s._usage_store.entries({"1": recovery.identity})["1"].token_dead()
