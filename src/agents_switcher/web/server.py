@@ -315,6 +315,12 @@ class DashboardState:
         finally:
             self.invalidate()
 
+    def update_claude_login(self, number, *, confirm: bool = False) -> dict:
+        try:
+            return self.actions.update_claude_login(number, confirm=confirm)
+        finally:
+            self.invalidate()
+
     def switch(self, provider: str, number: str, *, useSavedLogin: bool = False) -> dict:
         """Switch one provider, returning what the user still has to do."""
         try:
@@ -715,6 +721,7 @@ def _make_handler(state: DashboardState, token: str):
                 "/api/claude-desktop/compact": (state.claude_desktop.compact, {"profileId", "confirm"}, set()),
                 "/api/switch": (state.switch, {"provider", "number"}, {"useSavedLogin"}),
                 "/api/add": (state.add_current, {"provider"}, set()),
+                "/api/claude/login/update": (state.update_claude_login, {"number", "confirm"}, set()),
                 "/api/remove": (state.remove, {"provider", "number", "confirm"}, set()),
                 "/api/disabled": (state.set_disabled, {"provider", "number", "disabled"}, set()),
                 "/api/switch-best": (state.switch_best, {"provider"}, set()),
@@ -729,6 +736,8 @@ def _make_handler(state: DashboardState, token: str):
                 action, required, optional = routes[parsed.path]
                 if not required <= payload.keys() or payload.keys() - required - optional:
                     raise ProviderActionError("Missing required or unsupported request fields")
+                if parsed.path == "/api/claude/login/update" and parsed.query:
+                    raise ProviderActionError("This request does not accept query parameters.")
                 if parsed.path == "/api/claude-desktop/compact":
                     if parsed.query:
                         raise ProviderActionError("This request does not accept query parameters.")

@@ -183,6 +183,18 @@ class ProviderActions:
             finally:
                 self.revision += 1
 
+    def update_claude_login(self, number, *, confirm: bool = False) -> dict:
+        number = account_number(number)
+        if confirm is not True:
+            raise ProviderActionError("Updating a saved login requires confirm: true")
+        with self.lock:
+            switcher = self._require("claude", "add")
+            try:
+                switcher.update_saved_login(number)
+                return {"ok": True, "message": f"Updated saved login for Claude account {number}."}
+            finally:
+                self.revision += 1
+
     def set_disabled(self, provider: str, number, disabled: bool) -> dict:
         number = account_number(number)
         if type(disabled) is not bool:

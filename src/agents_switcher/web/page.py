@@ -404,6 +404,7 @@ function card(provider, a, data) {
   const pending = provider === "codex" && a.activationRequired === true;
   const repair = pending && a.active;
   const loginRequired = provider === "codex" && a.loginRequired === true;
+  const claudeLoginRequired = provider === "claude" && a.sentinel === "re-login needed";
   const b = actionButton(repair ? "Use saved login" : a.active ? "Current" : "Switch", () => provider === "codex" ? requestCodexSwitch(a, b) : act("/api/switch", {provider, number: a.number}, b, "Switching…"));
   b.dataset.focusKey = provider + ":switch:" + a.number;
   b.className = loginRequired || (a.active && !pending) ? "ghost" : "primary";
@@ -440,6 +441,19 @@ function card(provider, a, data) {
     c.appendChild(el("div", "state", "usage unknown"));
   }
   const footer = el("div", "account-footer");
+  if (claudeLoginRequired) {
+    c.appendChild(el("p", "hint", a.active
+      ? "Sign in again in the Claude Code CLI, then choose Update saved login here. Signing in or restarting this app alone does not replace the rejected saved login."
+      : "Sign in to this account and organization in the Claude Code CLI, then return here and choose Update saved login. Do not switch to the rejected saved login to repair it."));
+    if (a.active) {
+      const update = actionButton("Update saved login", () => act("/api/claude/login/update", {number: a.number, confirm: true}, update, "Updating…"));
+      update.className = "primary";
+      update.dataset.focusKey = "claude:update-login:" + a.number;
+      update.setAttribute("aria-label", `Update saved login for Claude account ${a.number}`);
+      block(update, !supports(data, "add"));
+      footer.appendChild(update);
+    }
+  }
   if (loginRequired && supports(data, "login")) {
     const login = actionButton("Sign in again", () => startCodexEnrollment(login, a));
     login.className = "primary";
@@ -1156,6 +1170,10 @@ async function act(path, payload, button, pending) {
     if (!button.isConnected && button.dataset.focusKey) {
       const replacement = Array.from(document.querySelectorAll("[data-action]")).find((item) => item.dataset.focusKey === button.dataset.focusKey);
       if (replacement && !replacement.disabled) replacement.focus({preventScroll: true});
+      else if (path === "/api/claude/login/update") {
+        const menu = Array.from(document.querySelectorAll("[data-control]")).find((item) => item.dataset.focusKey === "claude:menu:" + payload.number);
+        if (menu) menu.focus({preventScroll: true});
+      }
     }
   }
 }

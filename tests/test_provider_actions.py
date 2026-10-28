@@ -175,6 +175,26 @@ def test_shared_actions_preserve_provider_safety_flags(actions, provider):
         assert ("remove", "1") in calls
 
 
+def test_update_claude_login_is_confirmed_and_account_specific(actions):
+    claude = actions._switchers["claude"]
+    claude.update_saved_login = Mock()
+    for confirm in (False, None, 1, "true"):
+        with pytest.raises(ProviderActionError, match="confirm"):
+            actions.update_claude_login(2, confirm=confirm)
+    claude.update_saved_login.assert_not_called()
+    before = actions.revision
+    assert actions.update_claude_login(2, confirm=True)["ok"]
+    claude.update_saved_login.assert_called_once_with("2")
+    assert actions.revision == before + 1
+    assert actions._switchers["codex"].calls == []
+
+
+@pytest.mark.parametrize("number", [True, None, 0, -1, "other", [], 1.5])
+def test_update_claude_login_rejects_invalid_slot(actions, number):
+    with pytest.raises(ProviderActionError, match="number"):
+        actions.update_claude_login(number, confirm=True)
+
+
 def test_codex_action_fixture_never_probes_native_processes(actions, monkeypatch):
     native_probe = Mock(side_effect=AssertionError("Action tests must not inspect native processes"))
     monkeypatch.setattr("agents_switcher.codex.processes._run", native_probe)

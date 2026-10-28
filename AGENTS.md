@@ -237,6 +237,14 @@ Corrupt/unreadable preferences never imply consent. A remembered notice may remo
 the repeated checkbox, but never the user's deliberate profile launch action,
 server consent boolean, process check, or known Chrome-pairing limitation.
 
+`POST /api/claude/login/update` is an explicit saved-login repair, accepting only
+`number` and exact `confirm: true` with header authentication and no query
+parameters. It captures the current CLI login into that matching existing slot
+under the shared action and cross-node account locks. Reject wrong-account,
+organization/UUID mismatch, identity drift and a still-rejected credential;
+never automatically clear quarantine on refresh or switch to a rejected login
+to repair it. Preserve the slot, alias and exclusion setting.
+
 `GET /api/storage` is header-authenticated and independent of quota collection.
 `POST /api/storage/import` accepts only a fixed source ID and exact `confirm: true`.
 The importer owns quiescence checks, identity validation, source revalidation,
