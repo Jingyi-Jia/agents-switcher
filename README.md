@@ -269,6 +269,15 @@ that app/server session's automation. **Preview without switching** is optional:
 it shows selection decisions without switching accounts, but usage checks can
 still refresh credentials. Closing a browser tab does not stop its server.
 
+If a Claude account says **re-login needed**, sign in again to that account and
+organization in the Claude Code terminal CLI. Then choose **Update saved login**
+on its current account card. The action updates only that matching saved slot;
+it refuses if the CLI login changed to another account. Signing in or restarting
+Agent Switch alone does not replace rejected saved credentials. **Add existing
+login** (or **Add current** in the browser dashboard) and `agent-switch claude add`
+also refresh an existing matching login. Do not remove the account or switch to
+its rejected saved credentials to repair it.
+
 **Usage** shows reporting data, not a second automatic-switch policy:
 
 - **Codex:** account-specific statistics reported by OpenAI, including daily

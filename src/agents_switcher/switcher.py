@@ -194,7 +194,7 @@ SENTINEL_NOTES = {
     USAGE_FOREIGN_CREDENTIAL: "live credential belongs to another account — a switch repairs it",
     USAGE_API_KEY: "API key (no quota)",
     USAGE_KEYCHAIN_UNAVAILABLE: "keychain unavailable — locked or in use; try again",
-    USAGE_RELOGIN_REQUIRED: "re-login needed — refresh token dead; log in with Claude Code, then run: cswap add",
+    USAGE_RELOGIN_REQUIRED: "re-login needed — saved login rejected; log in with Claude Code, then run: agent-switch claude add",
 }
 
 
@@ -3428,11 +3428,19 @@ class ClaudeAccountSwitcher:
             data["lastUpdated"] = get_timestamp()
             self._write_json(self.sequence_file, data)
 
+    def update_saved_login(self, account_num: str) -> None:
+        """Save the current CLI login only into the requested existing account."""
+        self._refuse_session_shell()
+        with FileLock(self.lock_file):
+            self.add_account(assume_yes=True, expected_account=account_num)
+
     def add_account(
         self,
         slot: int | None = None,
         assume_yes: bool = False,
         alias: str | None = None,
+        *,
+        expected_account: str | None = None,
     ) -> None:
         """Add current account to managed accounts.
 
@@ -3445,6 +3453,8 @@ class ClaudeAccountSwitcher:
                   confirmation UI, e.g. the TUI, confirm before calling).
             alias: Optional short display alias to set on this account.
                   When omitted, an existing alias on the slot is preserved.
+            expected_account: Refuse unless the live identity matches this
+                  existing slot; used by the locked saved-login update action.
         """
         self._refuse_session_shell()
         self._setup_directories()
@@ -3461,6 +3471,20 @@ class ClaudeAccountSwitcher:
         if identity is None:
             raise ConfigError("No active Claude account found. Please log in first.")
         current_email, current_org_uuid, current_account_uuid = identity
+
+        if expected_account is not None:
+            seq = self._get_sequence_data() or {}
+            account = seq.get("accounts", {}).get(expected_account)
+            if (
+                slot is not None or not account
+                or self._find_account_slot(seq, current_email, current_org_uuid) != expected_account
+                or (account.get("uuid") and account["uuid"] != current_account_uuid)
+            ):
+                raise ConfigError(
+                    "The current Claude CLI login does not match this saved account. "
+                    "Sign in to the matching account and organization, then retry "
+                    "Update saved login. No saved login was changed."
+                )
 
         # When no slot specified and account already exists, refresh credentials in place
         if slot is None and self._account_exists(current_email, current_org_uuid):
@@ -3507,6 +3531,16 @@ class ClaudeAccountSwitcher:
             # a fresh read, never match, and refuse every time instead of only
             # on a race.
             self._reject_identity_drift_since_verify(identity)
+
+            if expected_account is not None:
+                entry = self._usage_store.entries({account_num: (current_email, current_org_uuid)})[account_num]
+                if entry.struck_fingerprint and entry.token_dead(
+                    stored_fp=oauth.credential_fingerprint(current_creds)
+                ):
+                    raise ConfigError(
+                        "The Claude CLI still has the rejected login. Sign in again "
+                        "in the CLI, then retry Update saved login. No saved login was changed."
+                    )
 
             self._write_account_credentials(account_num, current_email, current_creds)
             self._write_account_config(account_num, current_email, current_config)

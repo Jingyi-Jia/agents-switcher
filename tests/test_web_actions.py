@@ -52,6 +52,32 @@ def request(web, path, payload=None, *, token=True, raw=None, headers=None, meth
 ROUTES = ["switch", "add", "remove", "disabled", "switch-best", "token", "auto"]
 
 
+def test_update_claude_login_dispatches_confirmed_slot_and_invalidates_state(web):
+    web.state._claude.update_saved_login = Mock()
+    web.state._cached = {"stale": True}
+    code, body, _ = request(web, "/api/claude/login/update", {"number": 2, "confirm": True})
+    assert code == 200 and body["ok"]
+    web.state._claude.update_saved_login.assert_called_once_with("2")
+    assert web.state._cached is None
+
+
+@pytest.mark.parametrize("payload,query,auth", [
+    ({"number": 2, "confirm": True}, "", False),
+    ({"number": 2, "confirm": True}, "?token=test-web-auth", False),
+    ({"number": 2, "confirm": True}, "?extra=1", True),
+    ({"number": 2}, "", True),
+    ({"number": 2, "confirm": 1}, "", True),
+    ({"number": True, "confirm": True}, "", True),
+    ({"number": 2, "confirm": True, "token": "not-accepted"}, "", True),
+])
+def test_update_claude_login_rejects_unauthorized_or_invalid_requests(web, payload, query, auth):
+    web.state._claude.update_saved_login = Mock()
+    code, _, _ = request(web, "/api/claude/login/update" + query, payload, token=auth)
+    assert code in (400, 403)
+    web.state._claude.update_saved_login.assert_not_called()
+
+
+
 @pytest.mark.parametrize("route", ROUTES)
 @pytest.mark.parametrize("auth", [False, "wrong", "\xe9"])
 def test_every_action_requires_header_auth(web, route, auth):
